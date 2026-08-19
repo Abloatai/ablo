@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.55.0",
+  "version": "0.56.0",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -136,6 +136,8 @@
     "lint:pricing": "tsx scripts/check-pricing-docs.mts",
     "generate:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts",
     "lint:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts --check",
+    "generate:discovery": "tsx --conditions=@ablo/source scripts/generate-discovery-docs.mts",
+    "lint:discovery": "tsx --conditions=@ablo/source scripts/generate-discovery-docs.mts --check",
     "validate:openapi": "redocly lint ../../docs/ablo/public/openapi.json --extends=recommended --skip-rule=no-server-example.com",
     "build:docs": "node scripts/build-blume-docs.mjs",
     "lint:docs-site": "node scripts/build-blume-docs.mjs --check",
@@ -153,8 +155,8 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.55.0",
-    "@abloatai/transaction": "^0.55.0",
+    "@abloatai/humans": "^0.56.0",
+    "@abloatai/transaction": "^0.56.0",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

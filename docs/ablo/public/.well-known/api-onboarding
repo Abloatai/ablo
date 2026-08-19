@@ -1,0 +1,162 @@
+{
+  "aod": "0.1",
+  "provider": {
+    "name": "Ablo",
+    "url": "https://www.abloatai.com",
+    "portalUrl": "https://docs.abloatai.com",
+    "apisJsonUrl": "https://docs.abloatai.com/.well-known/apis.json"
+  },
+  "maturity": "bootstrap-token",
+  "account": {
+    "required": true,
+    "signupUrl": "https://www.abloatai.com/signup",
+    "agentPolicy": "prohibited",
+    "prerequisites": [
+      "A Postgres database Ablo can reach. Rows stay in your database; Ablo holds the transaction log and the coordination state, not your data.",
+      "A logical replication role on that database, or the signed data-source endpoint where replication cannot be granted."
+    ],
+    "plans": [
+      {
+        "name": "Free",
+        "requiredFor": "Build against the real engine without a card. No card and no monthly minimum. Capped rather than metered: 100K operations a month and 10K a day, refused beyond that. Up to 25 concurrent connections.",
+        "url": "https://docs.abloatai.com/pricing"
+      },
+      {
+        "name": "Scale",
+        "requiredFor": "Production traffic, metered above a monthly floor. $20 monthly minimum, with usage metered against it. Up to 1,000 concurrent connections. Adds audit log export.",
+        "url": "https://docs.abloatai.com/pricing"
+      },
+      {
+        "name": "Enterprise",
+        "requiredFor": "Committed volume, private networking, and an uptime guarantee. $2000 monthly minimum, with usage metered against it. Concurrency negotiated. Adds single sign-on, audit log export, customer-managed encryption keys, private networking, custom limits.",
+        "url": "https://docs.abloatai.com/pricing"
+      }
+    ],
+    "termsOfService": {
+      "url": "https://www.abloatai.com/terms-conditions",
+      "acceptance": "console-only"
+    }
+  },
+  "verification": [],
+  "registration": {
+    "applicationNoun": "project",
+    "owner": "organization",
+    "mechanisms": [
+      {
+        "type": "browser-oauth",
+        "description": "`npx ablo login` runs the RFC 8628 device authorization flow: it prints a code, opens https://www.abloatai.com/cli, and a person approves the grant there. What comes back is one project management credential. This is the only step that needs a human, and an agent must not attempt it.",
+        "authorizationEndpoint": "https://www.abloatai.com/cli",
+        "docsUrls": [
+          "https://docs.abloatai.com/cli",
+          "https://docs.abloatai.com/api-keys"
+        ],
+        "auth": "none"
+      },
+      {
+        "type": "management-api",
+        "description": "Once a management credential exists, every further credential is minted over the API and no console is involved: `ablo dev` exchanges it for a branch-bound secret key, and POST /v1/ephemeral_keys mints the short-lived session credential a browser or a per-user agent runs on.",
+        "baseUrl": "https://api.abloatai.com/api",
+        "registrationEndpoint": "https://api.abloatai.com/api/v1/ephemeral_keys",
+        "docsUrls": [
+          "https://docs.abloatai.com/api-keys"
+        ],
+        "auth": "bearer"
+      }
+    ]
+  },
+  "authentication": {
+    "methods": [
+      {
+        "id": "management-key",
+        "type": "bearer-env",
+        "env": [
+          "ABLO_MANAGEMENT_KEY"
+        ],
+        "header": "Authorization",
+        "scheme": "Bearer",
+        "bootstrap": "A person runs `npx ablo login` once and approves the device grant in a browser. In CI there is no login: the value is set as an environment variable.",
+        "notes": "Control-plane commands only: projects, branches, and schema pushes."
+      },
+      {
+        "id": "api-key",
+        "type": "bearer-env",
+        "env": [
+          "ABLO_API_KEY"
+        ],
+        "header": "Authorization",
+        "scheme": "Bearer",
+        "bootstrap": "`ablo dev --no-watch --branch <ref>` exchanges the management credential for a branch-bound secret key and writes it to a gitignored `.env.local`. No secret is copied by hand.",
+        "notes": "The runtime credential every read, commit, and claim authenticates with."
+      }
+    ]
+  },
+  "credentials": [
+    {
+      "type": "api-key",
+      "fields": {
+        "api_key": "sk_ secret key"
+      },
+      "ttl": "Branch-bound secret keys expire with the branch they were minted for.",
+      "rotation": "Re-run `ablo dev` to mint a fresh branch key; revoke from the dashboard.",
+      "oneTimeDisplay": true
+    },
+    {
+      "type": "access-token",
+      "fields": {
+        "access_token": "token"
+      },
+      "ttl": "Short-lived; the caller sets `ttlSeconds` on the mint request.",
+      "rotation": "Mint another from /v1/ephemeral_keys. Sessions are meant to be re-minted rather than refreshed, and the SDK re-mints on expiry without dropping the connection.",
+      "oneTimeDisplay": true
+    }
+  ],
+  "scopes": {
+    "model": "resource-selection",
+    "resourceSelection": "projects and branches, plus the organization and user a session credential is minted for",
+    "vocabularyUrl": "https://docs.abloatai.com/identity",
+    "notes": "Authority comes from what a credential was minted against rather than from scope strings. A session credential encodes its organization and user, so reads are scoped without the caller passing an organization id."
+  },
+  "flow": {
+    "args": [
+      {
+        "name": "user_id",
+        "description": "Your own identifier for the person or agent this session belongs to.",
+        "required": true
+      }
+    ],
+    "steps": [
+      {
+        "id": "mint",
+        "description": "Mint a session credential from a branch-bound secret key. This is the whole programmatic surface: everything before it is the one-time human bootstrap.",
+        "auth": "api-key",
+        "request": {
+          "method": "POST",
+          "url": "https://api.abloatai.com/api/v1/ephemeral_keys",
+          "headers": {
+            "Authorization": "Bearer {env.ABLO_API_KEY}",
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "user": {
+              "id": "{arg.user_id}"
+            }
+          }
+        }
+      }
+    ],
+    "outputs": {
+      "access_token": "{steps.mint.token}",
+      "expires_at": "{steps.mint.expiresAt}"
+    }
+  },
+  "economics": {
+    "pricingUrl": "https://docs.abloatai.com/pricing",
+    "freeTier": "Build against the real engine without a card. No card and no monthly minimum. Capped rather than metered: 100K operations a month and 10K a day, refused beyond that. Up to 25 concurrent connections.",
+    "rateLimitsUrl": "https://docs.abloatai.com/pricing"
+  },
+  "gaps": [
+    "Account creation is a browser flow. No API creates an organization, so the first credential always needs a person.",
+    "No Dynamic Client Registration (RFC 7591) and no Client ID Metadata Document. An agent onboards by being handed an environment variable, not by registering itself.",
+    "The coordination MCP server ships as an npm package a host runs locally, not as a hosted endpoint an agent can discover by URL."
+  ]
+}

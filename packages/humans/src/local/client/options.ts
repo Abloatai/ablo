@@ -90,15 +90,18 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
   /**
    * Pins this client to one Ablo project. During `ready()` the server resolves
    * the API key's actual project and the client refuses to start when it differs.
-   * Defaults to `ABLO_PROJECT_ID`; `ablo dev` writes that value beside the key.
-   * This is an assertion, never a routing selector — the key remains authoritative.
+   * Defaults to `ABLO_PROJECT_ID`. This is an assertion, never a routing
+   * selector — the key remains authoritative and already names its own project,
+   * so leave this unset unless one deployment can be handed keys for more than
+   * one project and you want the mismatch to fail loudly.
    */
   projectId?: string | null | undefined;
 
   /**
    * Pins this client to one immutable Ablo branch. Defaults to
-   * `ABLO_BRANCH_ID`; `ablo dev` writes it beside the branch key. Like
-   * `projectId`, this is a startup assertion and never selects a branch.
+   * `ABLO_BRANCH_ID`. Like `projectId`, this is a startup assertion that never
+   * selects a branch, and is worth setting only where a key for the wrong
+   * environment could reach this process.
    */
   branchId?: string | null | undefined;
 

@@ -1,0 +1,115 @@
+{
+  "specificationVersion": "0.21",
+  "name": "Ablo",
+  "description": "Collaboration infrastructure for AI agents: one API for agents, apps, and services to claim, change, and confirm the same rows.",
+  "url": "https://docs.abloatai.com/.well-known/apis.json",
+  "created": "2026/08/19",
+  "tags": [
+    "agents",
+    "multi-agent",
+    "coordination",
+    "concurrency",
+    "state",
+    "postgres",
+    "real-time",
+    "mcp"
+  ],
+  "maintainers": [
+    {
+      "FN": "Ablo",
+      "email": "support@abloatai.com",
+      "url": "https://www.abloatai.com"
+    }
+  ],
+  "common": [
+    {
+      "type": "Terms of Service",
+      "url": "https://www.abloatai.com/terms-conditions"
+    },
+    {
+      "type": "Privacy Policy",
+      "url": "https://www.abloatai.com/privacy-policy"
+    },
+    {
+      "type": "ChangeLog",
+      "url": "https://docs.abloatai.com/changelog"
+    },
+    {
+      "type": "APIOnboarding",
+      "url": "https://docs.abloatai.com/.well-known/api-onboarding"
+    }
+  ],
+  "apis": [
+    {
+      "name": "Ablo API",
+      "description": "Ablo collaboration infrastructure: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.",
+      "humanURL": "https://docs.abloatai.com",
+      "baseURL": "https://api.abloatai.com/api",
+      "image": "https://docs.abloatai.com/logo/light.svg",
+      "tags": [
+        "agents",
+        "multi-agent",
+        "coordination",
+        "concurrency",
+        "state",
+        "postgres",
+        "real-time",
+        "mcp"
+      ],
+      "properties": [
+        {
+          "type": "OpenAPI",
+          "url": "https://docs.abloatai.com/openapi.json"
+        },
+        {
+          "type": "Documentation",
+          "url": "https://docs.abloatai.com"
+        },
+        {
+          "type": "GettingStarted",
+          "url": "https://docs.abloatai.com/quickstart"
+        },
+        {
+          "type": "Authentication",
+          "url": "https://docs.abloatai.com/api-keys"
+        },
+        {
+          "type": "Plans",
+          "url": "https://docs.abloatai.com/pricing"
+        },
+        {
+          "type": "Pricing",
+          "url": "https://docs.abloatai.com/pricing.json"
+        },
+        {
+          "type": "RateLimits",
+          "url": "https://docs.abloatai.com/pricing"
+        },
+        {
+          "type": "ChangeLog",
+          "url": "https://docs.abloatai.com/changelog"
+        },
+        {
+          "type": "Errors",
+          "url": "https://docs.abloatai.com/errors.json"
+        },
+        {
+          "type": "APIOnboarding",
+          "url": "https://docs.abloatai.com/.well-known/api-onboarding"
+        },
+        {
+          "type": "LLMsTxt",
+          "url": "https://docs.abloatai.com/llms.txt"
+        },
+        {
+          "type": "SDKs",
+          "url": "https://github.com/Abloatai/ablo"
+        },
+        {
+          "type": "License",
+          "url": "https://github.com/Abloatai/ablo/blob/main/LICENSE"
+        }
+      ]
+    }
+  ]
+}

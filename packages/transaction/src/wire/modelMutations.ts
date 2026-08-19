@@ -16,12 +16,12 @@
  */
 
 import { z } from 'zod';
+import { logPositionSchema } from '../syncLog/contract.js';
 import {
   onStaleModeSchema,
   MAX_READ_SET_ENTRIES,
   readDependencyListSchema,
   readSetProjectionEntryCount,
-  readSetWatermarkSchema,
   trackDependencyListSchema,
 } from '../coordination/schema.js';
 
@@ -50,7 +50,7 @@ export const modelMutationRequestSchema = z.object({
    * the read. Ablo rejects the write if the row moved in between, which is
    * what makes read → decide → write safe without a lock across the deciding.
    */
-  readAt: readSetWatermarkSchema.nullish(),
+  readAt: logPositionSchema.nullish(),
   /** Commit-lifetime dependencies checked with the single model operation. */
   reads: readDependencyListSchema.nullish(),
   /** Durable dependencies registered with the single model operation. */

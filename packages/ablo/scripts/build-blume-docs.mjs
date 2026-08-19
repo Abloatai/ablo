@@ -71,7 +71,7 @@ const TITLES = {
   'concurrency-convention': 'Concurrency Convention',
   'schema-contract': 'Schema Contract',
   sessions: 'Sessions',
-  'customer-organizations': 'Customer Organizations',
+  'customer-organizations': 'Serving Many Customers',
   agents: 'Agents',
   webhooks: 'Webhooks',
   projects: 'Projects',
@@ -382,14 +382,43 @@ function changelogCategory(part, previousPart) {
  *  of the agent files and search. */
 const CHANGELOG_AGENT_WINDOW = 12;
 
+/** The `date:` a changelog page already carries, `version -> value`.
+ *
+ *  A release date does not change, so once a page has one it is the answer. It
+ *  is consulted BEFORE the commit heuristic because the two sources disagree
+ *  about format — the registry answers a full ISO instant, the commit log a
+ *  bare `YYYY-MM-DD` — so a build on a machine that cannot reach npm used to
+ *  rewrite the date on every page it had not written itself. That churn had to
+ *  be discarded by hand before committing, which is how a `build:docs` came to
+ *  be something you thought twice about running. */
+function existingChangelogDates() {
+  const map = {};
+  let files;
+  try {
+    files = readdirSync(CHANGELOG_DIR);
+  } catch {
+    return map; // first build, or the folder was cleared
+  }
+  for (const file of files) {
+    const version = file.replace(/\.mdx$/, '');
+    if (!/^\d+\.\d+\.\d+$/.test(version)) continue;
+    const date = readFileSync(resolve(CHANGELOG_DIR, file), 'utf8').match(/^date: (.+)$/m);
+    if (date) map[version] = date[1];
+  }
+  return map;
+}
+
 /** One Blume changelog page per `## X.Y.Z` section of CHANGELOG.md. Each page is
  *  `type: changelog`, and Blume assembles them into the `/changelog` timeline. */
 function buildChangelogPages() {
   const raw = readFileSync(resolve(packageRoot, 'CHANGELOG.md'), 'utf8');
-  // Registry first, commits only when it is unreachable.
+  // The registry is the authority. What a page already carries comes next,
+  // because a date it was stamped with is a date the registry gave it. The
+  // commit heuristic is last: it answers a different SHAPE, so reaching for it
+  // over an answer already on disk trades one true date for another and
+  // rewrites the file for nothing.
   const published = npmPublishTimes();
-  const fromCommits = releaseDates();
-  const dates = { ...fromCommits, ...published };
+  const dates = { ...releaseDates(), ...existingChangelogDates(), ...published };
   return raw
     .split(/^## (?=\d+\.\d+\.\d+)/m)
     .slice(1)

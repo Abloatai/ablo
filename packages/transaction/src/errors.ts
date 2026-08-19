@@ -17,6 +17,9 @@
 
 import { z } from 'zod';
 import type { ErrorCode } from './errorCodes.js';
+// Dependency-free by design, so the error registry can name the docs host
+// without pulling the auth layer into this module's import graph.
+import { ABLO_DOCS_BASE_URL } from './auth/hostedEndpoints.js';
 import { errorCodeSpec, classifyRecovery } from './errorCodes.js';
 import {
   wireClaimSummarySchema,
@@ -156,7 +159,7 @@ export class AbloError extends Error {
  * a `doc_url` automatically.
  */
 export function docUrlForCode(code: ErrorCode): string {
-  return `https://docs.abloatai.com/errors#${code}`;
+  return `${ABLO_DOCS_BASE_URL}/errors#${code}`;
 }
 
 /** 401 — invalid/missing/expired credentials. */

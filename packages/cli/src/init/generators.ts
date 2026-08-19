@@ -52,8 +52,6 @@ import { schema } from './schema';
 // via the session route and never touches the key.
 export const sync = Ablo({
   apiKey: process.env.ABLO_API_KEY,${authLine}
-  workspaceId: process.env.ABLO_PROJECT_ID,
-  branchId: process.env.ABLO_BRANCH_ID,
   schema,
 });
 
@@ -94,11 +92,9 @@ export function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolea
       'ABLO_WEBHOOK_SECRET=whsec_your_endpoint_secret_here\n'
     : '';
   const apiKeyBlock = includeApiKey
-    ? '# Ablo: a branch-bound sk_ key (`npx ablo dev` wires both values for you).\n' +
-      '# Project + branch are assertions: the SDK rejects a key for another app or environment.\n' +
-      'ABLO_API_KEY=sk_your_key_here\n' +
-      'ABLO_PROJECT_ID=proj_your_project_id\n' +
-      'ABLO_BRANCH_ID=br_your_branch_id\n'
+    ? '# Ablo: a branch-bound sk_ key (`npx ablo dev` writes it for you).\n' +
+      '# The key names its own project and branch, so nothing else is needed here.\n' +
+      'ABLO_API_KEY=sk_your_key_here\n'
     : '';
   return `${apiKeyBlock}${webhookBlock}${databaseBlock}`;
 }

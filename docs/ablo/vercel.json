@@ -10,5 +10,22 @@
       "permanent": true
     }
   ],
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ."
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- .",
+  "rewrites": [
+    {
+      "source": "/apis.json",
+      "destination": "/.well-known/apis.json"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/.well-known/api-onboarding",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/json; charset=utf-8"
+        }
+      ]
+    }
+  ]
 }

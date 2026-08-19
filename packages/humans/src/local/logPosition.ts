@@ -1,12 +1,25 @@
-import { z } from 'zod';
+/**
+ * The three log positions a connected client owns.
+ *
+ * Each field is a {@link logPositionSchema}, the one position type, and the
+ * field name says who is claiming what: `applied` is what arrival processed,
+ * `persisted` is what local storage durably holds IN DELIVERED ORDER, and
+ * `acked` is what the server has been told. They are the same kind of number
+ * as the server's heads and cursors, and deliberately not comparable to them
+ * without saying which owner you mean. See the owner table on
+ * `@abloatai/transaction/syncLog/contract`.
+ */
 
-export const logPositionSchema = z.object({
-  persisted: z.number().int().nonnegative(),
-  applied: z.number().int().nonnegative(),
-  acked: z.number().int().nonnegative(),
+import { z } from 'zod';
+import { logPositionSchema } from '@abloatai/transaction/syncLog/contract';
+
+export const logPositionSnapshotSchema = z.object({
+  persisted: logPositionSchema,
+  applied: logPositionSchema,
+  acked: logPositionSchema,
 });
 
-export type LogPositionSnapshot = z.infer<typeof logPositionSchema>;
+export type LogPositionSnapshot = z.infer<typeof logPositionSnapshotSchema>;
 
 export interface LogPositionPort {
   readonly persisted: number;
@@ -21,7 +34,7 @@ export interface LogPositionPort {
 }
 
 export function parseLogPosition(value: unknown): LogPositionSnapshot | null {
-  const result = logPositionSchema.safeParse(value);
+  const result = logPositionSnapshotSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/transaction",
-  "version": "0.55.0",
+  "version": "0.56.0",
   "description": "The headless Ablo transaction client and canonical contracts for reads, commits, confirmation, claims, and durable observation.",
   "license": "Apache-2.0",
   "type": "module",

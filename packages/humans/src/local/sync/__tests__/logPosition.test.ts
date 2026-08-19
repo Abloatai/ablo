@@ -8,14 +8,14 @@
 import {
   LogPosition,
   parseLogPosition,
-  logPositionSchema,
+  logPositionSnapshotSchema,
 } from '../../logPosition.js';
 
 describe('LogPosition', () => {
   it('starts at zero with a schema-valid snapshot', () => {
     const p = new LogPosition();
     expect(p.snapshot()).toEqual({ persisted: 0, applied: 0, acked: 0 });
-    expect(logPositionSchema.safeParse(p.snapshot()).success).toBe(true);
+    expect(logPositionSnapshotSchema.safeParse(p.snapshot()).success).toBe(true);
   });
 
   it('readFloor = max(applied, acked) — the ack-then-claim race fix', () => {
@@ -60,7 +60,7 @@ describe('LogPosition', () => {
     // Database.requiredBootstrap parses `metadata.lastSyncId` through this
     // exact schema field; invalid → undefined → caller falls back to 0
     // (full bootstrap). `|| 0` previously let a NEGATIVE cursor through.
-    const field = logPositionSchema.shape.persisted;
+    const field = logPositionSnapshotSchema.shape.persisted;
     expect(field.safeParse(42).data).toBe(42);
     expect(field.safeParse(-5).data).toBeUndefined();
     expect(field.safeParse(3.7).data).toBeUndefined();

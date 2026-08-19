@@ -24,6 +24,10 @@ import { dirname, relative, resolve } from 'node:path';
 // so it reads `packages/transaction/src` rather than a `dist` that may lag the
 // schemas by a build — which would publish a contract for the previous commit.
 import { abloOpenApi } from '@abloatai/transaction/schema/openapi';
+// The hosted origin is declared once, in `auth/hostedEndpoints`. Retyping it
+// here is how the published contract would come to name a host the SDK no
+// longer calls.
+import { ABLO_HOSTED_HTTP_BASE_URL } from '@abloatai/transaction/auth';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const target = resolve(repoRoot, 'docs/ablo/public/openapi.json');
@@ -42,7 +46,7 @@ const rendered = `${JSON.stringify(
   {
     ...abloOpenApi({ title: 'Ablo API', version: packageManifest.version }),
     servers: [
-      { url: 'https://api.abloatai.com/api', description: 'Production' },
+      { url: `${ABLO_HOSTED_HTTP_BASE_URL}/api`, description: 'Production' },
       { url: 'http://localhost:8787/api', description: 'Local development' },
     ],
   },

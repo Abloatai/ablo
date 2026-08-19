@@ -21,7 +21,7 @@ import {
 } from './stores/persistenceCleanup.js';
 import type { BootstrapFetcher, BootstrapData } from './sync/BootstrapFetcher.js';
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
-import { logPositionSchema } from './logPosition.js';
+import { logPositionSnapshotSchema } from './logPosition.js';
 import type { SyncDeltaAction } from '@abloatai/transaction/wire/delta';
 import type { BootstrapType } from '@abloatai/transaction/types';
 import { highestPersistedPrefixSyncId } from './sync/persistedPrefix.js';
@@ -448,7 +448,7 @@ export class Database {
     // which only catches falsy, and get sent to the server as the resume
     // point). Invalid → 0 → full bootstrap, the safe degradation.
     const metadataLastSyncId =
-      logPositionSchema.shape.persisted.safeParse(metadata?.lastSyncId).data ?? 0;
+      logPositionSnapshotSchema.shape.persisted.safeParse(metadata?.lastSyncId).data ?? 0;
     const dataAge = metadata?.updatedAt ? Date.now() - metadata.updatedAt.getTime() : Infinity;
 
     // ── Cache-validity check ─────────────────────────────────────

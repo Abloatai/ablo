@@ -17,6 +17,7 @@
  */
 
 import { z } from 'zod';
+import { logPositionSchema } from '../syncLog/contract.js';
 import type { MutationOptions } from '../resources/mutationOptions.js';
 import { AbloValidationError } from '../errors.js';
 import { commitWaitSchema } from '../wire/commit.js';
@@ -24,7 +25,6 @@ import {
   onStaleModeSchema,
   MAX_READ_SET_ENTRIES,
   readDependencyListSchema,
-  readSetWatermarkSchema,
   readSetProjectionEntryCount,
   trackDependencyListSchema,
 } from '../coordination/schema.js';
@@ -46,7 +46,7 @@ export const writeOptionsSchema = z.object({
   /** Resolve when queued locally (default) or once the server confirms. */
   wait: commitWaitSchema.optional(),
   /** Stale guard: the sync watermark the caller's reasoning was based on. */
-  readAt: readSetWatermarkSchema.nullish(),
+  readAt: logPositionSchema.nullish(),
   /** What the server does when the target moved past `readAt`. */
   onStale: onStaleModeSchema.nullish(),
   /** The held claim's fencing token (Option B), sourced from the claim handle

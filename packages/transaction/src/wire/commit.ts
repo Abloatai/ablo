@@ -18,6 +18,7 @@
  */
 
 import { z } from 'zod';
+import { logPositionSchema } from '../syncLog/contract.js';
 import {
   onStaleModeSchema,
   MAX_READ_SET_ENTRIES,
@@ -25,7 +26,6 @@ import {
   readSetRowTargetSchema,
   readSetProjectionEntryCount,
   readSetSchema,
-  readSetWatermarkSchema,
   participantKindSchema,
   staleNotificationSchema,
   trackDependencyListSchema,
@@ -61,7 +61,7 @@ export const confirmedCommitStatusSchema = z
   .strictObject({
     status: confirmedStatusSchema,
     statusAt: commitTimestampSchema,
-    lastSyncId: readSetWatermarkSchema,
+    lastSyncId: logPositionSchema,
     correlationId: correlationIdSchema.optional(),
   })
   .refine(({ correlationId, lastSyncId }) => correlationId === undefined || lastSyncId > 0, {
@@ -375,7 +375,7 @@ export type MutationCommitResult = z.infer<typeof mutationCommitResultSchema>;
 export const clientCommitReceiptSchema = z.strictObject({
   id: z.string().min(1),
   status: z.union([queuedStatusSchema, confirmedStatusSchema]),
-  lastSyncId: readSetWatermarkSchema.optional(),
+  lastSyncId: logPositionSchema.optional(),
   notifications: notificationsSchema.optional(),
   missingIds: missingIdsSchema.optional(),
   operationResults: operationResultsSchema.optional(),
@@ -400,7 +400,7 @@ export const commitOperationControlShape = {
   id: z.string().nullish(),
   transactionId: z.string().nullish(),
   claimId: z.string().min(1).nullish(),
-  readAt: readSetWatermarkSchema.nullish(),
+  readAt: logPositionSchema.nullish(),
   onStale: onStaleModeSchema.nullish(),
   fenceToken: z.number().nullish(),
 };

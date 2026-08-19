@@ -26,8 +26,10 @@ import type {
 } from './capability.js';
 export {
   ABLO_DEFAULT_BASE_URL,
+  ABLO_DOCS_BASE_URL,
   ABLO_HOSTED_API_DOMAIN,
   ABLO_HOSTED_HTTP_BASE_URL,
+  ABLO_SITE_BASE_URL,
 } from './hostedEndpoints.js';
 export { normalizeAbloBaseUrl } from './baseUrl.js';
 

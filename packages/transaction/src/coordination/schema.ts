@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { logPositionSchema, type LogPosition } from '../syncLog/contract.js';
 import {
   syncGroupInputSchema,
   syncGroupRefSchema,
@@ -267,9 +268,12 @@ const streamTargetSchema = targetRefSchema
 export const onStaleModeSchema = z.enum(['reject', 'overwrite', 'notify']);
 export type OnStaleMode = z.infer<typeof onStaleModeSchema>;
 
-/** The exact authoritative position retained for one ReadSet entry. */
-export const readSetWatermarkSchema = z.number().int().nonnegative();
-export type ReadSetWatermark = z.infer<typeof readSetWatermarkSchema>;
+/** @deprecated A ReadSet entry retains a {@link logPositionSchema} like every
+ *  other position; the reader is the owner, and the owner belongs in the field
+ *  name rather than in a second type. Removed in 0.57.0. */
+export const readSetWatermarkSchema = logPositionSchema;
+/** @deprecated Use {@link LogPosition}. Removed in 0.57.0. */
+export type ReadSetWatermark = LogPosition;
 
 /** Maximum decision-input entries one logical commit may ask the server to scan. */
 export const MAX_READ_SET_ENTRIES = 500;
@@ -285,7 +289,7 @@ export type TrackOnStale = z.infer<typeof trackOnStaleSchema>;
  * claim — see the claim layer below.
  */
 export const writeGuardSchema = z.object({
-  readAt: readSetWatermarkSchema.nullish(),
+  readAt: logPositionSchema.nullish(),
   onStale: onStaleModeSchema.nullish(),
   bypass: z.boolean().optional(),
 });
@@ -489,7 +493,7 @@ export type PersistedReadSetTarget = z.infer<typeof persistedReadSetTargetSchema
 /** One exact input to the decision made by this commit. */
 export const commitReadSetEntrySchema = z.object({
   target: commitReadSetTargetSchema,
-  watermark: readSetWatermarkSchema,
+  watermark: logPositionSchema,
   lifetime: z.literal('commit'),
   onStale: onStaleModeSchema,
 });
@@ -498,7 +502,7 @@ export type CommitReadSetEntry = z.infer<typeof commitReadSetEntrySchema>;
 /** One exact input retained after the declaring commit settles. */
 export const persistedReadSetEntrySchema = z.object({
   target: persistedReadSetTargetSchema,
-  watermark: readSetWatermarkSchema,
+  watermark: logPositionSchema,
   lifetime: z.literal('persisted'),
   onStale: trackOnStaleSchema,
 });

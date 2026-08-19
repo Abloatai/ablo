@@ -268,7 +268,10 @@ export const COMMANDS = [
     core: { group: 'Every day', does: 'Check the whole setup at once and list everything that would block a write' },
     full: {
       group: "See what's happening",
-      rows: [{ run: 'doctor', does: 'Every setup check at once — exits non-zero when a write would fail' }],
+      rows: [
+        { run: 'doctor', does: 'Every setup check at once. Exits non-zero when a write would fail, or when a check could not be run' },
+        { run: 'doctor --json', does: 'The same verdict as data, for a script or an agent' },
+      ],
     },
   },
   {

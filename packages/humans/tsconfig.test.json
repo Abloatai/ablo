@@ -1,0 +1,32 @@
+{
+  // Typecheck lane for the unit suite. The main tsconfig excludes every
+  // `*.test.ts` and `__tests__/**` because jest owns test transforms and never
+  // calls tsc, which leaves test files as the one place in this package where a
+  // renamed export or a hand-rolled object can drift from what it claims and
+  // nothing says so until the assertion runs. That is not hypothetical: the
+  // `logPositionSchema` rename broke two tests while `npm run typecheck`
+  // stayed green.
+  //
+  // `rootDir` widens to the package root because this package keeps tests in
+  // two places: beside the source under `src/**/__tests__`, and in a top-level
+  // `__tests__/` tree. Both are the same lane; splitting them would leave half
+  // the suite unchecked.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    // Jest resolves these files, not Node's ESM loader, so the extensionless
+    // relative imports the suite is written with are correct for how it runs.
+    // Under NodeNext they raise 221 TS2835/TS2834 errors that describe the
+    // resolver rather than the code, which is exactly the drowning the
+    // sync-server lane warns about. Production sources keep NodeNext in the
+    // main tsconfig, which is the lane that governs how they ship.
+    "moduleResolution": "Bundler",
+    "module": "Preserve",
+    // Never emits, so declaration portability (TS2742 on inferred types naming
+    // paths outside this program) is not this lane's concern.
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "__tests__/**/*.ts", "__tests__/**/*.tsx"],
+  "exclude": ["node_modules", "dist"]
+}

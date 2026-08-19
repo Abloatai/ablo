@@ -1,74 +1,52 @@
 ---
-title: "Customer Organizations"
-description: "Serve many customer organizations from one backend and one shared schema without weakening tenant isolation."
+title: "Serving Many Customers"
+description: "One account, one schema, and a session scoped to the customer whose data it may read."
 sidebar:
   icon: building-2
 ---
 
-An application serving many customers has two independent choices: where
-customer data is isolated and where the schema is authored. Ablo lets every
-customer keep a hard organization boundary while all of them use the schema
-pushed once by the owning project.
-
-## Choose the customer boundary first
-
-| Customer model | Isolation guarantee | Choose it when |
-|---|---|---|
-| One Ablo organization with customer scope roots | Whatever read boundary every model declares in `policy` | Cross-customer reads are intentional, or every model is explicitly and continuously policy-partitioned |
-| One Ablo organization per customer | Structural organization filtering and RLS on every row | Customers must stay isolated even when a model has no customer-specific policy |
-
-Sync-groups decide which changes are delivered. They do not, by themselves,
-authorize HTTP reads. If you cannot audit matching policies across every model,
-use one Ablo organization per customer.
-
-The rest of this guide uses organization-per-customer: one trusted backend
-holds one dedicated mint key, every customer has an `organizationId`, and each
-user session names that customer organization.
-
-## What you need
-
-- An owning project containing the schema every customer uses.
-- The schema pushed to that project's production root.
-- A server-side `sk_` carrying only `organization:act-as`.
-- A customer `organizationId` resolved from your authenticated application
-  membership, never accepted unchecked from the browser.
-- A model-by-model `can` grant for the UI being opened.
-
-The cross-organization key is a minting credential, not a tenant-data
-credential. Keep it in a secret manager and expose only your own authenticated
-session endpoint.
-
-## Mint on your backend
-
-Create the Ablo client once in server-only code:
+Your customers live in your database, in a table you already have. Ablo reaches
+one of them by the groups a session is minted with.
 
 ```ts
-import Ablo from '@abloatai/ablo';
-import { schema } from '@/ablo/schema';
+// 1. src/ablo/schema.ts — your customer table is a scope root.
+import { defineSchema, identityRole, relation, model, z } from '@abloatai/ablo/schema';
 
-export const customerSessions = Ablo({
-  schema,
-  apiKey: process.env.ABLO_API_KEY,
-});
+export const schema = defineSchema(
+  {
+    // Its rows form the group `customer:<id>`; the kind comes from `groups.root`.
+    customers: model(
+      { name: z.string() },
+      { groups: { root: 'customer' } },
+    ),
+    // A child inherits its customer's group through the `parent` edge.
+    decks: model(
+      { customerId: z.string(), title: z.string() },
+      { relations: { customer: relation.belongsTo('customers', 'customerId', { parent: true }) } },
+    ),
+  },
+  {
+    identityRoles: [
+      identityRole({ kind: 'org', source: 'organizationId' }),
+      identityRole({ kind: 'user', source: 'userId' }),
+    ],
+  },
+);
 ```
 
-After your application authenticates the user, resolve the customer from that
-trusted membership and mint the session:
-
 ```ts
+// 2. app/api/ablo-session/route.ts — mint for one customer, on your backend.
+import { syncGroup } from '@abloatai/ablo/schema';
 import { credentialEndpointSuccessSchema } from '@abloatai/ablo/auth';
-import { customerSessions } from '@/ablo/customer-sessions';
+import { ablo } from '@/ablo/server';
 
 export async function POST() {
-  const member = await requireSignedInCustomerMember();
+  const member = await requireSignedInMember();
 
-  const session = await customerSessions.sessions.create({
+  const session = await ablo.sessions.create({
     user: { id: member.userId },
-    organizationId: member.abloOrganizationId,
-    can: {
-      projects: ['read'],
-      records: ['read', 'create', 'update'],
-    },
+    can: { customers: ['read'], decks: ['read', 'create', 'update'] },
+    syncGroups: [syncGroup('customer', member.customerId)],
   });
 
   return Response.json(
@@ -82,137 +60,121 @@ export async function POST() {
 }
 ```
 
-Do not take `organizationId` directly from request JSON. A signed-in user could
-replace it with another customer's id. Derive it from the server-side membership
-you just authenticated.
+That is the whole integration. The rest of this page is why each line is where
+it is.
 
-## Connect the browser
+## What each layer is
 
-The browser knows only your session endpoint. It never receives the
-cross-organization key:
+Four things carry a name in this arrangement, and mixing two of them up is the
+one mistake worth spending a page to prevent.
 
-```tsx
-'use client';
+| Layer | What it is | Where it lives |
+|---|---|---|
+| Your account | The organization you signed up with. Colleagues join it with their own logins and share one bill. | Ablo |
+| Your application | A project. One per app you run, bound to one schema in your database. | Ablo |
+| Your customer | A row in your own table, with your own id on it. | Your database |
+| One person's session | An `ek_` your backend mints, cut to one customer's group. | Minted per sign-in |
 
-import Ablo from '@abloatai/ablo';
-import { AbloProvider } from '@abloatai/ablo/react';
-import { schema } from '@/ablo/schema';
+Your customers sit in the third row. They are not accounts, because an account
+is something you invite colleagues into. They are not projects, because a
+project binds to a Postgres schema and you run one application, not one per
+customer.
 
-const ablo = Ablo({
-  schema,
-  authEndpoint: '/api/ablo-session',
-});
+Your `sk_` already carries your account, so a session never names it. What the
+session adds is which customer the person in front of it may read.
 
-export function Providers({ children }: { children: React.ReactNode }) {
-  return <AbloProvider client={ablo}>{children}</AbloProvider>;
-}
-```
+## Where the boundary is enforced
 
-The client re-mints before expiry. Your endpoint should return
-`session_expired` only when the application's own login is gone; network and
-server failures are transient and must not sign the user out.
+Two mechanisms do different jobs, and it is worth knowing which is which before
+you rely on either.
 
-## Schema and data stay on different axes
+**Your account is the tenant boundary.** Every row Ablo stores carries your
+organization and project, and row-level security compares both against the
+credential on every read and every write. A client cannot reach past it by
+asking, because the values come from the key rather than the request.
 
-For a cross-organization mint, Ablo derives the schema binding from the owning
-key automatically:
+**Sync groups are the cut inside your account.** They decide which of your own
+rows a session is delivered and which it may read back over HTTP. This is the
+boundary between one of your customers and the next, and it is the one your
+schema declares.
 
-```text
-owning key organization/project    -> schema shape
-customer organization              -> rows, RLS, database, sync groups
-session can                         -> allowed model operations
-model policy                        -> allowed reads inside that organization
-```
+Reads go through it. `list` and `get` are cut to the session's groups, live
+delivery is cut to the same set, and the initial load is the intersection of
+what the session asked for with what it was minted with.
 
-Most applications should not pass a schema option. An explicit override exists for
-migrations or advanced routing:
+Coordination reads are cut more coarsely today. Listing claims and reading
+presence are scoped to your account and plane rather than to the session's
+groups, so one customer's session can see that a row is claimed and who is
+present, though never the row's contents. Treat row ids and participant ids on
+those two surfaces as visible across your customers until this page says
+otherwise.
+
+## Naming a group
+
+Build a group with the `syncGroup(kind, id)` helper rather than a string. The
+kind is the one you declared in `groups.root`, and the id is your own
+identifier for the customer.
 
 ```ts
-await customerSessions.sessions.create({
-  user: { id: member.userId },
-  organizationId: member.abloOrganizationId,
-  schemaProject: {
-    organizationId: schemaOwnerOrganizationId,
-    projectId: migratingSchemaProjectId,
-  },
-  can: { records: ['read', 'update'] },
-});
+syncGroups: [syncGroup('customer', member.customerId)]
 ```
 
-Both schema coordinates move together; customer data does not move with them.
+Resolve `member.customerId` from the membership you just authenticated on the
+server. A signed-in person can put any value in a request body, and the session
+you mint is what decides what they can read.
 
-## Customer lifecycle checklist
+## When a customer really is an account
 
-When onboarding a customer:
+There is one shape where each of your customers should be its own Ablo
+organization: when each is a separate paying business that signs in to Ablo
+itself, holds its own subscription, and invites its own developers. That is what
+an identity provider looks like, and it is what the `organization:act-as` scope
+on a secret key exists for.
 
-1. Provision or resolve its Ablo organization and store that immutable id on
-   your customer record.
-2. Connect that organization's production data source if it owns a separate
-   database.
-3. Keep the shared schema in the owning project; do not copy it into every
-   customer organization.
-4. Mint a test user session through the same backend route production uses.
-5. Verify one known read and write in the customer organization before enabling
-   the integration.
+It is rare, and it is not what a platform serving customers from one product
+looks like. If your customers never see Ablo, they belong in your schema.
 
-When offboarding, stop minting immediately, revoke active sessions when an
-immediate cutoff is required, and retire the customer's data-source access
-through the control-plane process you use for provisioning.
+## Onboarding a customer
 
-## Security checklist
+Insert the row. There is nothing to register with Ablo, because the group is
+derived from the row's id, and the first session minted against it is delivered
+its data.
 
-- Store the cross-organization key only in the backend secret manager.
-- Give it only `organization:act-as`; do not combine minting with schema or
-  data authority.
-- Resolve `organizationId` from authenticated membership server-side.
-- Keep `can` to the smallest model/verb set the UI needs.
-- Use organization-per-customer when a missing model policy must not expose
-  another customer's rows.
-- Rotate the cross-organization key on a schedule and after personnel or
-  infrastructure changes.
-- Record target organization, user, session id, and request id without logging
-  plaintext credentials.
+Add a project only when you add an application. `npx ablo projects create` takes
+a management credential from `ablo login`, and one project holds one schema.
 
 ## Troubleshooting
 
-### The mint is forbidden
+### A session reads nothing
 
-The presenting credential must be a secret `sk_` with
-`organization:act-as`. A normal project key can mint users into its own
-organization but cannot name another one. Run `npx ablo whoami --json` in the
-backend environment to confirm which project and branch the configured key
-actually belongs to; the command never prints the full secret.
+Check the groups the session was minted with against the kind in `groups.root`.
+A group whose kind is not declared matches nothing, which reads as an empty
+database rather than an error.
 
-### The session mints but bootstrap is empty
+### A session reads another customer's rows
 
-Confirm that the cross-organization key belongs to the project where the schema
-was pushed, and that the customer's organization has its data source/root
-branch ready. Do not copy the schema into the customer organization. If you
-supplied `schemaProject`, remove it unless you intentionally override the
-owning-key default.
+Check that the model declares a `parent` edge up to the scope root. A model with
+no group of its own and no parent belongs to no group, so a group cut does not
+narrow it.
 
-### The mint reports an unknown model
+### The mint is refused
 
-Every model named by `can` must exist in the active shared schema. Check the
-model key spelling against the schema used to construct `customerSessions`, then
-push that schema to the key's branch deliberately.
+Naming `organizationId` reaches into a different account and takes
+`organization:act-as`. A platform serving its own customers names groups
+instead, and its key needs no scope at all.
 
-### Data appears under the wrong customer
+## See it yourself
 
-Inspect the membership-to-`organizationId` lookup in your backend route first.
-The schema project never selects the data tenant. The `organizationId` passed to
-`sessions.create` does, and it must come from trusted server-side membership.
+```
+npx ablo whoami --json
+```
 
-### Realtime looks isolated but an HTTP read is too broad
-
-Sync-groups route changes; they are not a read policy. Add or correct the
-model's `policy`, or move customers to separate Ablo organizations when the
-boundary must hold structurally across every model.
+The `syncGroups` it reports are the cut the engine will apply. If a customer's
+group is missing there, no read will show its rows.
 
 ## Related guides
 
-- [Sessions](/sessions) — session lifecycle, refresh, revocation, and grants.
-- [API Keys](/api-keys) — credential classes, scopes, inspection, and rotation.
-- [Identity & Sync Groups](/identity) — participant delivery groups versus model read policy.
-- [Connect Your Database](/data-sources) — customer-owned database setup.
-- [Deployment](/deployment) — production schema and database rollout order.
+- [Identity & Sync Groups](/identity) — how groups are declared and resolved.
+- [Sessions](/sessions) — session lifetime, refresh, and revocation.
+- [API Keys](/api-keys) — credential classes and scopes.
+- [Projects](/projects) — one project per application.

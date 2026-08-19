@@ -1,5 +1,60 @@
 # @abloatai/humans
 
+## 0.56.0
+
+### Minor Changes
+
+- Claims and presence are now cut by sync group, a client converges on the head it
+  was measured against, and a replicated array column arrives as the array it is.
+
+  A platform's customers are rows in its own schema, so they share one
+  organization and one plane. The claim listing and the presence read were scoped
+  to exactly that pair and nothing finer, which meant one customer could see which
+  rows another had claimed, who held them, what the work was called, and who was
+  online. Row contents were never exposed; everything around them was. Both reads
+  now apply the same cut the delivery path applies, taken from the groups each side
+  already carries, so a customer sees the coordination for its own rows and no
+  others.
+
+  Catch-up measured the plane head, paged the log under the client's own scope,
+  then set the cursor to the last row that scope happened to contain. On a plane
+  carrying traffic the client cannot see, that row sits below the head, and where
+  the scope held nothing the cursor never moved at all. The client half only ever
+  reconciled downward, so it could not adopt a head above its own. Together those
+  left a client permanently behind, and the catch-up poll turned it into standing
+  load: every thirty seconds it took the plane's advisory lock, found the same gap,
+  and served the same nothing. The head reads a global sequence, so on any
+  deployment with more than one active writer plane this was every client rather
+  than an edge case. The server now advances to the head it measured, and the
+  client adopts a head above its cursor when the response carries no deltas,
+  because an empty response is proof rather than a hint.
+
+  Every replicated array column arrived one level too deep: `{a,b}` as
+  `[["a","b"]]` and `{}` as `[[]]`. The driver's array parsers expect the literal
+  without its leading brace, and given the whole literal they read that brace as
+  the start of a nested array. The control plane refused such a value outright,
+  while a customer's own `text[]` column would have carried it into the log
+  silently.
+
+  `ablo doctor` now separates a plane where nothing routed at all from one where
+  some changes did not, because the two have different causes: a tenancy value
+  missing for the whole plane rather than for particular rows.
+
+  `LogPosition` is the one name for a position in the log. `DeltaPosition`,
+  `deltaPositionSchema`, `ReadSetWatermark`, and `readSetWatermarkSchema` still
+  resolve to it and are removed in 0.57.0. Where a position needs an owner, the
+  owner belongs in the field name rather than in a second type.
+
+  `ABLO_DOCS_BASE_URL` and `ABLO_SITE_BASE_URL` are exported for tools that link
+  back to the documentation.
+
+  The customer-organizations guide is rewritten around what an organization is: a
+  team account, whose members join with their own logins and share what it owns and
+  is billed for. Nobody invites their customers into that, so a platform's
+  customers are neither organizations nor projects, which are bound one-to-one to a
+  database schema. They are rows in the platform's own schema, reached by the sync
+  groups on the session.
+
 ## 0.55.0
 
 ### Minor Changes

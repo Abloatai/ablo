@@ -22,8 +22,8 @@ export {
   targetRefSchema,
   // Layer 3 — optimistic stale-context
   onStaleModeSchema,
-  MAX_READ_SET_ENTRIES,
   readSetWatermarkSchema,
+  MAX_READ_SET_ENTRIES,
   readSetRowTargetSchema,
   readSetGroupTargetSchema,
   commitReadSetTargetSchema,

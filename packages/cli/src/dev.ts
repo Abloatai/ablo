@@ -205,25 +205,21 @@ export function classifyKey(
  * the file, appends the key line, or updates a differing value, and returns a
  * short description of which it did. It also adds `.env.local` to `.gitignore`
  * when nothing already covers it, so the secret can't be committed.
+ *
+ * The key is the only value written. It already names its own project and
+ * branch, so a pin beside it asserts nothing the key does not carry — and a pin
+ * this command keeps in step with the key it was derived from can never fire.
+ * What it can do is go stale on the next branch and refuse a startup that was
+ * fine. Earlier versions wrote both; any they left behind are cleared here.
  */
-export function wireEnvLocal(
-  apiKey: string,
-  cwd: string = process.cwd(),
-  projectId?: string,
-  branchId?: string
-): string {
+export function wireEnvLocal(apiKey: string, cwd: string = process.cwd()): string {
   const envPath = resolve(cwd, '.env.local');
   const line = `ABLO_API_KEY=${apiKey}`;
-  const projectLine = projectId ? `ABLO_PROJECT_ID=${projectId}` : null;
-  const branchLine = branchId ? `ABLO_BRANCH_ID=${branchId}` : null;
 
   let action: string;
+  let removedPins: string[] = [];
   if (!existsSync(envPath)) {
-    writeFileSync(
-      envPath,
-      `${line}\n${projectLine ? `${projectLine}\n` : ''}${branchLine ? `${branchLine}\n` : ''}`,
-      { mode: 0o600 }
-    );
+    writeFileSync(envPath, `${line}\n`, { mode: 0o600 });
     action = `Created ${pc.bold('.env.local')} with ${pc.bold('ABLO_API_KEY')}`;
   } else {
     const content = readFileSync(envPath, 'utf8');
@@ -239,23 +235,22 @@ export function wireEnvLocal(
       writeFileSync(envPath, content.replace(/^ABLO_API_KEY=.*$/m, line));
       action = `Updated ${pc.bold('ABLO_API_KEY')} in ${pc.bold('.env.local')} ${pc.dim(`(was ${existing.slice(0, 12)}…)`)}`;
     }
-    if (projectLine) {
-      const next = readFileSync(envPath, 'utf8');
-      if (/^ABLO_PROJECT_ID=.*$/m.test(next)) {
-        writeFileSync(envPath, next.replace(/^ABLO_PROJECT_ID=.*$/m, projectLine));
-      } else {
-        appendFileSync(envPath, `${next.endsWith('\n') || next.length === 0 ? '' : '\n'}${projectLine}\n`);
-      }
-    }
-    if (branchLine) {
-      const next = readFileSync(envPath, 'utf8');
-      if (/^ABLO_BRANCH_ID=.*$/m.test(next)) {
-        writeFileSync(envPath, next.replace(/^ABLO_BRANCH_ID=.*$/m, branchLine));
-      } else {
-        appendFileSync(envPath, `${next.endsWith('\n') || next.length === 0 ? '' : '\n'}${branchLine}\n`);
-      }
+    // Clear the pins earlier versions wrote beside the key. Left in place they
+    // survive a branch switch the key does not, and the SDK then refuses to
+    // start against a credential that is entirely valid.
+    const before = readFileSync(envPath, 'utf8');
+    const after = before.replace(/^ABLO_(?:PROJECT|BRANCH)_ID=.*\n?/gm, '');
+    if (after !== before) {
+      removedPins = ['ABLO_PROJECT_ID', 'ABLO_BRANCH_ID'].filter((key) =>
+        new RegExp(`^${key}=`, 'm').test(before),
+      );
+      writeFileSync(envPath, after);
     }
   }
+
+  const pinNote = removedPins.length
+    ? ` Removed ${removedPins.map((key) => pc.bold(key)).join(' and ')}; the key names its own project and branch.`
+    : '';
 
   // `.env.local` carries a secret — make sure it can never be committed.
   // Most people forget, and a key in git history is a leak forever, so the
@@ -273,7 +268,7 @@ export function wireEnvLocal(
     gitignoreNote = ` Added ${pc.bold('.env.local')} to ${pc.bold('.gitignore')} so the key can't be committed.`;
   }
 
-  return `${action}.${gitignoreNote}`;
+  return `${action}.${pinNote}${gitignoreNote}`;
 }
 
 /** Push once and return a rendered result for a spinner to display. */
@@ -482,7 +477,7 @@ export async function dev(
   // touch the developer's files.
   if (runtime.branch) {
     console.log(
-      `\n  ${pc.green('✓')} ${wireEnvLocal(args.apiKey!, process.cwd(), runtime.branch.projectId, runtime.branch.id)}`
+      `\n  ${pc.green('✓')} ${wireEnvLocal(args.apiKey!, process.cwd())}`
     );
     console.log(
       `  ${pc.dim(`Temporary branch credential expires ${runtime.branch.expiresAt}; rerun ablo dev to rotate it.`)}`,

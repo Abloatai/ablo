@@ -105,34 +105,29 @@ describe('wireEnvLocal', () => {
     expect(readFileSync(join(dir, '.env.local'), 'utf8')).toBe(`ABLO_API_KEY=${KEY}\n`);
   });
 
-  it('wires the immutable project pin beside a branch key', () => {
-    const message = wireEnvLocal(KEY, dir, 'proj_mail', 'br_feature');
+  it('writes the key alone, with no project or branch pin beside it', () => {
+    const message = wireEnvLocal(KEY, dir);
     expect(message).toContain('Created');
-    expect(readFileSync(join(dir, '.env.local'), 'utf8')).toBe(
-      `ABLO_API_KEY=${KEY}\nABLO_PROJECT_ID=proj_mail\nABLO_BRANCH_ID=br_feature\n`
-    );
+    expect(readFileSync(join(dir, '.env.local'), 'utf8')).toBe(`ABLO_API_KEY=${KEY}\n`);
   });
 
-  it('updates the branch pin when the active branch changes', () => {
+  it('clears pins an earlier version left, so they cannot go stale', () => {
     writeFileSync(
       join(dir, '.env.local'),
       `ABLO_API_KEY=${KEY}\nABLO_PROJECT_ID=proj_mail\nABLO_BRANCH_ID=br_old\nOTHER=1\n`
     );
-    wireEnvLocal(KEY, dir, 'proj_mail', 'br_feature');
-    expect(readFileSync(join(dir, '.env.local'), 'utf8')).toBe(
-      `ABLO_API_KEY=${KEY}\nABLO_PROJECT_ID=proj_mail\nABLO_BRANCH_ID=br_feature\nOTHER=1\n`
-    );
+    const message = wireEnvLocal(KEY, dir);
+    expect(readFileSync(join(dir, '.env.local'), 'utf8')).toBe(`ABLO_API_KEY=${KEY}\nOTHER=1\n`);
+    expect(message).toContain('ABLO_PROJECT_ID');
+    expect(message).toContain('ABLO_BRANCH_ID');
   });
 
-  it('updates the project pin when the active project changes', () => {
-    writeFileSync(
-      join(dir, '.env.local'),
-      `ABLO_API_KEY=${KEY}\nABLO_PROJECT_ID=proj_old\nOTHER=1\n`
-    );
-    wireEnvLocal(KEY, dir, 'proj_mail');
-    expect(readFileSync(join(dir, '.env.local'), 'utf8')).toBe(
-      `ABLO_API_KEY=${KEY}\nABLO_PROJECT_ID=proj_mail\nOTHER=1\n`
-    );
+  it('names only the pin it actually removed', () => {
+    writeFileSync(join(dir, '.env.local'), `ABLO_API_KEY=${KEY}\nABLO_PROJECT_ID=proj_old\nOTHER=1\n`);
+    const message = wireEnvLocal(KEY, dir);
+    expect(readFileSync(join(dir, '.env.local'), 'utf8')).toBe(`ABLO_API_KEY=${KEY}\nOTHER=1\n`);
+    expect(message).toContain('ABLO_PROJECT_ID');
+    expect(message).not.toContain('ABLO_BRANCH_ID');
   });
 
   it('appends the line when .env.local exists without it', () => {

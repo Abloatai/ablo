@@ -52,6 +52,30 @@ export interface DoctorCheck {
   readonly fix?: string;
 }
 
+/**
+ * The three answers a run can end on.
+ *
+ * `unverified` is the one worth having. A check that could not be run is not a
+ * check that passed, and collapsing the two is how a setup gate reports success
+ * over a question nobody answered. The engine's own readiness surface already
+ * keeps `unknown` separate from healthy; this carries that distinction all the
+ * way out to the exit code.
+ */
+export type DoctorVerdict = 'ready' | 'blocked' | 'unverified';
+
+/**
+ * Classify a run. Pure, so the rule that a skipped check is not a passed one
+ * can be pinned by a test rather than inferred from a rendered page.
+ */
+export function doctorVerdict(counts: {
+  readonly blockers: number;
+  readonly failed: number;
+  readonly skipped: number;
+}): DoctorVerdict {
+  if (counts.blockers > 0 || counts.failed > 0) return 'blocked';
+  return counts.skipped > 0 ? 'unverified' : 'ready';
+}
+
 export interface DoctorReport {
   readonly checks: readonly DoctorCheck[];
   readonly blockers: ReturnType<typeof blockers>;
@@ -65,6 +89,7 @@ export interface DoctorReport {
   readonly pushedSchema: PushedSchema | null;
   readonly schemaDrift: SchemaDrift | null;
   readonly delivery: DeliveryState;
+  readonly verdict: DoctorVerdict;
 }
 
 export interface InspectDoctorOptions {
@@ -304,7 +329,7 @@ export async function inspectDoctor(options: InspectDoctorOptions = {}): Promise
 
   // 7. Whether the writes that landed were told to anyone. Every check above
   //    this one asks whether something is configured; this asks what happened
-  //    to the last hour of changes, which is the question the others were all
+  //    to the recent window of changes, which is the question the others were all
   //    green through. A delta the engine could not route is excluded from
   //    delivery and counted there — so a write confirms, the row appears in
   //    Postgres, and no subscriber is ever told.
@@ -315,14 +340,24 @@ export async function inspectDoctor(options: InspectDoctorOptions = {}): Promise
     const when = windowWords(delivery.window_seconds);
     checks.push(
       delivery.unroutable > 0
-        ? {
-            label: 'delivery',
-            state: 'fail',
-            detail:
-              `${delivery.unroutable} of ${delivery.recorded} change${delivery.recorded === 1 ? '' : 's'} in ${when} reached nobody` +
-              (delivery.sample ? ` (e.g. ${delivery.sample.model}/${delivery.sample.id})` : ''),
-            fix: 'run `ablo check`. Rows written to Postgres outside Ablo carry no tenancy value, so nothing can route the change.',
-          }
+        ? delivery.unroutable === delivery.recorded
+          ? {
+              // Nothing at all was routable. One bad row does not look like
+              // this, so the cause is the plane rather than the rows: reporting
+              // it as "N of N" would send the reader hunting for the N.
+              label: 'delivery',
+              state: 'fail',
+              detail: `no change reached anyone (${delivery.recorded} in ${when})`,
+              fix: 'run `ablo check`. When nothing routes, the tenancy value is usually missing for the whole plane rather than for particular rows.',
+            }
+          : {
+              label: 'delivery',
+              state: 'fail',
+              detail:
+                `${delivery.unroutable} of ${delivery.recorded} change${delivery.recorded === 1 ? '' : 's'} in ${when} reached nobody` +
+                (delivery.sample ? ` (e.g. ${delivery.sample.model}/${delivery.sample.id})` : ''),
+              fix: 'run `ablo check`. Rows written to Postgres outside Ablo carry no tenancy value, so nothing can route the change.',
+            }
         : {
             label: 'delivery',
             state: 'ok',
@@ -361,6 +396,7 @@ export async function inspectDoctor(options: InspectDoctorOptions = {}): Promise
     pushedSchema: pushed,
     schemaDrift: drift,
     delivery,
+    verdict: doctorVerdict({ blockers: blocking.length, failed, skipped }),
   };
 }
 
@@ -380,7 +416,7 @@ export function renderDoctorReport(report: DoctorReport): void {
     );
   } else if (report.skipped > 0) {
     console.log(
-      `  ${pc.yellow('?')} ${pc.dim(`nothing is blocking a write, but ${report.skipped} check${report.skipped === 1 ? '' : 's'} could not be run`)}`
+      `  ${pc.yellow('?')} ${pc.dim(`nothing found a problem, but ${report.skipped} check${report.skipped === 1 ? '' : 's'} could not be run. This is not a clean bill of health.`)}`
     );
   } else {
     console.log(
@@ -390,8 +426,40 @@ export function renderDoctorReport(report: DoctorReport): void {
   console.log();
 }
 
-export async function doctor(): Promise<void> {
+/**
+ * The report as data — `ablo doctor --json`, or `ABLO_JSON=1`.
+ *
+ * The command that explains why a write is blocked was the one command an agent
+ * could not read: every other verb here answers `--json`, and this one rendered
+ * to a terminal only. So the agent that hit the failure had to parse colour
+ * codes or ask a human what the terminal said.
+ *
+ * A projection of {@link DoctorReport}, not a second shape. `verdict` is the
+ * whole page in one field and matches the exit code exactly, so a caller can
+ * branch on either.
+ */
+function doctorReportAsJson(report: DoctorReport): string {
+  return JSON.stringify(
+    {
+      object: 'doctor_report',
+      verdict: report.verdict,
+      checks: report.checks,
+      blockers: report.blockers,
+    },
+    null,
+    2,
+  );
+}
+
+export async function doctor(argv: readonly string[] = []): Promise<void> {
   const report = await inspectDoctor();
-  renderDoctorReport(report);
-  if (!report.ready) process.exitCode = 1;
+  if (argv.includes('--json') || process.env.ABLO_JSON === '1') {
+    console.log(doctorReportAsJson(report));
+  } else {
+    renderDoctorReport(report);
+  }
+  // A check that could not be run is not a check that passed. Exiting zero on
+  // one is how a setup gate reports success over a question nobody answered,
+  // which is the failure this command exists to end.
+  if (report.verdict !== 'ready') process.exitCode = 1;
 }

@@ -355,13 +355,11 @@ Because Ablo checks from its own network, a database your own machine can't reac
 IPv6-only, IP-allowlisted, behind a VPN — still verifies. Re-run it until every
 item is green.
 
-Your **app** holds only the API key — never a connection string:
+Your **app** holds only the API key, never a connection string:
 
 ```bash
-# .env — server runtime only, never the browser
+# .env, server runtime only, never the browser
 ABLO_API_KEY=sk_...
-ABLO_PROJECT_ID=proj_...
-ABLO_BRANCH_ID=br_...
 ```
 
 ```ts
@@ -371,17 +369,17 @@ import { schema } from './ablo/schema';
 export const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
-  projectId: process.env.ABLO_PROJECT_ID,
-  branchId: process.env.ABLO_BRANCH_ID,
 });
 ```
 
-`ABLO_PROJECT_ID` and `ABLO_BRANCH_ID` are safety assertions, not routing inputs.
-The API key still selects the project and branch; during `ready()` Ablo asks the
-server what the key actually targets and refuses startup when either coordinate
-differs. `ablo dev` writes all three values together, so accidentally exporting
-a entries key into the mail app—or a mail development key into production—fails
-before any read, write, or subscription begins.
+The key names its own project and branch, so there is nothing else to configure.
+
+If you want a process to refuse a key you did not expect, pin `projectId` or
+`branchId` (they default to `ABLO_PROJECT_ID` and `ABLO_BRANCH_ID`). Both are
+assertions, never routing inputs: during `ready()` Ablo asks the server what the
+key actually targets and refuses to start when a coordinate differs. That is
+worth setting where one deployment can be handed keys for more than one
+environment, and worth leaving out everywhere else.
 
 The Ablo schema describes **only your synced, collaborative models** — the rows
 Ablo coordinates and fans out in realtime. It is _not_ your whole-database schema

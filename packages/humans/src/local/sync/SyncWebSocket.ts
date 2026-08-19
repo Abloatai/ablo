@@ -531,6 +531,21 @@ export class SyncWebSocket<
             }
           );
         });
+      } else if (serverHead > this.cursor.lastSyncId) {
+        // The other direction: we are behind the server head and the server
+        // sent nothing. That is not a stall, it is proof. An empty response
+        // means the server walked the log up to `currentSyncId` under this
+        // client's own project and capability scope and found nothing we are
+        // entitled to, and it measured that head through the settled barrier,
+        // so no lower id can still be in flight. Adopting it is therefore
+        // exact, not optimistic.
+        //
+        // Without this, a client on a plane whose head moves for reasons it
+        // cannot see — another project, another sync group, a model outside
+        // its allowlist — never converges. Its cursor sticks, every catch-up
+        // poll finds a gap, and each of those polls takes the plane's advisory
+        // lock to read the settled head. The cost lands on the write path.
+        this.cursor.lastSyncId = serverHead;
       }
     }
 

@@ -34,9 +34,12 @@ export const ephemeralKeyRequestSchema = z.object({
   /** The participant this session acts as. */
   user: ephemeralKeyUserSchema,
   /**
-   * Mint into this organization instead of the caller's own. Requires the
-   * `organization:act-as` scope — without it a secret key can never mint a
-   * session into another tenant.
+   * Open the session in a DIFFERENT organization, one the caller does not
+   * belong to. Requires the `organization:act-as` scope. This is the identity
+   * provider case, where each organization is an account in its own right.
+   *
+   * A platform serving its own customers does not use this: its customers are
+   * rows in its own schema, and a session reaches them through `syncGroups`.
    */
   organizationId: z.string().min(1).optional(),
   /**
