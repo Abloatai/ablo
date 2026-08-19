@@ -25,7 +25,7 @@ ABLO_API_KEY=sk_… npx ablo status
           • fulfilments    typename=fulfilments
           • reviews        typename=reviews
 
-  ✓ write infrastructure is ready — database constraints and row-level policies still apply
+  ✓ write infrastructure is ready. Your database constraints and row-level policies still apply.
 ```
 
 `status` asks the routing authority rather than sampling a read, because reads

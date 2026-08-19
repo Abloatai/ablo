@@ -56,6 +56,7 @@ import { errorEnvelopeSchema } from '../wire/errorEnvelope.js';
 import { modelReadResponseSchema, modelListResponseSchema } from '../wire/modelResponses.js';
 import { modelMutationRequestSchema } from '../wire/modelMutations.js';
 import { logListResponseSchema, logQuerySchema } from '../wire/feedEvent.js';
+import { logDeliveryResponseSchema } from '../wire/deltaDelivery.js';
 import { schemaReadResponseSchema } from '../wire/accountResponses.js';
 import {
   ephemeralKeyRequestSchema,
@@ -161,6 +162,7 @@ const ABLO_OPERATION_IDS: Readonly<Record<string, string>> = {
   'POST /v1/capabilities/{id}/rotate': 'rotateCapability',
   'GET /v1/schema': 'getSchema',
   'GET /v1/logs': 'listLogEntries',
+  'GET /v1/logs/delivery': 'getLogDelivery',
   'GET /v1/commits': 'listCommits',
   'POST /v1/commits': 'commit',
   'GET /v1/commits/{id}': 'getCommit',
@@ -898,6 +900,25 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
               '`object`, so a reader that meets an entry kind it does not know ' +
               'can skip it and keep paging.',
             'LogPage',
+          ),
+        },
+      },
+    },
+    '/v1/logs/delivery': {
+      get: {
+        tags: ['logs'],
+        summary: 'How much of what was recorded could reach anyone',
+        description:
+          'The fan-out verdict for your plane over a recent window. `recorded` ' +
+          'counts the changes the log accepted; `unroutable` counts the ones ' +
+          'excluded from delivery because they carried no sync group, which is ' +
+          'the state a row reaches when it was written into your database ' +
+          'outside Ablo and so carries no tenancy value. Any number above zero ' +
+          'means writes are landing that no subscriber is told about.',
+        responses: {
+          '200': jsonResp(
+            'The counts, plus the most recent undeliverable change when there is one.',
+            derive(logDeliveryResponseSchema, 'output'),
           ),
         },
       },

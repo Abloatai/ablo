@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.54.0",
+    "version": "0.55.0",
     "description": "Ablo collaboration infrastructure: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.",
     "license": {
       "name": "Apache License 2.0",
@@ -8508,6 +8508,166 @@
           }
         },
         "operationId": "listLogEntries"
+      }
+    },
+    "/v1/logs/delivery": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "How much of what was recorded could reach anyone",
+        "description": "The fan-out verdict for your plane over a recent window. `recorded` counts the changes the log accepted; `unroutable` counts the ones excluded from delivery because they carried no sync group, which is the state a row reaches when it was written into your database outside Ablo and so carries no tenancy value. Any number above zero means writes are landing that no subscriber is told about.",
+        "responses": {
+          "200": {
+            "description": "The counts, plus the most recent undeliverable change when there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "const": "log_delivery"
+                    },
+                    "window_seconds": {
+                      "type": "number"
+                    },
+                    "recorded": {
+                      "type": "number"
+                    },
+                    "unroutable": {
+                      "type": "number"
+                    },
+                    "sample": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "model": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "id",
+                            "at"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "window_seconds",
+                    "recorded",
+                    "unroutable"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request did not satisfy the published contract.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The Bearer credential is missing, malformed, or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential does not authorize this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist in the credential scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current claim, version, or idempotency state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The caller exceeded an enforced rate limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server could not complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An HTTP error not otherwise listed; decoded through the canonical envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getLogDelivery"
       }
     },
     "/v1/commits": {

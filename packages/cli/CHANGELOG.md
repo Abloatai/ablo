@@ -1,5 +1,42 @@
 # @abloatai/cli
 
+## 0.55.0
+
+### Minor Changes
+
+- `ablo doctor` now reports whether the writes that landed reached anyone.
+
+  Its other checks ask whether something is configured. This one asks what
+  happened to the last hour of changes, which is the question the rest can be green
+  through: a commit confirms, the row appears in your database, and no subscriber
+  is ever told.
+
+  ```
+  ✗ delivery   3 of 41 changes in the last hour reached nobody (e.g. reports/rep_8c2)
+  ```
+
+  A change Ablo cannot route is excluded from delivery and counted, so the count is
+  the engine's own record rather than an inference. Where a change is undeliverable
+  the report names one model and row, which is what turns "realtime is broken" into
+  something to look at. A server too old to answer reports the check as not
+  determined rather than as healthy, because an unanswered question is not a pass.
+
+  `ablo check` answers the other half. A model having a tenancy column was treated
+  as the whole question, but Ablo stamps that value only on writes it makes. A seed,
+  a migration, or a backfill that inserts straight into Postgres does not, and such
+  a row can never be routed: it lands, it is queryable, and the sync layer cannot
+  see it. Those rows are counted now, so a report reading "23 models, 23 ok" over a
+  table full of them is no longer possible. The count is capped, because the answer
+  that matters is whether there are any.
+
+  `GET /v1/logs/delivery` is the endpoint behind the check, for anyone building
+  their own monitoring. It answers counts over a recent window plus at most one
+  sample naming a model and a row id, never row data, and reports the window it
+  counted rather than leaving a caller to assume one.
+
+  `CapabilityExchangeResponse` is removed, as 0.54.0 announced. Use
+  `CapabilityMintResponse`, which it has resolved to throughout.
+
 ## 0.54.0
 
 ### Minor Changes

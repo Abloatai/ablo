@@ -1,0 +1,65 @@
+---
+title: "v0.55.0"
+type: changelog
+changelog:
+  version: "0.55.0"
+  category: "Features"
+---
+
+### `ablo doctor` says whether the writes reached anyone
+
+Every other check asks whether something is configured. This one asks what
+happened to the last hour of changes, which is the question the rest can all be
+green through: a commit confirms, the row appears in your database, and no
+subscriber is ever told.
+
+```
+  ✓ delivery   41 changes in the last hour, all deliverable
+```
+
+and when they did not:
+
+```
+  ✗ delivery   3 of 41 changes in the last hour reached nobody (e.g. reports/rep_8c2)
+               → run `ablo check`. Rows written to Postgres outside Ablo carry no tenancy value, so nothing can route the change.
+```
+
+A change Ablo cannot route is excluded from delivery and counted at the moment
+it happens, so this is the engine's own record rather than something inferred
+afterwards. When a change is undeliverable the report names one model and row,
+because that is what turns "realtime is broken" into something you can open.
+
+A server too old to answer the question reports the check as not determined
+rather than as healthy. That distinction is the point of the check: folding an
+unanswered question into a pass would report health the plane never claimed.
+
+### `ablo check` counts rows the sync layer cannot see
+
+A model having a tenancy column was treated as the whole question. Ablo stamps
+that value on the writes it makes, but a seed, a migration, or a backfill that
+inserts straight into Postgres does not, and a row without it can never be routed
+to anyone: it lands, it is queryable in Postgres, and the sync layer cannot see
+it.
+
+Those rows are counted now, so a report reading "23 models, 23 ok" over a table
+full of them is no longer possible. The count stops at a cap, because the answer
+that changes what you do next is whether there are any, and an uncounted scan of
+a large table is not something a command you run on a whim should cost.
+
+### `GET /v1/logs/delivery`
+
+The endpoint behind the check, for building your own monitoring:
+
+```
+{ "object": "log_delivery", "window_seconds": 3600,
+  "recorded": 41, "unroutable": 3,
+  "sample": { "model": "reports", "id": "rep_8c2", "at": "2026-08-19T09:12:04Z" } }
+```
+
+Counts and at most one sample, never row data. The window it counted is in the
+response, so nothing has to assume one.
+
+### Removed
+
+`CapabilityExchangeResponse` is removed, as 0.54.0 announced. Use
+`CapabilityMintResponse`, which it has resolved to throughout.

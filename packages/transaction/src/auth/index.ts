@@ -31,13 +31,6 @@ export {
 } from './hostedEndpoints.js';
 export { normalizeAbloBaseUrl } from './baseUrl.js';
 
-/**
- * @deprecated Use {@link CapabilityMintResponse}. Removed in 0.55.0. This is a
- * type-only rename bridge; both names resolve to the same canonical Zod
- * contract and no runtime parser or schema is duplicated.
- */
-export type CapabilityExchangeResponse = CapabilityMintResponse;
-
 export type {
   EphemeralKeyResponse,
   IdentityResolveResponse,

@@ -29,6 +29,7 @@ import {
   readLocalSchemaHash,
   schemaDrift,
   blockers,
+  WRITE_READY_VERDICT,
   type PushedModel,
 } from './readiness';
 
@@ -454,7 +455,7 @@ export async function status(args: string[] = []): Promise<void> {
     );
   } else {
     console.log(
-      `  ${pc.green('✓')} ${pc.dim('write infrastructure is ready — database constraints and row-level policies still apply')}`
+      `  ${pc.green('✓')} ${pc.dim(WRITE_READY_VERDICT)}`
     );
   }
 

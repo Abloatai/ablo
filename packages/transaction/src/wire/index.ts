@@ -41,6 +41,11 @@ export {
   logQuerySchema,
 } from './feedEvent.js';
 export type { FeedEvent, LogListResponse, LogQuery } from './feedEvent.js';
+
+// The same feed's delivery verdict — how much of what it recorded could reach
+// anyone. Read by `ablo doctor`.
+export { logDeliveryResponseSchema, deliverySampleSchema } from './deltaDelivery.js';
+export type { LogDeliveryResponse, DeliverySample } from './deltaDelivery.js';
 export {
   feedCursorSchema,
   parseFeedCursor,

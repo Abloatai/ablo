@@ -32,7 +32,10 @@ import {
   schemaDrift,
   blockers,
   detectPoolerIn,
+  fetchDeliveryState,
+  WRITE_READY_VERDICT,
   type DataSourceState,
+  type DeliveryState,
   type PushedSchema,
   type SchemaDrift,
 } from './readiness';
@@ -61,6 +64,7 @@ export interface DoctorReport {
   readonly dataSource: DataSourceState;
   readonly pushedSchema: PushedSchema | null;
   readonly schemaDrift: SchemaDrift | null;
+  readonly delivery: DeliveryState;
 }
 
 export interface InspectDoctorOptions {
@@ -81,6 +85,16 @@ function render(check: DoctorCheck): void {
     `  ${mark} ${check.label.padEnd(10)} ${check.state === 'fail' ? check.detail : pc.dim(check.detail)}`
   );
   if (check.fix) console.log(`    ${' '.repeat(11)}${pc.dim(`→ ${check.fix}`)}`);
+}
+
+/** The counted window as a reader says it, from whatever the server reported. */
+function windowWords(seconds: number): string {
+  if (seconds % 3600 === 0) {
+    const hours = seconds / 3600;
+    return hours === 1 ? 'the last hour' : `the last ${hours} hours`;
+  }
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return minutes === 1 ? 'the last minute' : `the last ${minutes} minutes`;
 }
 
 async function ping(apiUrl: string): Promise<boolean> {
@@ -288,6 +302,40 @@ export async function inspectDoctor(options: InspectDoctorOptions = {}): Promise
     checks.push({ label: 'database', state: 'skip', detail: 'nothing connected to check' });
   }
 
+  // 7. Whether the writes that landed were told to anyone. Every check above
+  //    this one asks whether something is configured; this asks what happened
+  //    to the last hour of changes, which is the question the others were all
+  //    green through. A delta the engine could not route is excluded from
+  //    delivery and counted there — so a write confirms, the row appears in
+  //    Postgres, and no subscriber is ever told.
+  const delivery = reachable
+    ? await fetchDeliveryState(apiUrl, runtimeKey.key)
+    : ({ kind: 'unknown', detail: 'unreachable' } as const);
+  if (delivery.kind === 'known') {
+    const when = windowWords(delivery.window_seconds);
+    checks.push(
+      delivery.unroutable > 0
+        ? {
+            label: 'delivery',
+            state: 'fail',
+            detail:
+              `${delivery.unroutable} of ${delivery.recorded} change${delivery.recorded === 1 ? '' : 's'} in ${when} reached nobody` +
+              (delivery.sample ? ` (e.g. ${delivery.sample.model}/${delivery.sample.id})` : ''),
+            fix: 'run `ablo check`. Rows written to Postgres outside Ablo carry no tenancy value, so nothing can route the change.',
+          }
+        : {
+            label: 'delivery',
+            state: 'ok',
+            detail:
+              delivery.recorded === 0
+                ? `no changes in ${when}`
+                : `${delivery.recorded} change${delivery.recorded === 1 ? '' : 's'} in ${when}, all deliverable`,
+          }
+    );
+  } else {
+    checks.push({ label: 'delivery', state: 'skip', detail: `not determined (${delivery.detail})` });
+  }
+
   // The verdict comes from the same classifier `ablo status` closes with, so
   // the two commands can never disagree about whether a write would land.
   const blocking = blockers({
@@ -312,6 +360,7 @@ export async function inspectDoctor(options: InspectDoctorOptions = {}): Promise
     dataSource,
     pushedSchema: pushed,
     schemaDrift: drift,
+    delivery,
   };
 }
 
@@ -335,7 +384,7 @@ export function renderDoctorReport(report: DoctorReport): void {
     );
   } else {
     console.log(
-      `  ${pc.green('✓')} ${pc.dim('write infrastructure is ready — your database constraints and row-level policies still apply')}`
+      `  ${pc.green('✓')} ${pc.dim(WRITE_READY_VERDICT)}`
     );
   }
   console.log();

@@ -96,6 +96,7 @@ describe('abloOpenApi (protocol reference)', () => {
         // a client that can coordinate its writes but cannot see a peer's is
         // only half a participant.
         '/v1/logs',
+        '/v1/logs/delivery',
         '/v1/models/{model}',
         '/v1/models/{model}/{id}',
         '/v1/models/{model}/{id}/claim',
@@ -131,7 +132,7 @@ describe('abloOpenApi (protocol reference)', () => {
     expect(Object.keys(schemaToOpenApi(few).paths as object).length).toBeLessThan(
       Object.keys(schemaToOpenApi(many).paths as object).length,
     );
-    expect(referencePaths).toBeLessThan(22);
+    expect(referencePaths).toBeLessThan(23);
   });
 
   it('is byte-identical no matter whose schema is pushed', () => {

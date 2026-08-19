@@ -16,8 +16,10 @@
 
 import {
   datasourceListResponseSchema,
+  logDeliveryResponseSchema,
   schemaReadResponseSchema,
   type DatasourceSummary,
+  type LogDeliveryResponse,
   type SchemaModelResponse,
   type SchemaReadResponse,
 } from '@abloatai/transaction/wire';
@@ -117,6 +119,71 @@ export interface Blocker {
   readonly problem: string;
   /** The single next command or change that resolves it. */
   readonly fix: string;
+}
+
+/**
+ * The other half of {@link Blocker}: what to say when nothing is blocking.
+ *
+ * Both `status` and `doctor` print it, so it is defined once. Two copies had
+ * already drifted apart by a word. The trailing sentence is load-bearing:
+ * neither command issues a write, so a constraint or a row-level policy the
+ * customer's own database enforces is never reached and never reported.
+ */
+export const WRITE_READY_VERDICT =
+  'write infrastructure is ready. Your database constraints and row-level policies still apply.';
+
+/**
+ * The counts the delivery route answers with, with the reader's stance resolved:
+ * a response that parsed has all four, so a renderer branches on the numbers
+ * rather than on whether the server sent them.
+ */
+export type DeliveryCounts = Required<
+  Pick<LogDeliveryResponse, 'window_seconds' | 'recorded' | 'unroutable' | 'sample'>
+>;
+
+/**
+ * Whether the changes this plane recorded could reach anyone.
+ *
+ * This is the one fact in the readiness surface that is not configuration. Every
+ * other check here asks whether something is set up; this asks what actually
+ * happened to the last hour of writes. A plane can pass all of them and still
+ * deliver nothing, which is the failure the checks were green through.
+ */
+export type DeliveryState =
+  | ({ readonly kind: 'known' } & DeliveryCounts)
+  | { readonly kind: 'unknown'; readonly detail: string };
+
+/**
+ * Ask the plane what its fan-out has been doing. Scoped by the key, like the
+ * rest of this module, and best-effort in the same way: a server too old to
+ * serve the route reports unknown, never healthy.
+ */
+export async function fetchDeliveryState(
+  apiUrl: string,
+  apiKey: string | undefined,
+  timeoutMs = 4000,
+): Promise<DeliveryState> {
+  if (!apiKey) return { kind: 'unknown', detail: 'no key' };
+  const ctrl = new AbortController();
+  const t = setTimeout(() => { ctrl.abort(); }, timeoutMs);
+  try {
+    const res = await fetch(`${apiUrl}/api/v1/logs/delivery`, {
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: ctrl.signal,
+    });
+    // A deployment without this route answers 404. That is "not determined",
+    // not "nothing was dropped" — the distinction the whole check rests on.
+    if (!res.ok) return { kind: 'unknown', detail: `HTTP ${res.status}` };
+    // The one place this response is checked; below here it is a typed value.
+    const parsed = logDeliveryResponseSchema.safeParse(await res.json());
+    if (!parsed.success) return { kind: 'unknown', detail: 'unrecognized response' };
+    const { window_seconds, recorded, unroutable, sample } = parsed.data;
+    return { kind: 'known', window_seconds, recorded, unroutable, sample: sample ?? null };
+  } catch {
+    return { kind: 'unknown', detail: 'unreachable' };
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 /**

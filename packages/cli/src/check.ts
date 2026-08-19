@@ -11,6 +11,13 @@
  * models) the `organization_id` tenancy column the engine isolates on — the same
  * rule the server's introspection path enforces. Every other table in your
  * database is ignored.
+ *
+ * The column being PRESENT is not the whole question. Ablo stamps the tenancy
+ * value on writes it makes; a seed, a migration, or a backfill that inserts
+ * straight into Postgres does not, and a row without it can never be routed to
+ * anyone — it lands, it is queryable in Postgres, and it is invisible to the
+ * sync layer forever. So this counts them too. A report that reads "23 models,
+ * 23 ok" over a table full of unstamped rows is the shape of that failure.
  */
 
 import { AbloValidationError } from '@abloatai/transaction/errors';
@@ -61,6 +68,46 @@ export function parseCheckArgs(argv: readonly string[]): CheckArgs {
 interface ColumnRow {
   table_name: string;
   column_name: string;
+}
+
+/** Postgres identifier quoting, for the introspected names below. */
+function quoteIdent(raw: string): string {
+  return `"${raw.replace(/"/g, '""')}"`;
+}
+
+/**
+ * The count is capped on purpose: `count(*)` over a large table with no index on
+ * the tenancy column is a sequential scan, and this command must stay cheap
+ * enough to run on a whim. The answer that matters is "any?", and past the cap
+ * the exact number changes nothing about what to do next.
+ */
+const UNSTAMPED_CAP = 500;
+
+/**
+ * How many rows carry no tenancy value, up to {@link UNSTAMPED_CAP} + 1.
+ *
+ * Null on any failure. This runs beside an adoption report that is already
+ * useful; a permission that blocks the count should subtract a line from it,
+ * never fail the command.
+ */
+async function countUnstamped(
+  sql: postgres.Sql,
+  appSchema: string,
+  table: string,
+  column: string,
+): Promise<number | null> {
+  try {
+    const rows = await sql.unsafe<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM (
+         SELECT 1 FROM ${quoteIdent(appSchema)}.${quoteIdent(table)}
+         WHERE ${quoteIdent(column)} IS NULL
+         LIMIT ${UNSTAMPED_CAP + 1}
+       ) s`,
+    );
+    return rows[0]?.n ?? 0;
+  } catch {
+    return null;
+  }
 }
 
 /** The host a connection string addresses, for comparing against the plane's. */
@@ -161,7 +208,6 @@ export async function check(argv: readonly string[]): Promise<void> {
     await sql.end({ timeout: 2 });
     process.exit(1);
   }
-  await sql.end({ timeout: 2 });
 
   const colsByTable = new Map<string, Set<string>>();
   for (const r of rows) {
@@ -213,6 +259,21 @@ export async function check(argv: readonly string[]): Promise<void> {
       if (!present.has(col)) problems.push(`missing column "${col}" (field ${fieldName})`);
     }
 
+    // Rows the column cannot isolate. An error, not a warning: these rows are
+    // already in the table, already invisible, and a yellow line in a list of
+    // twenty models is what let them stay that way.
+    if (orgCol && present.has(orgCol)) {
+      const unstamped = await countUnstamped(sql, args.appSchema, table, orgCol);
+      if (unstamped !== null && unstamped > 0) {
+        const count =
+          unstamped > UNSTAMPED_CAP ? `${UNSTAMPED_CAP}+ rows` : `${unstamped} row${unstamped === 1 ? '' : 's'}`;
+        problems.push(
+          `${count} have no "${orgCol}", so nothing can route them. Ablo stamps it on writes it makes; ` +
+            'an insert straight into Postgres does not. Backfill the value, then run `ablo connect resnapshot`.',
+        );
+      }
+    }
+
     if (problems.length > 0) {
       console.log(`  ${pc.red('✗')} ${pc.bold(key)} ${pc.dim('→')} ${table}`);
       for (const p of problems) console.log(`      ${pc.red('•')} ${p}`);
@@ -226,6 +287,8 @@ export async function check(argv: readonly string[]): Promise<void> {
       console.log(`  ${pc.green('✓')} ${pc.bold(key)} ${pc.dim(`→ ${table} (id, ${orgCol ?? 'no org'} ok)`)}`);
     }
   }
+
+  await sql.end({ timeout: 2 });
 
   const modelCount = Object.keys(schemaJson.models).length;
   const ignored = [...colsByTable.keys()].filter((t) => !declaredTables.has(t)).length;
