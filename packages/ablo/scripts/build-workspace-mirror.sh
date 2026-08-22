@@ -146,48 +146,6 @@ jobs:
         run: bash packages/ablo/scripts/publish-packages.sh
 EOF
 
-cat > "$OUTPUT_DIR/.github/workflows/deploy-docs.yml" <<'EOF'
-name: Deploy docs
-on:
-  push:
-    branches: [main]
-    paths: ["docs/ablo/**"]
-  workflow_dispatch:
-concurrency:
-  group: deploy-docs
-  cancel-in-progress: true
-permissions:
-  contents: read
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs/ablo
-    env:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.18.0
-          cache: npm
-          cache-dependency-path: docs/ablo/package-lock.json
-      - name: Deployment not configured
-        if: env.VERCEL_TOKEN == '' || env.VERCEL_ORG_ID == '' || env.VERCEL_PROJECT_ID == ''
-        run: echo "::warning::Docs deployment is waiting for the Vercel repository secrets."
-      - if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
-        run: npm install --global vercel@latest
-      - if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
-        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-      - if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
-        run: vercel build --prod --token="$VERCEL_TOKEN"
-      - if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
-        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
-EOF
-
 echo "Public Ablo workspace built in $OUTPUT_DIR"
 for package_name in "${PACKAGES[@]}"; do
   node -e "const p=require('$OUTPUT_DIR/packages/$package_name/package.json'); console.log('  '+p.name+'@'+p.version)"
