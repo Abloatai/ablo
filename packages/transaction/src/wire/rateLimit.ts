@@ -25,6 +25,8 @@
  * the 429 triple names all three fields from one place.
  */
 
+import { z } from 'zod';
+
 /** The standing-allowance field. Safe on any response; independent of caller. */
 export const RATE_LIMIT_POLICY_HEADER = 'RateLimit-Policy';
 
@@ -51,26 +53,28 @@ const POLICY_NAME = /^[A-Za-z0-9_-]{1,64}$/;
  * recognize the unit knows to leave the number alone rather than read it as a
  * request count.
  */
-export interface QuotaPolicy {
+export const quotaPolicySchema = z.object({
   /** Identifier the matching {@link ServiceLimit} refers back to. */
-  readonly name: string;
-  /** `q` — the allocation, in {@link QuotaPolicy.quotaUnit}. */
-  readonly quota: number;
+  name: z.string(),
+  /** `q` — the allocation, in `quotaUnit`. */
+  quota: z.number(),
   /** `w` — the window the allocation applies over, in whole seconds. */
-  readonly windowSeconds?: number;
+  windowSeconds: z.number().optional(),
   /** `qu` — the unit `quota` counts. Omit for the default, requests. */
-  readonly quotaUnit?: string;
-}
+  quotaUnit: z.string().optional(),
+});
+export type QuotaPolicy = Readonly<z.infer<typeof quotaPolicySchema>>;
 
 /** Where this caller currently stands against one {@link QuotaPolicy}. */
-export interface ServiceLimit {
-  /** The {@link QuotaPolicy.name} this position is measured against. */
-  readonly policy: string;
+export const serviceLimitSchema = z.object({
+  /** The {@link QuotaPolicy} name this position is measured against. */
+  policy: z.string(),
   /** `r` — units left in the current window. */
-  readonly remaining: number;
+  remaining: z.number(),
   /** `t` — seconds until the allocation refills. */
-  readonly resetSeconds?: number;
-}
+  resetSeconds: z.number().optional(),
+});
+export type ServiceLimit = Readonly<z.infer<typeof serviceLimitSchema>>;
 
 function assertName(name: string, field: string): void {
   if (!POLICY_NAME.test(name)) {
@@ -122,14 +126,15 @@ export function rateLimitField(limits: readonly ServiceLimit[]): string {
 }
 
 /** What a producer knows about the limit at the moment it writes the response. */
-export interface RateLimitSignal {
+export const rateLimitSignalSchema = z.object({
   /** The standing allowance. Always known; stated on every response. */
-  readonly policies: readonly QuotaPolicy[];
+  policies: z.array(quotaPolicySchema).readonly(),
   /** This caller's position, once the request has been attributed to one. */
-  readonly limits?: readonly ServiceLimit[];
+  limits: z.array(serviceLimitSchema).readonly().optional(),
   /** Present only on a rejection, and only when a wait is what resolves it. */
-  readonly retryAfterSeconds?: number;
-}
+  retryAfterSeconds: z.number().optional(),
+});
+export type RateLimitSignal = Readonly<z.infer<typeof rateLimitSignalSchema>>;
 
 /**
  * The header map for one response. This is the single call every producer

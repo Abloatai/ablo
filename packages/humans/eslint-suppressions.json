@@ -1213,12 +1213,6 @@
     }
   },
   "src/local/transactions/mutations/MutationQueue.ts": {
-    "@typescript-eslint/array-type": {
-      "count": 2
-    },
-    "@typescript-eslint/no-confusing-void-expression": {
-      "count": 39
-    },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     },
@@ -1232,10 +1226,10 @@
       "count": 1
     },
     "@typescript-eslint/no-unused-vars": {
-      "count": 23
+      "count": 1
     },
     "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 3
+      "count": 1
     }
   },
   "src/local/transactions/mutations/MutationStore.ts": {

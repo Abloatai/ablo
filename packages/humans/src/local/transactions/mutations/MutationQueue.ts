@@ -18,14 +18,9 @@ import type { LocalModel } from '../../localModelContract.js';
 import type { MutationPersistencePort } from '../../mutationPersistence.js';
 import { globalRuntime } from '../../context.js';
 import type { RuntimeContext } from '../../RuntimeContext.js';
-import type { MutationOperationType } from '@abloatai/transaction/types';
 import {
-  AbloError,
   AbloConnectionError,
   AbloIdempotencyError,
-  AbloNotFoundError,
-  AbloValidationError,
-  errorCodeSpec,
 } from '@abloatai/transaction/errors';
 import {
   LogPosition,
@@ -34,24 +29,16 @@ import {
 import type { WriteOptions } from '../../interfaces/index.js';
 import type { OnStaleMode, StaleNotification, ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
 import {
-  mutationCommitResultSchema,
   type CommitOperationResult,
   type MutationCommitResult,
 } from '@abloatai/transaction/wire/commit';
 import {
-  projectCommitPayload,
   computePriorityScore,
   normalizeModelKey,
   // Includes stale guards as well as request identity/audit barriers.
-  hasCommitCoalescingBarrier,
-  applyWriteOptions,
-  asTransportError,
-  extractStatusCode,
-  TX_TYPE_TO_MUTATION_OP,
   type MutationInput,
   type QueuedMutation,
   type UserContext,
-  type WriteOperationFields,
 } from './commitPayload.js';
 import {
   generateTransactionId,
@@ -64,7 +51,6 @@ import {
 import { MutationStore } from './MutationStore.js';
 import {
   entityKey,
-  mergeUpdateData,
   takeUnsentCreateForModel,
   findCreateBarrierForDelete,
   deferDeleteUntilCreateSettles,
@@ -75,9 +61,6 @@ import {
   deserializePersistedTransaction,
   isNonReplayablePersistedRow,
   pendingMutationRecordId,
-  legacyPendingMutationRecordSchema,
-  pendingMutationRecordSchema,
-  persistedMutationSchema,
 } from './replayValidation.js';
 import {
   deserializeLegacyPendingMutation,
@@ -89,12 +72,7 @@ import {
 } from './mutationPersistence.js';
 import {
   createCommitEnvelopeMember,
-  createDurableCommitEnvelope,
-  commitEnvelopeRecordId,
-  durableCommitEnvelopeSchema,
   type DurableCommitEnvelope,
-  type DurableCommitOperation,
-  type DurableCommitOperationInput,
   type CommitOutboxScope,
 } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import type { DurableWriteStore } from './durableWriteStore.js';
@@ -110,7 +88,6 @@ import {
   removeDurableCommit,
   sealDurableCommit,
   type CommitTransportContext,
-  type SealDurableCommitInput,
 } from './commitTransport.js';
 import {
   processCommitLane,
@@ -254,18 +231,18 @@ export class MutationQueue extends EventEmitter {
   private readonly runtime: RuntimeContext;
   /** Durable transaction journal owned by this queue, before commit sealing. */
   private persistence: MutationPersistencePort | null = null;
-  private deferredMutations: Array<{
+  private deferredMutations: {
     type: 'create' | 'update' | 'delete' | 'archive';
     model: LocalModel;
     capturedChanges?: Record<string, unknown>;
     writeOptions?: WriteOptions;
-  }> = [];
-  private pendingPersistenceStages: Array<{
+  }[] = [];
+  private pendingPersistenceStages: {
     transaction: QueuedMutation;
     modelData: Record<string, unknown>;
     resolve: () => void;
     reject: (error: Error) => void;
-  }> = [];
+  }[] = [];
   private persistenceStageScheduled = false;
   private pendingDrainPromise: Promise<void> | null = null;
 
@@ -324,7 +301,7 @@ export class MutationQueue extends EventEmitter {
       commitOutbox: this.commitOutbox,
       commitOutboxScope: this.commitOutboxScope,
       mutationExecutor: this.mutationExecutor,
-      emitCommitLifecycle: (event, payload) => this.emitCommitLifecycle(event, payload),
+      emitCommitLifecycle: (event, payload) => { this.emitCommitLifecycle(event, payload); },
     };
   }
 
@@ -343,7 +320,7 @@ export class MutationQueue extends EventEmitter {
       setCommitProcessing: (value) => { this.commitProcessing = value; },
       durableReplayBlock: this.durableReplayBlock,
       sealDurableCommit: (input) => this.sealDurableCommit(input),
-      assertEnvelopeInsideReplayWindow: (envelope) => this.assertEnvelopeInsideReplayWindow(envelope),
+      assertEnvelopeInsideReplayWindow: (envelope) => { this.assertEnvelopeInsideReplayWindow(envelope); },
       dispatchCommit: async (envelope) => this.parseMutationCommitResult(
         await this.dispatchCommitBounded(envelope.operations, {
           idempotencyKey: envelope.idempotencyKey,
@@ -354,9 +331,9 @@ export class MutationQueue extends EventEmitter {
       persistDurableCommitAcceptance: (envelope, result) => this.persistDurableCommitAcceptance(envelope, result),
       removeDurableCommit: (idempotencyKey) => this.removeDurableCommit(idempotencyKey),
       queuedCommitEchoSyncId: (transaction) => this.queuedCommitEchoSyncId(transaction),
-      completeQueuedCommit: (transaction, syncId) => this.completeQueuedCommit(transaction, syncId),
-      scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId),
-      noteAck: (syncId) => this.noteAck(syncId),
+      completeQueuedCommit: (transaction, syncId) => { this.completeQueuedCommit(transaction, syncId); },
+      scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => { this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId); },
+      noteAck: (syncId) => { this.noteAck(syncId); },
       isDefinitiveRejection: (error) => this.isDefinitiveRejection(error),
       isPermanentError: (error) => this.isPermanentError(error),
       scheduleRetry: (delayMs) => {
@@ -366,7 +343,7 @@ export class MutationQueue extends EventEmitter {
           void this.processCommitLane();
         }, delayMs);
       },
-      emitCommitLifecycle: (event, payload) => this.emitCommitLifecycle(event, payload),
+      emitCommitLifecycle: (event, payload) => { this.emitCommitLifecycle(event, payload); },
     };
   }
 
@@ -383,15 +360,15 @@ export class MutationQueue extends EventEmitter {
 
   private get commitApiContext(): CommitApiContext {
     return {
-      assertDurableReplayOpen: () => this.assertDurableReplayOpen(),
+      assertDurableReplayOpen: () => { this.assertDurableReplayOpen(); },
       commitStore: this.commitStore,
       commitLane: this.commitLane,
       replicationLagErrors: this.replicationLagErrors,
-      clearReplicationLagState: (transactionId) => this.clearReplicationLagState(transactionId),
+      clearReplicationLagState: (transactionId) => { this.clearReplicationLagState(transactionId); },
       nextCommitSequence: () => this.nextCommitSequence(),
       sealDurableCommit: (input) => this.sealDurableCommit(input),
       processCommitLane: () => this.processCommitLane(),
-      emitCommitLifecycle: (event, payload) => this.emitCommitLifecycle(event, payload),
+      emitCommitLifecycle: (event, payload) => { this.emitCommitLifecycle(event, payload); },
     };
   }
 
@@ -399,7 +376,7 @@ export class MutationQueue extends EventEmitter {
     return {
       enableOptimistic: this.config.enableOptimistic,
       persistenceReady: !!this.persistence && !!this.commitOutboxScope,
-      assertDurableReplayOpen: () => this.assertDurableReplayOpen(),
+      assertDurableReplayOpen: () => { this.assertDurableReplayOpen(); },
       generateId: () => this.generateId(),
       normalizeModelKey,
       computePriorityScore: (type, modelName) => this.computePriorityScore(type, modelName),
@@ -408,11 +385,11 @@ export class MutationQueue extends EventEmitter {
       extractPreviousData: (model, input) => this.extractPreviousData(model, input),
       mapChangesToInput: (modelName, changes) => this.mapChangesToInput(modelName, changes),
       isReorderPayload: (input) => this.isReorderPayload(input),
-      attachConfirmation: (transaction) => this.attachConfirmation(transaction),
-      add: (transaction) => this.store.add(transaction),
-      applyOptimisticCreate: (model, transaction) => this.applyOptimisticCreate(model, transaction),
-      applyOptimisticUpdate: (model, transaction) => this.applyOptimisticUpdate(model, transaction),
-      applyOptimisticDelete: (model, transaction) => this.applyOptimisticDelete(model, transaction),
+      attachConfirmation: (transaction) => { this.attachConfirmation(transaction); },
+      add: (transaction) => { this.store.add(transaction); },
+      applyOptimisticCreate: (model, transaction) => { this.applyOptimisticCreate(model, transaction); },
+      applyOptimisticUpdate: (model, transaction) => { this.applyOptimisticUpdate(model, transaction); },
+      applyOptimisticDelete: (model, transaction) => { this.applyOptimisticDelete(model, transaction); },
       takeUnsentCreateForModel: (modelName, modelId) => this.takeUnsentCreateForModel(modelName, modelId),
       cancelUnsentCreateForDelete: (transaction) => this.cancelUnsentCreateForDelete(transaction),
       completeLocalDelete: (model, context, writeOptions, sourceMutationIds) => this.completeLocalDelete(model, context, writeOptions, sourceMutationIds),
@@ -420,11 +397,11 @@ export class MutationQueue extends EventEmitter {
       pendingMergeByModel: this.pendingMergeByModel,
       inFlightByModel: this.inFlightByModel,
       findCreateBarrierForDelete: (modelName, modelId) => this.findCreateBarrierForDelete(modelName, modelId),
-      deferDeleteUntilCreateSettles: (create, transaction) => this.deferDeleteUntilCreateSettles(create, transaction),
+      deferDeleteUntilCreateSettles: (create, transaction) => { this.deferDeleteUntilCreateSettles(create, transaction); },
       logger: this.runtime.logger,
       persistAndStage: (transaction, modelData) => this.persistAndStage(transaction, modelData),
       persistQueuedTransaction: (transaction, modelData) => this.persistQueuedTransaction(transaction, modelData),
-      stageTransaction: (transaction) => this.stageTransaction(transaction),
+      stageTransaction: (transaction) => { this.stageTransaction(transaction); },
       emit: (event, payload) => this.emit(event, payload),
     };
   }
@@ -434,9 +411,9 @@ export class MutationQueue extends EventEmitter {
       executionQueue: this.executionQueue,
       inFlightByModel: this.inFlightByModel,
       pendingMergeByModel: this.pendingMergeByModel,
-      ensureDerivedFields: (transaction) => this.ensureDerivedFields(transaction),
-      scheduleProcessing: (immediate) => this.scheduleProcessing(immediate),
-      storeRemove: (transactionId) => this.store.remove(transactionId),
+      ensureDerivedFields: (transaction) => { this.ensureDerivedFields(transaction); },
+      scheduleProcessing: (immediate) => { this.scheduleProcessing(immediate); },
+      storeRemove: (transactionId) => { this.store.remove(transactionId); },
     };
   }
 
@@ -449,7 +426,7 @@ export class MutationQueue extends EventEmitter {
       isProcessing: this.isProcessing,
       setIsProcessing: (value) => { this.isProcessing = value; },
       takeNextExecutionBatch: () => this.takeNextExecutionBatch(),
-      ensureDerivedFields: (transaction) => this.ensureDerivedFields(transaction),
+      ensureDerivedFields: (transaction) => { this.ensureDerivedFields(transaction); },
       ensureCommitEnvelope: (batch) => this.ensureCommitEnvelope([...batch]),
       executingCount: this.executingCount,
       setExecutingCount: (value) => { this.executingCount = value; },
@@ -458,7 +435,7 @@ export class MutationQueue extends EventEmitter {
       generateId: () => this.generateId(),
       computePriorityScore: (type, modelName) => this.computePriorityScore(type, modelName),
       store: this.store,
-      enqueue: (transaction) => this.enqueue(transaction),
+      enqueue: (transaction) => { this.enqueue(transaction); },
       optimisticUpdates: this.localMutationPort.updates,
       commitNotifications: this.commitNotifications,
       commitMissingIds: this.commitMissingIds,
@@ -467,22 +444,22 @@ export class MutationQueue extends EventEmitter {
       parseMutationCommitResult: (value) => this.parseMutationCommitResult(value),
       persistDurableCommitAcceptance: (envelope, result) => this.persistDurableCommitAcceptance(envelope, result),
       removeDurableCommit: (idempotencyKey) => this.removeDurableCommit(idempotencyKey),
-      assertEnvelopeInsideReplayWindow: (envelope) => this.assertEnvelopeInsideReplayWindow(envelope),
+      assertEnvelopeInsideReplayWindow: (envelope) => { this.assertEnvelopeInsideReplayWindow(envelope); },
       sealDurableCommit: (input) => this.sealDurableCommit(input),
-      noteAck: (syncId) => this.noteAck(syncId),
+      noteAck: (syncId) => { this.noteAck(syncId); },
       classifyReceiptNotifications: (operations, notifications) => this.classifyReceiptNotifications(operations, notifications),
       receiptTargetKey: (modelName, modelId) => this.receiptTargetKey(modelName, modelId),
-      scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId),
-      scheduleDeltaConfirmationTimeout: (transaction, timeoutMs) => this.scheduleDeltaConfirmationTimeout(transaction, timeoutMs),
-      clearReplicationLagState: (transactionId) => this.clearReplicationLagState(transactionId),
-      completeQueuedCommit: (transaction, syncId) => this.completeQueuedCommit(transaction, syncId),
+      scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => { this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId); },
+      scheduleDeltaConfirmationTimeout: (transaction, timeoutMs) => { this.scheduleDeltaConfirmationTimeout(transaction, timeoutMs); },
+      clearReplicationLagState: (transactionId) => { this.clearReplicationLagState(transactionId); },
+      completeQueuedCommit: (transaction, syncId) => { this.completeQueuedCommit(transaction, syncId); },
       queuedCommitMatchesCorrelation: (transaction, correlationId) => this.queuedCommitMatchesCorrelation(transaction, correlationId),
       recentDeltaCorrelations: this.recentDeltaCorrelations,
       lastSeenSyncId: this.lastSeenSyncId,
-      scheduleProcessing: (immediate) => this.scheduleProcessing(immediate),
+      scheduleProcessing: (immediate) => { this.scheduleProcessing(immediate); },
       handleFailure: (transaction, error) => this.handleFailure(transaction, error),
       isDefinitiveRejection: (error) => this.isDefinitiveRejection(error),
-      emitCommitLifecycle: (event, payload) => this.emitCommitLifecycle(event, payload),
+      emitCommitLifecycle: (event, payload) => { this.emitCommitLifecycle(event, payload); },
       emit: (event, payload) => this.emit(event, payload),
       rollbackOptimistic: (transaction, reason, error) => this.rollbackOptimistic(transaction, reason, error),
     };
@@ -495,7 +472,7 @@ export class MutationQueue extends EventEmitter {
       store: this.store,
       isPermanentError: (error) => this.isPermanentError(error),
       rollbackOptimistic: (transaction, reason, error) => this.rollbackOptimistic(transaction, reason, error),
-      enqueue: (transaction) => this.enqueue(transaction),
+      enqueue: (transaction) => { this.enqueue(transaction); },
       getLastPermanentErrorSignature: () => this.lastPermanentErrorSig,
       setLastPermanentErrorSignature: (signature) => { this.lastPermanentErrorSig = signature; },
       emit: (event, payload) => this.emit(event, payload),
@@ -508,7 +485,7 @@ export class MutationQueue extends EventEmitter {
       store: this.store,
       rollbackOptimistic: (transaction, reason) => this.rollbackOptimistic(transaction, reason),
       mergeData: (local, remote) => this.mergeData(local, remote),
-      enqueue: (transaction) => this.enqueue(transaction),
+      enqueue: (transaction) => { this.enqueue(transaction); },
     };
   }
 
@@ -533,21 +510,21 @@ export class MutationQueue extends EventEmitter {
       store: this.store,
       executionQueue: this.executionQueue,
       optimisticUpdates: this.localMutationPort.updates,
-      assertDurableReplayOpen: () => this.assertDurableReplayOpen(),
+      assertDurableReplayOpen: () => { this.assertDurableReplayOpen(); },
       processCommitLane: () => this.processCommitLane(),
       takePendingDrainBatch: (pending) => this.takePendingDrainBatch(pending),
       ensureCommitEnvelope: (batch) => this.ensureCommitEnvelope(batch),
-      ensureDerivedFields: (transaction) => this.ensureDerivedFields(transaction),
+      ensureDerivedFields: (transaction) => { this.ensureDerivedFields(transaction); },
       sourceMutationIdsFor: (batch) => this.sourceMutationIdsFor(batch),
       sealDurableCommit: (input) => this.sealDurableCommit(input),
-      assertEnvelopeInsideReplayWindow: (envelope) => this.assertEnvelopeInsideReplayWindow(envelope),
+      assertEnvelopeInsideReplayWindow: (envelope) => { this.assertEnvelopeInsideReplayWindow(envelope); },
       parseMutationCommitResult: (value) => this.parseMutationCommitResult(value),
       dispatchCommitBounded: (...args) => this.dispatchCommitBounded(...args),
       persistDurableCommitAcceptance: (envelope, result) => this.persistDurableCommitAcceptance(envelope, result),
       removeDurableCommit: (idempotencyKey) => this.removeDurableCommit(idempotencyKey),
-      scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId),
-      scheduleDeltaConfirmationTimeout: (transaction, timeoutMs) => this.scheduleDeltaConfirmationTimeout(transaction, timeoutMs),
-      enqueue: (transaction) => this.enqueue(transaction),
+      scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => { this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId); },
+      scheduleDeltaConfirmationTimeout: (transaction, timeoutMs) => { this.scheduleDeltaConfirmationTimeout(transaction, timeoutMs); },
+      enqueue: (transaction) => { this.enqueue(transaction); },
       recentDeltaCorrelations: this.recentDeltaCorrelations,
       emit: (event, payload) => this.emit(event, payload),
     };
@@ -573,7 +550,7 @@ export class MutationQueue extends EventEmitter {
       commitOutboxScope: this.commitOutboxScope,
       config: this.config,
       store: this.store,
-      enqueue: (transaction) => this.enqueue(transaction),
+      enqueue: (transaction) => { this.enqueue(transaction); },
       computePriorityScore: (type, modelName) => this.computePriorityScore(type, modelName),
       deserializeTransaction: (data) => this.deserializeTransaction(data),
     };

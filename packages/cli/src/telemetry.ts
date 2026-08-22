@@ -228,11 +228,31 @@ function writeState(state: TelemetryState): void {
   renameSync(temporary, path);
 }
 
+/**
+ * Every environment variable that turns collection off, exported so a test can
+ * clear the same set this reads. A test that clears a hand-written subset passes
+ * on a laptop and fails on the CI whose variable it missed, which is the one
+ * place it is guaranteed to run.
+ */
+export const TELEMETRY_BLOCKING_ENV = [
+  'ABLO_TELEMETRY_DISABLED',
+  'DO_NOT_TRACK',
+  'CI',
+  'GITHUB_ACTIONS',
+  'GITLAB_CI',
+  'BUILDKITE',
+  'CIRCLECI',
+  'TF_BUILD',
+] as const;
+
 function environmentBlocker(): string | null {
   if (process.env.ABLO_TELEMETRY_DISABLED === '1') return 'ABLO_TELEMETRY_DISABLED';
   if (process.env.DO_NOT_TRACK === '1') return 'DO_NOT_TRACK';
-  const ciVariables = ['CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'BUILDKITE', 'CIRCLECI', 'TF_BUILD'];
-  return ciVariables.find((name) => truthyEnvironmentValue(process.env[name])) ?? null;
+  return (
+    TELEMETRY_BLOCKING_ENV.slice(2).find((name) =>
+      truthyEnvironmentValue(process.env[name]),
+    ) ?? null
+  );
 }
 
 function truthyEnvironmentValue(value: string | undefined): boolean {

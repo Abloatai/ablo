@@ -6,6 +6,7 @@ import {
   resetTelemetry,
   setTelemetryEnabled,
   telemetryStatus,
+  TELEMETRY_BLOCKING_ENV,
   trackCliInitCompleted,
   trackCliInitStarted,
 } from '../telemetry';
@@ -20,9 +21,10 @@ describe('CLI product telemetry', () => {
   beforeEach(() => {
     configDir = mkdtempSync(join(tmpdir(), 'ablo-telemetry-'));
     process.env.ABLO_CONFIG_DIR = configDir;
-    delete process.env.CI;
-    delete process.env.DO_NOT_TRACK;
-    delete process.env.ABLO_TELEMETRY_DISABLED;
+    // Clear the WHOLE blocking set, read from the detector rather than copied:
+    // GitHub Actions sets `GITHUB_ACTIONS`, not just `CI`, so a subset here
+    // leaves collection off exactly where this suite always runs.
+    for (const name of TELEMETRY_BLOCKING_ENV) delete process.env[name];
     resetTelemetry();
     jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
