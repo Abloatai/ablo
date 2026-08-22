@@ -45,6 +45,7 @@ describe('sourceEventForOperation', () => {
         transactionId: 'op_1',
       },
       data: { id: 'src/a.ts', content: 'next' },
+      syncGroups: [],
       correlationId: 'corr_1',
       organizationId: 'org_1',
       occurredAt: new Date('2026-06-02T12:00:00.000Z'),
@@ -56,6 +57,7 @@ describe('sourceEventForOperation', () => {
       entityId: 'src/a.ts',
       type: 'UPDATE',
       data: { id: 'src/a.ts', content: 'next' },
+      syncGroups: [],
       correlationId: 'corr_1',
       transactionId: 'op_1',
       organizationId: 'org_1',
@@ -73,6 +75,7 @@ describe('sourceEventForOperation', () => {
       },
       entityId: 'generated_1',
       data: { id: 'generated_1', content: 'created' },
+      syncGroups: [],
     });
 
     expect(event).toMatchObject({
@@ -92,6 +95,7 @@ describe('sourceEventForOperation', () => {
           model: 'files',
           input: { content: 'created' },
         },
+        syncGroups: [],
       }),
     ).toThrow(/entityId/);
   });
@@ -139,6 +143,98 @@ async function signedPost(
 }
 
 describe('dataSource', () => {
+  it('preauthorizes hand-written endpoint commits before invoking the custom handler', async () => {
+    const subjectSchema = defineSchema({
+      docs: model(
+        { workspaceId: z.string().min(1), title: z.string() },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    let commitInvoked = false;
+    let createLockInvoked = false;
+    const handler = dataSource({
+      schema: subjectSchema,
+      apiKey: TEST_API_KEY,
+      subjectTransaction: async (_params, run) => run({
+        lockCreate: async () => { createLockInvoked = true; },
+        load: async (operation) => ({
+          id: operation.id,
+          workspaceId: 'b',
+          title: 'foreign',
+        }),
+        commit: async () => {
+          commitInvoked = true;
+          return { rows: [] };
+        },
+      }),
+    });
+
+    await expect(post(handler, {
+      type: 'commit',
+      correlationId: 'custom-subject-commit',
+      scope: { syncGroups: ['workspace:a'] },
+      operations: [{
+        type: 'CREATE', model: 'docs', id: 'foreign-id',
+        input: { workspaceId: 'a', title: 'collision' },
+      }],
+    })).resolves.toMatchObject({
+      status: 403,
+      body: { error: 'capability_scope_denied' },
+    });
+    expect(commitInvoked).toBe(false);
+    expect(createLockInvoked).toBe(true);
+  });
+
+  it('fails closed when a subject commit lacks a transaction-bound hook', async () => {
+    const subjectSchema = defineSchema({
+      docs: model(
+        { workspaceId: z.string().min(1), title: z.string() },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    let invoked = false;
+    const handler = dataSource({
+      schema: subjectSchema,
+      apiKey: TEST_API_KEY,
+      commit: async () => {
+        invoked = true;
+        return { rows: [] };
+      },
+    });
+    await expect(post(handler, {
+      type: 'commit', correlationId: 'unsafe-custom',
+      scope: { syncGroups: ['workspace:a'] },
+      operations: [{ type: 'CREATE', model: 'docs', id: 'a', input: { workspaceId: 'a', title: 'A' } }],
+    })).resolves.toMatchObject({
+      status: 403,
+      body: { error: 'source_subject_transaction_required' },
+    });
+    expect(invoked).toBe(false);
+  });
+
+  it('fails closed when a subject list lacks the pre-pagination hook', async () => {
+    const subjectSchema = defineSchema({
+      docs: model(
+        { workspaceId: z.string().min(1), title: z.string() },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    let invoked = false;
+    const handler = dataSource({
+      schema: subjectSchema,
+      apiKey: TEST_API_KEY,
+      docs: { list: () => { invoked = true; return []; } },
+    });
+    await expect(post(handler, {
+      type: 'list', model: 'docs', query: { limit: 1 },
+      scope: { syncGroups: ['workspace:a'] },
+    })).resolves.toMatchObject({
+      status: 403,
+      body: { error: 'source_subject_list_not_configured' },
+    });
+    expect(invoked).toBe(false);
+  });
+
   it('creates the public Data Source handler', async () => {
     const handler = dataSource({
       schema,
@@ -382,6 +478,7 @@ describe('dataSource', () => {
                 entityId: 'src/x.ts',
                 type: 'UPDATE',
                 data: { path: 'src/x.ts' },
+                syncGroups: [],
               },
             ],
             nextCursor: 'cursor_2',
@@ -569,13 +666,13 @@ describe('dataSource', () => {
         organizationId: 'org_99',
         branchId: 'br_preview',
         workspaceId: 'proj_docs',
-        requiredSyncGroups: ['org:org_99', 'user:user_42'],
+        syncGroups: ['org:org_99', 'user:user_42'],
       },
     });
 
     expect(seenScope.authorize).toMatchObject({
       participantId: 'user_42',
-      requiredSyncGroups: ['org:org_99', 'user:user_42'],
+      syncGroups: ['org:org_99', 'user:user_42'],
     });
     expect(seenScope.list).toMatchObject({
       participantKind: 'user',

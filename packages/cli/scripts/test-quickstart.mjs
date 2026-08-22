@@ -172,8 +172,15 @@ check('`ablo status` runs keyless without crashing', () => {
 if (process.env.ABLO_QUICKSTART_LIVE === '1') {
   const liveEnv = { ...process.env }; // real config dir / ABLO_API_KEY
   check('LIVE: `ablo push` pushes the schema', () => {
-    const out = run('node', [cli, 'push'], { cwd: proj, env: liveEnv });
-    expect(/schema (pushed|unchanged)/.test(out), `push did not succeed:\n${out.slice(-600)}`);
+    // The deploy canary is deliberately root-branch bound. Root branches are
+    // production planes even when hosted by the staging deployment, so CI
+    // must provide the same explicit confirmation a scripted customer deploy
+    // would provide. The key itself remains scoped to `schema:push` only.
+    const out = run('node', [cli, 'push', '--yes'], { cwd: proj, env: liveEnv });
+    expect(
+      /(Activated|No changes — schema already active)/.test(out),
+      `push did not succeed:\n${out.slice(-600)}`,
+    );
   });
   check('LIVE: ABLO_API_KEY landed in .env.local and is gitignored', () => {
     if (process.env.ABLO_API_KEY) return; // env key → dev intentionally skips the file

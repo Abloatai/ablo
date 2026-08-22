@@ -23,7 +23,13 @@
 import { AbloValidationError } from '@abloatai/transaction/errors';
 import pc from 'picocolors';
 import postgres from 'postgres';
-import { serializeSchema, resolveTenancy, tenancyColumn, type SchemaJSON } from '@abloatai/transaction/schema';
+import {
+  auditSchemaAccessPolicies,
+  serializeSchema,
+  resolveTenancy,
+  tenancyColumn,
+  type SchemaJSON,
+} from '@abloatai/transaction/schema';
 import { loadSchema } from './push';
 import { camelToSnake } from './schemaIr';
 import { BASE_COLUMNS } from './schemaSource';
@@ -187,6 +193,9 @@ export async function check(argv: readonly string[]): Promise<void> {
 
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const schemaJson = JSON.parse(serializeSchema(schema)) as SchemaJSON;
+  const accessFindings = new Map(
+    auditSchemaAccessPolicies(schemaJson).map((finding) => [finding.model, finding] as const),
+  );
 
   // Name the subject BEFORE connecting. A database that cannot be reached is
   // exactly when "which database is this, and does Ablo read it?" matters most:
@@ -236,6 +245,13 @@ export async function check(argv: readonly string[]): Promise<void> {
 
     const problems: string[] = [];
     const warns: string[] = [];
+
+    const accessFinding = accessFindings.get(key);
+    if (accessFinding) {
+      problems.push(
+        `[${accessFinding.code}] ${accessFinding.message} Fix: ${accessFinding.fix}`,
+      );
+    }
 
     if (!present.has('id')) problems.push('missing primary key "id"');
 

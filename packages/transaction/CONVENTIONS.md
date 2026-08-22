@@ -81,3 +81,37 @@ npm run graph:deps
 ```
 
 The grep should print nothing; CI turns any match into a failure.
+
+## The published surface is wider than the barrel
+
+`package.json` declares twenty-seven explicit subpaths and then, at the end, `"./*"`.
+The wildcard publishes every internal module as a supported import path. It is not an
+oversight; it is the open door product code reached through for years, and it means a
+module can be public API without anything in its own file saying so.
+
+Measured on the current tree, **61 subpaths across 605 import sites inside this repo
+resolve only through the wildcard**. The largest are load-bearing:
+
+| Subpath | Sites | What it is |
+| --- | --- | --- |
+| `errors` | 112 | the error hierarchy, genuinely public API |
+| `coordination/schema` | 42 | claim and lease shapes |
+| `types/streams` | 38 | stream contracts |
+| `wire/delta` | 32 | the delta projections |
+| `logger` | 29 | the logging port |
+| `transactions/confirmation/commitEnvelope` | 26 | durable commit identity |
+| `auth/credentialSource` | 20 | credential resolution |
+
+Two consequences for anyone changing these files. Renaming or moving one is a breaking
+change for external consumers even though no barrel mentions it, so it needs the same
+care as an entry in the exports map. And narrowing the wildcard is its own project
+rather than a drive-by: declaring `./errors` explicitly is the obvious first move, and
+everything else needs the 605 sites moved to relative imports or to a declared subpath
+before the door can close.
+
+See it yourself:
+
+```sh
+node -e "const k=Object.keys(require('./packages/transaction/package.json').exports);console.log(k.includes('./*'),k.length)"
+grep -rhoE '@abloatai/transaction/[a-zA-Z0-9_/.-]+' --include='*.ts' --include='*.tsx' apps packages | sort | uniq -c | sort -rn | head -20
+```

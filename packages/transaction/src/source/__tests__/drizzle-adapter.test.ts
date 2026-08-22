@@ -52,6 +52,70 @@ class FakeDrizzle implements DrizzleLike {
 }
 
 describe('drizzleDataSource', () => {
+  it('applies the subject predicate before the database limit', async () => {
+    const subjectSchema = defineSchema({
+      item: model(
+        { title: field.string(), workspaceId: field.string().min(1) },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    const db = new FakeDrizzle([[{ id: 'own', title: 'A', workspace_id: 'a' }]]);
+    const adapter = drizzleDataSource(db, subjectSchema);
+    await adapter.read({
+      kind: 'list', model: 'item', query: { limit: 1 },
+      scope: { syncGroups: ['workspace:a'] },
+    });
+    expect(db.sqls[0]).toContain('"workspace_id" = ANY');
+    expect(db.sqls[0]).toContain('LIMIT');
+  });
+
+  it('locks the subject preimage before mutating it', async () => {
+    const subjectSchema = defineSchema({
+      item: model(
+        { title: field.string(), workspaceId: field.string().min(1) },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    const db = new FakeDrizzle([
+      [],
+      [{ id: 'own', title: 'before', workspace_id: 'a' }],
+      [{ id: 'own', title: 'after', workspace_id: 'a' }],
+      [],
+      [],
+    ]);
+    const adapter = drizzleDataSource(db, subjectSchema);
+    await adapter.commit({
+      correlationId: 'subject-lock',
+      scope: { syncGroups: ['workspace:a'] },
+      operations: [{ type: 'UPDATE', model: 'item', id: 'own', input: { title: 'after' } }],
+    });
+    expect(db.sqls.find((query) => query.includes('SELECT * FROM "item"')))
+      .toContain('FOR UPDATE');
+  });
+
+  it('takes an absent-key advisory lock before authorizing subject CREATE', async () => {
+    const subjectSchema = defineSchema({
+      item: model(
+        { title: field.string(), workspaceId: field.string().min(1) },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    const db = new FakeDrizzle([
+      [], [], [],
+      [{ id: 'new', title: 'created', workspace_id: 'a' }],
+      [], [],
+    ]);
+    await drizzleDataSource(db, subjectSchema).commit({
+      correlationId: 'subject-create-lock',
+      scope: { syncGroups: ['workspace:a'] },
+      operations: [{ type: 'CREATE', model: 'item', id: 'new', input: { title: 'created', workspaceId: 'a' } }],
+    });
+    const advisory = db.sqls.findIndex((query) => query.includes('pg_advisory_xact_lock'));
+    const preimage = db.sqls.findIndex((query) => query.includes('FOR UPDATE'));
+    expect(advisory).toBeGreaterThan(-1);
+    expect(advisory).toBeLessThan(preimage);
+  });
+
   it('exposes endpoint capabilities and ships ledger + outbox migrations', () => {
     const adapter = drizzleDataSource(new FakeDrizzle(), schema);
     expect(adapter.capabilities.transactions).toBe(true);
@@ -62,7 +126,13 @@ describe('drizzleDataSource', () => {
       'ablo_idempotency_permanent_retention',
       'ablo_outbox',
       'ablo_outbox_correlation',
+      'ablo_outbox_sync_groups',
     ]);
+    const migration = adapter.migrations().find((entry) => entry.name === 'ablo_outbox_sync_groups');
+    expect(migration?.up).toContain(
+      'verify the previous release consumed them, then purge those rows',
+    );
+    expect(migration?.up).not.toContain("DEFAULT '{}'");
   });
 
   it('commits in one transaction: idempotency check → insert → outbox → idempotency record', async () => {

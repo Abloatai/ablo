@@ -141,6 +141,7 @@ export function memoryDataSource(): DataSourceAdapter {
           entityId: String(row.id ?? rowId(op)),
           type: op.type,
           data: op.type === 'DELETE' ? null : row,
+          syncGroups: [],
           correlationId: change.correlationId,
           ...(op.transactionId ? { transactionId: op.transactionId } : {}),
           cursor: String(outbox.length + 1),

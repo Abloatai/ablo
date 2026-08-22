@@ -78,10 +78,11 @@ describe('a model the schema projection left out', () => {
   it('exposes read evidence only through the private non-enumerable symbol', async () => {
     const ablo = makeProjected();
     try {
-      expect(Reflect.get(ablo, kReadEvidence)).toMatchObject({
-        context: expect.objectContaining({ getStore: expect.any(Function) }),
-        client: expect.any(Object),
-      });
+      const evidence = Reflect.get(ablo, kReadEvidence) as
+        | { context?: { getStore?: unknown }; client?: unknown }
+        | undefined;
+      expect(typeof evidence?.context?.getStore).toBe('function');
+      expect(evidence?.client).toBeDefined();
       expect(Object.getOwnPropertyDescriptor(ablo, kReadEvidence)?.enumerable).toBe(false);
       expect(Object.keys(ablo)).not.toContain(String(kReadEvidence));
     } finally {

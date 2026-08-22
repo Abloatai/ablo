@@ -37,6 +37,8 @@ export {
   type SourceHandlerContext,
   type SourceModelHandlers,
   type SourceCommitHandler,
+  type SourceSubjectTransactionBoundary,
+  type SourceSubjectTransactionHandler,
   type SourceApiKey,
   type SourceLoadRequest,
   type SourceListRequest,
@@ -60,6 +62,10 @@ export {
   dataSource,
   type DataSourceOptions,
 } from './factory.js';
+
+export {
+  sourceSubjectCreateLockKey,
+} from './subjectAuthorization.js';
 
 export {
   createPushQueue,

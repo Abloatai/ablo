@@ -58,6 +58,15 @@ import { toSchemaJSON } from '../../schema/serialize.js';
 import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
 import { tenancyColumn } from '../../schema/tenancy.js';
 import { ABLO_POSTGRES_COMMIT_ECHO_PREFIX } from '../types.js';
+import {
+  authorizeSourceChange,
+  authorizeSourceRead,
+  lockSourceSubjectCreates,
+  rethrowStrictCreateConflict,
+  sourceSyncGroups,
+  sourceSubjectRule,
+  sourceSubjectValues,
+} from '../subjectAuthorization.js';
 
 /** The subset of a Drizzle database/transaction handle the adapter calls. */
 export interface DrizzleLike {
@@ -214,11 +223,18 @@ export function drizzleDataSource<S extends SchemaRecord>(
       const table = sql.identifier(mc.table);
       if (req.kind === 'load') {
         const rows = rowsOf(await db.execute(sql`SELECT * FROM ${table} WHERE id = ${req.id} LIMIT 1`));
-        return rows.map((r) => toFields(mc, r));
+        return authorizeSourceRead(schema, req, rows.map((r) => toFields(mc, r)));
       }
       const limit = req.query?.limit ?? 1000;
-      const rows = rowsOf(await db.execute(sql`SELECT * FROM ${table} LIMIT ${limit}`));
-      return rows.map((r) => toFields(mc, r));
+      const rule = sourceSubjectRule(schema, req.model);
+      const subjects = sourceSubjectValues(rule, req.scope?.syncGroups);
+      if (subjects?.length === 0) return [];
+      const rows = rowsOf(await db.execute(subjects
+        ? sql`SELECT * FROM ${table}
+              WHERE ${sql.identifier(columnFor(mc, rule!.field))} = ANY(${subjects})
+              LIMIT ${limit}`
+        : sql`SELECT * FROM ${table} LIMIT ${limit}`));
+      return authorizeSourceRead(schema, req, rows.map((r) => toFields(mc, r)));
     },
 
     async commit(change: ChangeSet): Promise<AdapterCommitResult> {
@@ -238,19 +254,46 @@ export function drizzleDataSource<S extends SchemaRecord>(
           return { rows: cachedRow.response as Row[] };
         }
 
+        await lockSourceSubjectCreates(schema, change, async (_operation, key) => {
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+        });
+
+        await authorizeSourceChange(schema, change, async (operation) => {
+          if (!operation.id) return null;
+          const mc = modelColumns(operation.model);
+          const found = rowsOf(
+            await tx.execute(
+              sql`SELECT * FROM ${sql.identifier(mc.table)} WHERE id = ${operation.id} LIMIT 1 FOR UPDATE`,
+            ),
+          )[0];
+          return found ? toFields(mc, found) : null;
+        });
+
         const rows: Row[] = [];
         for (const [index, op] of change.operations.entries()) {
-          const row = await applyOperation(tx, op);
+          let row: Row;
+          try {
+            row = await applyOperation(tx, op);
+          } catch (error) {
+            if (op.type === 'CREATE') rethrowStrictCreateConflict(error, op);
+            throw error;
+          }
           rows.push(row);
           const entityId = String(row.id ?? rowId(op));
+          const syncGroups = sourceSyncGroups(schema, op.model, row);
+          const syncGroupsSql = sql`ARRAY[${sql.join(
+            syncGroups.map((group) => sql`${group}`),
+            sql`, `,
+          )}]::text[]`;
           await tx.execute(sql`
             INSERT INTO ablo_outbox (
-              id, model, entity_id, type, data,
+              id, model, entity_id, type, data, sync_groups,
               correlation_id, transaction_id, occurred_at
             )
             VALUES (
               ${`${change.correlationId}:${index}`}, ${op.model}, ${entityId}, ${op.type},
               ${op.type === 'DELETE' ? null : JSON.stringify(row)}::jsonb,
+              ${syncGroupsSql},
               ${change.correlationId}, ${op.transactionId ?? null}, ${Date.now()}
             )`);
         }
@@ -274,7 +317,7 @@ export function drizzleDataSource<S extends SchemaRecord>(
       const after = cursor ?? '0';
       const rows = rowsOf(
         await db.execute(sql`
-          SELECT cursor, id, model, entity_id, type, data, organization_id,
+          SELECT cursor, id, model, entity_id, type, data, sync_groups, organization_id,
                  client_tx_id, correlation_id, transaction_id, occurred_at
           FROM ablo_outbox WHERE cursor > ${after} ORDER BY cursor ASC LIMIT ${limit}`),
       );
@@ -285,6 +328,7 @@ export function drizzleDataSource<S extends SchemaRecord>(
           entityId: r.entity_id,
           type: r.type,
           data: r.data ?? null,
+          syncGroups: r.sync_groups ?? [],
           organizationId: r.organization_id ?? null,
           clientTxId: r.client_tx_id ?? null,
           correlationId: r.correlation_id ?? null,

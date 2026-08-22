@@ -12,7 +12,16 @@ import type {
   InferCreate,
 } from '../schema/schema.js';
 import type { DataSourceAdapter } from './adapter.js';
+import type { AdapterReadRequest, Row } from './adapter.js';
 import { changeSetSchema } from './contract.js';
+import { AbloError, AbloPermissionError } from '../errors.js';
+import {
+  authorizeSourceChange,
+  authorizeSourceRead,
+  lockSourceSubjectCreates,
+  sourceSubjectRule,
+  sourceSubjectValues,
+} from './subjectAuthorization.js';
 import {
   SourceSignatureError,
   verifyAbloSourceRequest,
@@ -31,6 +40,7 @@ import type {
   SourceRequest,
   SourceRequestContext,
   SourceScope,
+  SourceSubjectTransactionHandler,
 } from './types.js';
 
 type SourceModels<S extends SchemaRecord, TAuth> = Partial<{
@@ -86,6 +96,12 @@ export type DataSourceOptions<S extends SchemaRecord, TAuth = unknown> = {
    * run inside one transaction you control.
    */
   readonly commit?: SourceCommitHandler<TAuth>;
+  /**
+   * Required for a hand-written commit touching any subject-scoped model.
+   * The hook owns one customer-database transaction and calls `run` with a
+   * locking row loader and the batch commit bound to that same transaction.
+   */
+  readonly subjectTransaction?: SourceSubjectTransactionHandler<TAuth>;
   /**
    * Reports changes that happened outside the SDK — cron jobs, dashboard edits,
    * batch imports — which Ablo polls for. Each event you return becomes a delta and
@@ -165,6 +181,7 @@ async function handleViaAdapter(
       correlationId,
       intentHash: body.intentHash,
       echo: body.echo,
+      scope,
     });
     if (!parsed.success) {
       return json({ error: 'source_commit_invalid', message: parsed.error.message }, 400);
@@ -195,6 +212,7 @@ async function handleViaAdapter(
         entityId: event.entityId,
         type: event.type,
         ...(event.data !== undefined && event.data !== null ? { data: event.data } : {}),
+        syncGroups: event.syncGroups,
         ...(event.organizationId ? { organizationId: event.organizationId } : {}),
         ...(event.clientTxId ? { clientTxId: event.clientTxId } : {}),
         ...(event.correlationId ? { correlationId: event.correlationId } : {}),
@@ -275,6 +293,34 @@ function sameModel(operations: readonly SourceOperation[]): string | null {
   const first = operations[0]?.model;
   if (!first) return null;
   return operations.every((op) => op.model === first) ? first : null;
+}
+
+function subjectDenial(error: unknown): Response | null {
+  return error instanceof AbloPermissionError && error.code === 'capability_scope_denied'
+    ? json({ error: error.code, message: error.message }, error.httpStatus ?? 403)
+    : null;
+}
+
+function typedSourceError(error: unknown): Response | null {
+  const denial = subjectDenial(error);
+  if (denial) return denial;
+  return error instanceof AbloError && error.code && error.httpStatus
+    ? json({ error: error.code, message: error.message }, error.httpStatus)
+    : null;
+}
+
+function parseHandWrittenChange<TAuth>(
+  body: Extract<SourceRequest, { type: 'commit' }>,
+  context: SourceHandlerContext<TAuth>,
+) {
+  const correlationId = body.correlationId ?? body.clientTxId;
+  return changeSetSchema.safeParse({
+    operations: body.operations,
+    correlationId,
+    intentHash: body.intentHash,
+    echo: body.echo,
+    scope: context.scope,
+  });
 }
 
 /**
@@ -368,7 +414,13 @@ export function dataSource<const S extends SchemaRecord, TAuth = unknown>(
     // generic layer where rows are plain JSON, so there is no per-model handler
     // lookup on this path.
     if (options.adapter) {
-      return handleViaAdapter(options.adapter, body, context.scope);
+      try {
+        return await handleViaAdapter(options.adapter, body, context.scope);
+      } catch (error) {
+        const typed = typedSourceError(error);
+        if (typed) return typed;
+        throw error;
+      }
     }
 
     if (body.type === 'load') {
@@ -377,20 +429,104 @@ export function dataSource<const S extends SchemaRecord, TAuth = unknown>(
         return json({ error: 'source_load_not_configured', model: body.model }, 404);
       }
       const row = await handlers.load({ id: body.id, context });
-      return json({ row });
+      try {
+        const authorized = authorizeSourceRead(
+          options.schema,
+          { kind: 'load', model: body.model, id: body.id, ...(context.scope ? { scope: context.scope } : {}) },
+          row ? [row as Row] : [],
+        );
+        return json({ row: authorized[0] ?? null });
+      } catch (error) {
+        const typed = typedSourceError(error);
+        if (typed) return typed;
+        throw error;
+      }
     }
 
     if (body.type === 'list') {
       const handlers = getModelHandlers(options, body.model);
-      if (!handlers?.list) {
+      const rule = sourceSubjectRule(options.schema, body.model);
+      if (rule && !handlers?.subjectList) {
+        return json({
+          error: 'source_subject_list_not_configured',
+          message: `Subject-scoped model "${body.model}" requires subjectList() so filtering occurs before pagination.`,
+        }, 403);
+      }
+      if (!rule && !handlers?.list) {
         return json({ error: 'source_list_not_configured', model: body.model }, 404);
       }
-      const result = await handlers.list({ query: body.query ?? {}, context });
+      const result = rule
+        ? await handlers!.subjectList!({
+            query: body.query ?? {},
+            subject: {
+              field: rule.field,
+              values: sourceSubjectValues(rule, context.scope?.syncGroups) ?? [],
+            },
+            context,
+          })
+        : await handlers!.list!({ query: body.query ?? {}, context });
       const normalized = normalizeListResult(result);
-      return json(normalized);
+      const request: AdapterReadRequest = {
+        kind: 'list',
+        model: body.model,
+        ...(body.query ? { query: body.query } : {}),
+        ...(context.scope ? { scope: context.scope } : {}),
+      };
+      return json({
+        ...normalized,
+        rows: authorizeSourceRead(options.schema, request, normalized.rows as readonly Row[]),
+      });
     }
 
     if (body.type === 'commit') {
+      const hasSubject = body.operations.some((operation) =>
+        sourceSubjectRule(options.schema, operation.model));
+      if (hasSubject) {
+        if (!options.subjectTransaction) {
+          return json({
+            error: 'source_subject_transaction_required',
+            message: 'Subject-scoped custom commits require subjectTransaction() so authorization and mutation share one transaction.',
+          }, 403);
+        }
+        const parsed = parseHandWrittenChange(body, context);
+        if (!parsed.success) {
+          return json({ error: 'source_commit_invalid', message: parsed.error.message }, 400);
+        }
+        try {
+          let ranBoundary = false;
+          const result = await options.subjectTransaction(
+            {
+              operations: body.operations,
+              correlationId: body.correlationId ?? body.clientTxId,
+              clientTxId: body.clientTxId,
+              intentHash: body.intentHash,
+              echo: body.echo,
+              context,
+            },
+            async ({ lockCreate, load, commit }) => {
+              if (ranBoundary) {
+                throw new Error('subjectTransaction run() may be called only once');
+              }
+              ranBoundary = true;
+              await lockSourceSubjectCreates(
+                options.schema,
+                parsed.data,
+                (operation) => lockCreate(operation),
+              );
+              await authorizeSourceChange(options.schema, parsed.data, load);
+              return commit();
+            },
+          );
+          if (!ranBoundary) {
+            throw new Error('subjectTransaction must call run() inside its database transaction');
+          }
+          return json(result);
+        } catch (error) {
+          const typed = typedSourceError(error);
+          if (typed) return typed;
+          throw error;
+        }
+      }
       if (options.commit) {
         const result = await options.commit({
           operations: body.operations,

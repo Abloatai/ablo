@@ -6,7 +6,18 @@
  */
 import { defineSchema, model, z } from '../index.js';
 import { abloOpenApi, schemaToOpenApi } from '@abloatai/transaction/schema/openapi';
-import { commitRequestSchema } from '@abloatai/transaction/wire';
+import {
+  API_DEPRECATION_HEADER,
+  API_DEPRECATION_NOTICE_DAYS,
+  API_LIFECYCLE,
+  API_PATH_VERSION,
+  API_SUNSET_HEADER,
+  API_VERSION_HEADER,
+  RATE_LIMIT_HEADER,
+  RATE_LIMIT_POLICY_HEADER,
+  RETRY_AFTER_HEADER,
+  commitRequestSchema,
+} from '@abloatai/transaction/wire';
 
 const schema = defineSchema({
   items: model({
@@ -312,6 +323,75 @@ describe('abloOpenApi generator readiness', () => {
       expect(parameters.find((parameter) => parameter.name === 'limit')).toMatchObject({
         schema: { type: 'integer', minimum: 1 },
       });
+    }
+  });
+
+  it('declares the pacing and correlation headers on EVERY response', () => {
+    // The point of the assertion is the "every": a generated client surfaces
+    // the headers the document declares and drops the rest, so a response that
+    // omits `RateLimit` is one whose caller cannot pace itself. Before this,
+    // no response declared any header at all.
+    const universal = [
+      API_VERSION_HEADER,
+      'X-Request-Id',
+      RATE_LIMIT_POLICY_HEADER,
+      RATE_LIMIT_HEADER,
+      API_DEPRECATION_HEADER,
+      API_SUNSET_HEADER,
+    ];
+    for (const pathItem of Object.values(paths)) {
+      for (const [method, rawOperation] of Object.entries(obj(pathItem))) {
+        if (!['get', 'post', 'put', 'patch', 'delete'].includes(method)) continue;
+        for (const [status, rawResponse] of Object.entries(obj(obj(rawOperation).responses))) {
+          const headers = obj(obj(rawResponse).headers);
+          for (const name of universal) {
+            expect(Object.keys(headers)).toContain(name);
+          }
+          // A wait is what resolves a 429 and a 503, and only those.
+          expect(Object.keys(headers).includes(RETRY_AFTER_HEADER)).toBe(
+            status === '429' || status === '503',
+          );
+        }
+      }
+    }
+  });
+
+  it('resolves every declared response header to a documented component', () => {
+    const headerComponents = obj(obj(spec.components).headers);
+    expect(Object.keys(headerComponents).length).toBeGreaterThan(0);
+    for (const component of Object.values(headerComponents)) {
+      expect(typeof obj(component).description).toBe('string');
+      expect(obj(component).schema).toBeDefined();
+    }
+    for (const pathItem of Object.values(paths)) {
+      for (const [method, rawOperation] of Object.entries(obj(pathItem))) {
+        if (!['get', 'post', 'put', 'patch', 'delete'].includes(method)) continue;
+        for (const rawResponse of Object.values(obj(obj(rawOperation).responses))) {
+          for (const rawHeader of Object.values(obj(obj(rawResponse).headers))) {
+            const ref = obj(rawHeader).$ref;
+            expect(typeof ref).toBe('string');
+            const name = String(ref).replace('#/components/headers/', '');
+            expect(headerComponents[name]).toBeDefined();
+          }
+        }
+      }
+    }
+  });
+
+  it('publishes the versioning and deprecation policy in the document itself', () => {
+    // Rendered, not restated: the description carries the same constant the
+    // server emits, so the policy cannot promise a signal nothing sends.
+    const description = String(obj(spec.info).description);
+    expect(description).toContain(API_LIFECYCLE);
+    expect(description).toContain(`/${API_PATH_VERSION}`);
+    expect(description).toContain(API_DEPRECATION_HEADER);
+    expect(description).toContain(API_SUNSET_HEADER);
+    expect(description).toContain(String(API_DEPRECATION_NOTICE_DAYS));
+  });
+
+  it('mounts every path under the versioned segment it promises', () => {
+    for (const path of Object.keys(paths)) {
+      expect(path.startsWith(`/${API_PATH_VERSION}/`)).toBe(true);
     }
   });
 

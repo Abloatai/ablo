@@ -35,6 +35,7 @@ import type { WriteOptions } from '../../interfaces/index.js';
 import type { OnStaleMode, StaleNotification, ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
 import {
   mutationCommitResultSchema,
+  type CommitOperationResult,
   type MutationCommitResult,
 } from '@abloatai/transaction/wire/commit';
 import {
@@ -52,6 +53,14 @@ import {
   type UserContext,
   type WriteOperationFields,
 } from './commitPayload.js';
+import {
+  generateTransactionId,
+  mergeMutationData,
+  createDataFor,
+  changesToInput,
+  updateDataFor,
+  previousDataFor,
+} from './mutationInput.js';
 import { MutationStore } from './MutationStore.js';
 import {
   entityKey,
@@ -1703,6 +1712,7 @@ export class MutationQueue extends EventEmitter {
     lastSyncId: number;
     notifications?: StaleNotification[];
     missingIds?: string[];
+    operationResults?: CommitOperationResult[];
   }> {
     return waitForCommitReceipt(this.commitReceiptContext, clientTxId);
   }
@@ -1879,47 +1889,33 @@ export class MutationQueue extends EventEmitter {
   }
 
   /** Generates a unique local transaction id. */
+  // The payload rules live in `mutationInput`; these keep the call sites here
+  // reading as the queue's own vocabulary.
   private generateId(): string {
-    return `tx_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+    return generateTransactionId();
   }
 
   private mergeData(
     local: MutationInput | undefined,
     remote: MutationInput | undefined
   ): MutationInput {
-    return { ...(remote || {}), ...(local || {}) };
+    return mergeMutationData(local, remote);
   }
 
   private extractCreateData(model: LocalModel): MutationInput {
-    return projectCommitPayload(model.getModelName(), model.toJSON(), { dropUndefined: false }, this.runtime);
+    return createDataFor(model, this.runtime);
   }
 
   private mapChangesToInput(modelName: string, changes: Record<string, unknown>): MutationInput {
-    return projectCommitPayload(modelName, changes, { dropUndefined: true }, this.runtime);
+    return changesToInput(modelName, changes, this.runtime);
   }
 
   private extractUpdateData(model: LocalModel): MutationInput {
-    return projectCommitPayload(model.getModelName(), model.getChanges(), { dropUndefined: true }, this.runtime);
+    return updateDataFor(model, this.runtime);
   }
 
-  // Derive previous values for changed fields to support accurate rollback.
-  // Model-specific special cases do not belong here; a model that needs to
-  // surface previous state beyond `modifiedProperties` should expose a typed
-  // `getPreviousData()` accessor for this method to call.
   private extractPreviousData(model: LocalModel, updateInput?: MutationInput): MutationInput {
-    // When the update's written keys are known, capture a before-image for
-    // exactly those keys, so the recorded undo inverse reverts them and nothing
-    // else — a full-row inverse would clobber concurrent edits to unrelated
-    // fields. `fallbackToLive: false` makes `Model.capturePreviousValues` omit
-    // any key it cannot resolve, and `buildUndoOps` then drops an un-revertible
-    // inverse rather than inventing one. With no `updateInput` (a full extract)
-    // it falls back to every tracked field. `Model.capturePreviousValues` is the
-    // single before-image source, shared with
-    // `RecordingMutation.snapshotFields`.
-    const keys = updateInput
-      ? Object.keys(updateInput)
-      : [...(model.modifiedProperties instanceof Map ? model.modifiedProperties.keys() : [])];
-    return { id: model.id, ...model.capturePreviousValues(keys, { fallbackToLive: false }) };
+    return previousDataFor(model, updateInput);
   }
 
   /** Returns a snapshot of queue counts and the current configuration. */

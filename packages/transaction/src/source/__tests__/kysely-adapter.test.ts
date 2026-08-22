@@ -49,6 +49,7 @@ interface RecordedCall {
   wheres: [string, string, unknown][];
   orderBy?: [string, 'asc' | 'desc'];
   limit?: number;
+  forUpdate?: boolean;
 }
 
 /** Records every builder chain; answers each `execute()` from a queue. */
@@ -84,6 +85,10 @@ class FakeKysely implements KyselyLike {
       },
       limit: (limit) => {
         call.limit = limit;
+        return builder;
+      },
+      forUpdate: () => {
+        call.forUpdate = true;
         return builder;
       },
       execute: () => this.answer(),
@@ -184,6 +189,7 @@ describe('kyselyDataSource', () => {
       'ablo_idempotency_permanent_retention',
       'ablo_outbox',
       'ablo_outbox_correlation',
+      'ablo_outbox_sync_groups',
     ]);
   });
 
@@ -400,6 +406,72 @@ describe('kyselyDataSource', () => {
     if (!call) throw new Error('expected a recorded select call');
     expect(call.wheres).toEqual([['id', '=', 't1']]);
     expect(call.limit).toBe(1);
+  });
+
+  it('applies the subject predicate before the database limit', async () => {
+    const subjectSchema = defineSchema({
+      item: model(
+        { title: field.string(), workspaceId: field.string().min(1) },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    const db = new FakeKysely([[{ id: 'own', title: 'A', workspace_id: 'a' }]]);
+    const adapter = kyselyDataSource(db, subjectSchema);
+    await adapter.read({
+      kind: 'list', model: 'item', query: { limit: 1 },
+      scope: { syncGroups: ['workspace:a'] },
+    });
+    expect(db.calls[0]?.wheres).toContainEqual(['workspace_id', 'in', ['a']]);
+    expect(db.calls[0]?.limit).toBe(1);
+  });
+
+  it('locks the subject preimage before mutating it', async () => {
+    const subjectSchema = defineSchema({
+      item: model(
+        { title: field.string(), workspaceId: field.string().min(1) },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    const db = new FakeKysely([
+      [{ client_tx_id: 'subject-lock' }],
+      [{ id: 'own', title: 'before', workspace_id: 'a' }],
+      [{ id: 'own', title: 'after', workspace_id: 'a' }],
+      [],
+      [],
+    ]);
+    const adapter = kyselyDataSource(db, subjectSchema);
+    await adapter.commit({
+      correlationId: 'subject-lock',
+      scope: { syncGroups: ['workspace:a'] },
+      operations: [{ type: 'UPDATE', model: 'item', id: 'own', input: { title: 'after' } }],
+    });
+    expect(db.calls.find((call) => call.kind === 'select' && call.table === 'item'))
+      .toMatchObject({ forUpdate: true });
+  });
+
+  it('takes an absent-key advisory lock before authorizing subject CREATE', async () => {
+    const subjectSchema = defineSchema({
+      item: model(
+        { title: field.string(), workspaceId: field.string().min(1) },
+        { subject: { field: 'workspaceId', group: 'workspace' } },
+      ),
+    });
+    const db = new FakeKysely([
+      [{ client_tx_id: 'subject-create-lock' }],
+      [], [],
+      [{ id: 'new', title: 'created', workspace_id: 'a' }],
+      [], [],
+    ]);
+    await kyselyDataSource(db, subjectSchema).commit({
+      correlationId: 'subject-create-lock',
+      scope: { syncGroups: ['workspace:a'] },
+      operations: [{ type: 'CREATE', model: 'item', id: 'new', input: { title: 'created', workspaceId: 'a' } }],
+    });
+    const advisory = db.calls.findIndex((call) =>
+      call.kind === 'raw' && call.table.includes('pg_advisory_xact_lock'));
+    const preimage = db.calls.findIndex((call) => call.kind === 'select' && call.table === 'item');
+    expect(advisory).toBeGreaterThan(-1);
+    expect(advisory).toBeLessThan(preimage);
   });
 
   it('pages the outbox by cursor with stable ordering', async () => {

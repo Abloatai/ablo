@@ -27,6 +27,7 @@ import type { SchemaJSON, ModelJSON } from './serialize.js';
 import type { MigrationStep, BackfillValue, FieldType } from './diff.js';
 import type { FieldMeta } from './field.js';
 import { resolveTenancy, tenancyColumn } from './tenancy.js';
+import type { SubjectRule } from './subject.js';
 
 export interface ProvisionPlan {
   /** The Postgres schema the tables live in (`app_<id>` or `public`). */
@@ -118,6 +119,22 @@ export function sqlType(fieldType: ModelJSON['fields'][string]['type']): string 
 }
 
 const BASE_COLUMNS = new Set(['id']);
+
+function subjectPredicate(model: ModelJSON, rule: SubjectRule): string {
+  const meta = model.fields[rule.field];
+  if (!meta) {
+    throw new AbloValidationError(`subject field ${JSON.stringify(rule.field)} is not declared`, {
+      code: 'schema_definition_invalid',
+      param: 'subject.field',
+    });
+  }
+  const column = meta.column ?? camelToSnake(rule.field);
+  const prefix = `${rule.group}:`.replace(/'/g, "''");
+  return (
+    `COALESCE(NULLIF(current_setting('app.current_subject_groups', true), ''), '[]')::jsonb ` +
+    `? ('${prefix}' || ${q(column)}::text)`
+  );
+}
 
 // ── Foreign keys (relation-driven, sync-safe) ────────────────────────────────
 
@@ -324,7 +341,20 @@ export function generateProvisionPlan(
       statements.push(`ALTER TABLE ${qt} ENABLE ROW LEVEL SECURITY;`);
       statements.push(`ALTER TABLE ${qt} FORCE ROW LEVEL SECURITY;`);
       const policy = `${table}_tenant_isolation`;
-      const predicate = `${q(orgCol)} = current_setting('app.current_org_id', true)`;
+      const predicates = [
+        `${q(orgCol)} = current_setting('app.current_org_id', true)`,
+        ...(model.subject ? [subjectPredicate(model, model.subject)] : []),
+      ];
+      const predicate = predicates.length === 1
+        ? predicates[0]!
+        : predicates.map((part) => `(${part})`).join(' AND ');
+      statements.push(`DROP POLICY IF EXISTS ${q(policy)} ON ${qt};`);
+      statements.push(`CREATE POLICY ${q(policy)} ON ${qt}\n  USING (${predicate})\n  WITH CHECK (${predicate});`);
+    } else if (model.subject) {
+      statements.push(`ALTER TABLE ${qt} ENABLE ROW LEVEL SECURITY;`);
+      statements.push(`ALTER TABLE ${qt} FORCE ROW LEVEL SECURITY;`);
+      const policy = `${table}_subject_isolation`;
+      const predicate = subjectPredicate(model, model.subject);
       statements.push(`DROP POLICY IF EXISTS ${q(policy)} ON ${qt};`);
       statements.push(`CREATE POLICY ${q(policy)} ON ${qt}\n  USING (${predicate})\n  WITH CHECK (${predicate});`);
     }
@@ -582,6 +612,46 @@ export function generateMigrationPlan(
       const fk = foreignKeyStatements(table, def, next.models, qs);
       statements.push(...fk.statements);
       concurrent.push(...fk.concurrent);
+    }
+  }
+
+  // Subject authorization is metadata rather than a field diff. Reconcile when
+  // that metadata changes, or when the protected field's physical column
+  // changes. An identical empty migration must remain a true no-op.
+  for (const [key, model] of Object.entries(next.models)) {
+    if ((model.plane ?? 'tenant') === 'control') continue;
+    const previousModel = prev?.models[key];
+    const subjectChanged = JSON.stringify(previousModel?.subject) !== JSON.stringify(model.subject);
+    const subjectColumnChanged = steps.some((step) =>
+      'model' in step && step.model === key &&
+      step.kind === 'alter_field' &&
+      (step.field === model.subject?.field || step.field === previousModel?.subject?.field) &&
+      step.changes.column !== undefined
+    );
+    if (!subjectChanged && !subjectColumnChanged) continue;
+    const table = model.tableName ?? key;
+    const qt = qtFor(table);
+    const orgCol = tenancyColumn(resolveTenancy(model));
+    const tenantPolicy = `${table}_tenant_isolation`;
+    const subjectPolicy = `${table}_subject_isolation`;
+    if (orgCol || model.subject) {
+      statements.push(`ALTER TABLE ${qt} ENABLE ROW LEVEL SECURITY;`);
+      statements.push(`ALTER TABLE ${qt} FORCE ROW LEVEL SECURITY;`);
+      statements.push(`DROP POLICY IF EXISTS ${q(tenantPolicy)} ON ${qt};`);
+      statements.push(`DROP POLICY IF EXISTS ${q(subjectPolicy)} ON ${qt};`);
+      const parts = [
+        ...(orgCol ? [`${q(orgCol)} = current_setting('app.current_org_id', true)`] : []),
+        ...(model.subject ? [subjectPredicate(model, model.subject)] : []),
+      ];
+      const predicate = parts.length === 1
+        ? parts[0]!
+        : parts.map((part) => `(${part})`).join(' AND ');
+      const policy = orgCol ? tenantPolicy : subjectPolicy;
+      statements.push(`CREATE POLICY ${q(policy)} ON ${qt}\n  USING (${predicate})\n  WITH CHECK (${predicate});`);
+    } else if (previousModel?.subject) {
+      statements.push(`DROP POLICY IF EXISTS ${q(subjectPolicy)} ON ${qt};`);
+      statements.push(`ALTER TABLE ${qt} NO FORCE ROW LEVEL SECURITY;`);
+      statements.push(`ALTER TABLE ${qt} DISABLE ROW LEVEL SECURITY;`);
     }
   }
 

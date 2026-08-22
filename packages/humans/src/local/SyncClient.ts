@@ -34,85 +34,25 @@ import {
   type UnconfirmedWritesMetrics,
 } from './transactions/mutations/UnconfirmedWrites.js';
 import type { DurableWriteStore } from './transactions/mutations/durableWriteStore.js';
-import type { CommitTransaction } from './transactions/mutations/commitLane.js';
 import type { Database } from './Database.js';
-import type { BootstrapData } from './sync/BootstrapFetcher.js';
 import type { MutationPersistencePort } from './mutationPersistence.js';
 import type { WriteOptions } from './interfaces/index.js';
 import { LogPosition } from './logPosition.js';
 import { createLocalMutationPort } from './transactions/localMutation.js';
 import { createReconnectDrain } from './transactions/reconnectDrain.js';
 import { DatabaseCommitOutboxStore } from './transactions/databaseCommitOutbox.js';
+import {
+  toEpochMs,
+  type CompletedTransaction,
+  type EventHandler,
+  type RehydrationStats,
+  type SyncEvent,
+  type SyncObserver,
+  type SyncState,
+} from './syncClientTypes.js';
+import type { BootstrapSnapshot } from './syncClientTypes.js';
 
-interface SyncObserver {
-  onSync?: (event: SyncEvent) => void;
-}
-
-interface SyncEvent {
-  type: 'create' | 'update' | 'delete' | 'archive' | 'rollback';
-  modelType: string;
-  model?: Model;
-  modelId?: string;
-  transactionType?: string; // Original transaction type that was rolled back
-}
-
-interface SyncState {
-  connectionState: 'connected' | 'disconnected' | 'connecting';
-  pendingMutations: number;
-  lastSyncAt?: Date;
-  error?: Error;
-}
-
-export interface RehydrationStats {
-  added: number;
-  updated: number;
-  removed: number;
-  skipped: number;
-  healed: number;
-  elapsedMs: number;
-}
-
-type EventHandler = () => void;
-
-/**
- * The slice of a bootstrap answer the pool applies: its rows, the models whose
- * server query failed, and the log position the snapshot was taken at — the
- * position every row in it reflects. `lastSyncId` is optional only for callers
- * applying rows with no snapshot position to speak of; the fetcher always
- * names one.
- */
-export type BootstrapSnapshot = Pick<BootstrapData, 'models' | 'failedModels'> &
-  Partial<Pick<BootstrapData, 'lastSyncId'>>;
-
-/**
- * What `transaction:completed` carries: a model mutation (one row, confirmed
- * at `syncIdNeededForCompletion`) or an explicit commit (one row per operation,
- * confirmed at `lastSyncId`). Each arm projects its own queue record.
- */
-type CompletedTransaction =
-  | (Pick<QueuedMutation, 'id' | 'modelId' | 'syncIdNeededForCompletion'> & {
-      lastSyncId?: undefined;
-      operations?: undefined;
-    })
-  | (Pick<CommitTransaction, 'id' | 'lastSyncId' | 'operations'> & {
-      modelId?: undefined;
-      syncIdNeededForCompletion?: undefined;
-    });
-
-/**
- * Converts an untyped server `updatedAt` value — an ISO string, epoch number,
- * or Date read off an untyped row — into epoch milliseconds for
- * last-write-wins comparison. Falsy or non-date values become 0, matching the
- * conflict resolver's rule that a missing timestamp sorts as the epoch.
- */
-function toEpochMs(value: unknown): number {
-  if (!value) return 0;
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === 'string' || typeof value === 'number') {
-    return new Date(value).getTime();
-  }
-  return 0;
-}
+export type { BootstrapSnapshot, RehydrationStats } from './syncClientTypes.js';
 
 export class SyncClient extends EventEmitter {
   private objectPool: InstanceCache;

@@ -114,10 +114,14 @@ export const handleAbloSource = dataSource({
     // own transaction. The example uses a synchronous in-memory
     // update; the surrounding `apply` helper shows where you would
     // open `db.transaction(async (tx) => { ... })`.
-    commit({ operations, clientTxId }) {
+    commit({ operations, clientTxId, context }) {
+      // The routes an outbox event carries come from the trusted scope Ablo
+      // signed into the request, never from the row itself. Ablo adds the
+      // organization group on its side; these are the finer ones.
+      const syncGroups = context.scope?.syncGroups ?? [];
       const rows: RecordRow[] = [];
       for (const op of operations) {
-        const row = applyOperation(op, clientTxId);
+        const row = applyOperation(op, clientTxId, syncGroups);
         if (row) rows.push(row);
       }
       return { rows };
@@ -145,6 +149,7 @@ export const handleAbloSource = dataSource({
 function applyOperation(
   op: SourceOperation,
   clientTxId: string | undefined,
+  syncGroups: readonly string[],
 ): RecordRow | null {
   if (op.model !== 'records') return null;
   const id = op.id ?? `record_${Math.random().toString(36).slice(2, 10)}`;
@@ -160,7 +165,7 @@ function applyOperation(
         : {}),
     };
     recordStore.set(id, row);
-    appendOutbox({ operation: op, entityId: id, data: row, clientTxId });
+    appendOutbox({ operation: op, entityId: id, data: row, clientTxId, syncGroups });
     return row;
   }
 
@@ -169,7 +174,7 @@ function applyOperation(
     if (!existing) return null;
     const next: RecordRow = { ...existing, ...(op.input as Partial<RecordRow>) };
     recordStore.set(id, next);
-    appendOutbox({ operation: op, entityId: id, data: next, clientTxId });
+    appendOutbox({ operation: op, entityId: id, data: next, clientTxId, syncGroups });
     return next;
   }
 
@@ -177,7 +182,7 @@ function applyOperation(
     const existing = recordStore.get(id);
     if (!existing) return null;
     recordStore.delete(id);
-    appendOutbox({ operation: op, entityId: id, data: null, clientTxId });
+    appendOutbox({ operation: op, entityId: id, data: null, clientTxId, syncGroups });
     return existing;
   }
 
@@ -189,6 +194,7 @@ function appendOutbox(input: {
   entityId: string;
   data: RecordRow | null;
   clientTxId: string | undefined;
+  syncGroups: readonly string[];
 }): void {
   outboxSequence += 1;
   outbox.push(
@@ -197,6 +203,7 @@ function appendOutbox(input: {
       operation: input.operation,
       entityId: input.entityId,
       data: input.data,
+      syncGroups: input.syncGroups,
       ...(input.clientTxId ? { clientTxId: input.clientTxId } : {}),
     }),
   );

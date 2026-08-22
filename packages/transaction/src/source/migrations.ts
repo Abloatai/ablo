@@ -99,6 +99,7 @@ export function endpointOutboxMigrations(): readonly Migration[] {
   entity_id       TEXT NOT NULL,
   type            TEXT NOT NULL,
   data            JSONB,
+  sync_groups      TEXT[] NOT NULL,
   organization_id TEXT,
   client_tx_id    TEXT,
   correlation_id  TEXT,
@@ -113,6 +114,26 @@ export function endpointOutboxMigrations(): readonly Migration[] {
   ADD COLUMN IF NOT EXISTS correlation_id TEXT;
 ALTER TABLE ablo_outbox
   ADD COLUMN IF NOT EXISTS transaction_id TEXT;`,
+    },
+    {
+      name: 'ablo_outbox_sync_groups',
+      up: `DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'ablo_outbox'
+       AND column_name = 'sync_groups'
+  ) AND EXISTS (SELECT 1 FROM ablo_outbox) THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '55000',
+      MESSAGE = 'ablo_outbox contains legacy events; verify the previous release consumed them, then purge those rows before adding sync_groups';
+  END IF;
+END $$;
+ALTER TABLE ablo_outbox
+  ADD COLUMN IF NOT EXISTS sync_groups TEXT[];
+ALTER TABLE ablo_outbox
+  ALTER COLUMN sync_groups SET NOT NULL;`,
     },
   ];
 }

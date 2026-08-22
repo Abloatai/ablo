@@ -110,7 +110,10 @@ export function trackCliSchemaPushAttempted(): void {
 export function flushProductAnalytics(options: FlushTelemetryOptions = {}): Promise<void> {
   if (flushInFlight) return flushInFlight;
   flushInFlight = flushOnce(options)
-    .catch(() => undefined)
+    .catch((error) => {
+      // Telemetry is best-effort and cannot report its own delivery failure.
+      void error;
+    })
     .finally(() => {
       flushInFlight = null;
     });
@@ -138,8 +141,8 @@ function queueEvent(eventName: ProductEvent['eventName'], properties: unknown): 
     // print a disclosure for collection that did not happen—or fail a command.
     writeState(state);
     if (disclose) {
-      console.error(
-        'Ablo collects limited usage analytics. Run `ablo telemetry disable` to opt out or `ablo telemetry status` for details.'
+      process.stderr.write(
+        'Ablo collects limited usage analytics. Run `ablo telemetry disable` to opt out or `ablo telemetry status` for details.\n'
       );
     }
   } catch {

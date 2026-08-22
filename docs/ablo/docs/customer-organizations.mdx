@@ -5,8 +5,21 @@ sidebar:
   icon: building-2
 ---
 
-Your customers live in your database, in a table you already have. Ablo reaches
-one of them by the groups a session is minted with.
+Serving many customers from one backend has two shapes, and the first question
+is whether isolating them is a security boundary or a routing convenience.
+
+**One Ablo organization per customer** is the hard boundary. Every row carries
+the organization, and the engine compares it on every read and every write,
+below your code. Choose it when one customer reading another's rows would be an
+incident.
+
+**One organization, customers as rows told apart by sync groups** is delivery
+and read routing. It is declarative, it depends on every model being covered,
+and it is not enforced on every path. Choose it when cross-customer reads are
+tolerable or intentional, not when they are a breach.
+
+The rest of this page is the second shape. Read *Where the boundary is enforced*
+before you rely on it.
 
 ```ts
 // 1. src/ablo/schema.ts — your customer table is a scope root.
@@ -85,29 +98,33 @@ session adds is which customer the person in front of it may read.
 
 ## Where the boundary is enforced
 
-Two mechanisms do different jobs, and it is worth knowing which is which before
-you rely on either.
+Two mechanisms do different jobs, and the difference is the whole of this page.
 
 **Your account is the tenant boundary.** Every row Ablo stores carries your
-organization and project, and row-level security compares both against the
-credential on every read and every write. A client cannot reach past it by
-asking, because the values come from the key rather than the request.
+organization, project, and branch, and all three are compared on every read and
+every write, from the credential rather than the request. A client cannot reach
+past them by asking. This is the boundary that holds unconditionally.
 
-**Sync groups are the cut inside your account.** They decide which of your own
-rows a session is delivered and which it may read back over HTTP. This is the
-boundary between one of your customers and the next, and it is the one your
-schema declares.
+**Sync groups are a cut inside your account, and they are not applied
+everywhere.** They decide which changes are delivered and which rows a
+log-served read returns. That is routing. It is not a universal authorization
+boundary, and the gaps are specific:
 
-Reads go through it. `list` and `get` are cut to the session's groups, live
-delivery is cut to the same set, and the initial load is the intersection of
-what the session asked for with what it was minted with.
+| Path | Group cut applied |
+|---|---|
+| Live delivery and fan-out | Yes |
+| HTTP read on a log-served plane (a connected database) | Yes |
+| HTTP read on a hosted or direct-query plane | **No.** Scoped by organization |
+| Writes | **No.** The groups are recorded on the change, never checked against the row |
+| Claim listings and presence | Yes |
 
-Coordination reads are cut more coarsely today. Listing claims and reading
-presence are scoped to your account and plane rather than to the session's
-groups, so one customer's session can see that a row is claimed and who is
-present, though never the row's contents. Treat row ids and participant ids on
-those two surfaces as visible across your customers until this page says
-otherwise.
+So a session cut to one customer, on a hosted plane, can read another
+customer's rows over HTTP; and on any plane it can write to them. What stops it
+today is the organization, which both customers share under this shape.
+
+If isolating your customers is a security requirement, give each one its own
+Ablo organization. The stronger row-and-subject authorization that would make
+this shape safe on every path is not in the engine yet.
 
 ## Naming a group
 
@@ -123,16 +140,17 @@ Resolve `member.customerId` from the membership you just authenticated on the
 server. A signed-in person can put any value in a request body, and the session
 you mint is what decides what they can read.
 
-## When a customer really is an account
+## When a customer should be its own organization
 
-There is one shape where each of your customers should be its own Ablo
-organization: when each is a separate paying business that signs in to Ablo
-itself, holds its own subscription, and invites its own developers. That is what
-an identity provider looks like, and it is what the `organization:act-as` scope
-on a secret key exists for.
+Whenever their isolation has to hold. Give each customer its own Ablo
+organization when one of them reading or writing another's rows would be an
+incident rather than a bug, when you cannot audit group coverage across every
+model, or when a customer is a separate paying business that signs in to Ablo
+itself and invites its own developers.
 
-It is rare, and it is not what a platform serving customers from one product
-looks like. If your customers never see Ablo, they belong in your schema.
+Your backend then names the customer's organization on the mint, which takes a
+secret key carrying `organization:act-as`. The customer never sees Ablo; the
+scope exists because the session leaves the organization the key belongs to.
 
 ## Onboarding a customer
 

@@ -13,7 +13,7 @@
  * What round-trips:
  *   - all model routing and scoping metadata: typename, tableName, load,
  *     mutable, the `tenancy` descriptor, bootstrap hints, scope, grants,
- *     entityRoles, the `conflict` disposition map, persist, autoFill,
+ *     entityRoles, the routing-only acknowledgement, the `conflict` disposition map, persist, autoFill,
  *     requiredFields, and lazyObservable. The authoring shorthands (`policy`
  *     and `groups`) are normalized into these canonical fields when the model
  *     is built, so only the canonical fields cross here.
@@ -33,6 +33,7 @@ import type { FieldMeta } from './field.js';
 import { buildFieldRefs } from './schema.js';
 import type { Tenancy } from './tenancy.js';
 import type { ModelResidency } from './residency.js';
+import type { SubjectRule } from './subject.js';
 import type {
   ModelDef,
   RelationRecord,
@@ -80,6 +81,7 @@ export interface ModelJSON {
   readonly typename: string;
   readonly tableName?: string;
   readonly tenancy: Tenancy;
+  readonly subject?: SubjectRule;
   /** The database plane the model's rows live in. Optional for backward
    *  compatibility: when absent (an artifact written before this field existed)
    *  it reads as `tenant`, the default. See {@link ModelResidency}. */
@@ -87,6 +89,7 @@ export interface ModelJSON {
   readonly scope?: boolean | string;
   readonly grants?: GrantsRef;
   readonly entityRoles?: readonly EntityRole[];
+  readonly routingOnly?: true;
   /** The declared write-conflict disposition per committer kind. When absent,
    *  the engine falls back to its default. */
   readonly conflict?: ConflictAxis;
@@ -136,10 +139,12 @@ function modelToJSON(def: ModelDef): ModelJSON {
     typename: def.typename ?? '',
     tableName: def.tableName,
     tenancy: def.tenancy,
+    subject: def.subject,
     plane: def.plane,
     scope: def.scope,
     grants: def.grants,
     entityRoles: def.entityRoles,
+    routingOnly: def.routingOnly,
     conflict: def.conflict,
     bootstrapLimit: def.bootstrapLimit,
     bootstrapOrderBy: def.bootstrapOrderBy,
@@ -272,12 +277,14 @@ function modelFromJSON(json: ModelJSON): ModelDef {
     persist: json.persist,
     tableName: json.tableName,
     tenancy: json.tenancy,
+    subject: json.subject,
     // Absent in older artifacts → default `tenant`, matching the model builder
     // and provisioning defaults so the round-trip stays stable.
     plane: json.plane ?? 'tenant',
     scope: json.scope,
     grants: json.grants,
     entityRoles: json.entityRoles,
+    routingOnly: json.routingOnly,
     // Absent in older artifacts → undefined, so the commit path falls through to
     // the function registry or the engine default.
     conflict: json.conflict,

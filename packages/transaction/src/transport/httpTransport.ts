@@ -17,7 +17,6 @@ import {
   claimedError,
   translateHttpError,
 } from '../errors.js';
-import { v5 as uuidv5 } from 'uuid';
 import { z } from 'zod';
 import {
   reconcileFunctionalUpdate,
@@ -37,7 +36,6 @@ import {
 } from '../auth/apiKey.js';
 import { PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER } from '../wire/protocolVersion.js';
 import {
-  commitReceiptSchema,
   commitRecordSchema,
   commitRecordListSchema,
   commitRecordListOptionsSchema,
@@ -99,25 +97,11 @@ import {
 import { parseIdentityResolveResponse } from '../auth/schemas.js';
 import type { EffectiveAuthority } from '../auth/capability.js';
 
-/**
- * Interpret a heartbeat reply for a lease this handle HOLDS: anything other
- * than `held` means the lease is no longer ours (a holder cannot be `queued`;
- * `lost` rides a 409 that the wire error mapping already surfaces as
- * AbloClaimedError before reaching here). The thrown loss is the definitive
- * signal that stops the auto-heartbeat loop.
- */
-function heldHeartbeatReply(reply: ClaimHeartbeatReply, label: string): ClaimHeartbeat {
-  if (reply.status === 'held' && typeof reply.expiresAt === 'number') {
-    return {
-      expiresAt: reply.expiresAt,
-      ...(reply.queueDepth !== undefined ? { queueDepth: reply.queueDepth } : {}),
-    };
-  }
-  throw new AbloClaimedError(
-    `The lease behind ${label} is no longer held — it expired or was granted onward. Re-acquire the claim and retry; a write attempted under the old lease is rejected by its \`readAt\` guard.`,
-    { code: 'claim_lost' }
-  );
-}
+import {
+  claimFromModelClaim,
+  heldHeartbeatReply,
+  parseSuccessfulCommitResponse,
+} from './httpTransportHelpers.js';
 import type { SchemaRecord } from '../schema/schema.js';
 import type {
   ClaimLookupParams,
@@ -127,6 +111,7 @@ import type {
   ClaimReorderParams,
   ModelTrackParams,
   ModelTrackResult,
+  ModelCreateManyParams,
   ServerReadOptions,
   ResolvedClaimContentionOptions,
   ClaimQueueView,
@@ -151,7 +136,15 @@ import {
 import { declaredMeta, wireMeta } from '../coordination/claimMeta.js';
 import type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim } from '../types/streams.js';
 import type { CoordinationObservability } from '../observability.js';
-import { assertWriteOptions } from '../resources/writeOptionsSchema.js';
+import {
+  assertWriteOptions,
+  assertWriteTarget,
+} from '../resources/writeOptionsSchema.js';
+import {
+  createModelId,
+  resolveCreatedRows,
+  resolveCreateId,
+} from '../resources/modelCreate.js';
 import { normalizeWhere } from '../resources/where.js';
 import {
   createDurableHttpCommitEnvelope,
@@ -163,6 +156,12 @@ import {
   type DurableHttpCommitMethod,
 } from '../transactions/confirmation/httpCommitEnvelope.js';
 import type { CommitOutboxScope } from '../transactions/confirmation/commitEnvelope.js';
+import {
+  createClientTxId,
+  normalizeCommitOperations,
+  replicationLagTimeout,
+  type ExactHttpCommitRequest,
+} from './httpCommitRequest.js';
 import { resolveDurableWrites } from '../durableWrites.js';
 
 /** @internal Private options for the schema-agnostic HTTP protocol transport. */
@@ -238,46 +237,6 @@ export interface HttpTransport {
 }
 
 type CommitResponse = CommitReceiptWire;
-
-function parseSuccessfulCommitResponse(value: unknown, idempotencyKey: string): CommitResponse {
-  const parsed = commitReceiptSchema.safeParse(value);
-  if (!parsed.success || parsed.data.clientTxId !== idempotencyKey) {
-    throw new AbloConnectionError(
-      'The commit endpoint returned an invalid success receipt; its outcome remains pending and is safe to retry.',
-      {
-        code: 'commit_no_result',
-        cause: parsed.success
-          ? new Error('Commit receipt clientTxId did not match its idempotency key')
-          : parsed.error,
-      }
-    );
-  }
-  return parsed.data;
-}
-
-/** Decode the HTTP claim DTO into the one public Claim shape. */
-function claimFromModelClaim(claim: ModelClaim): Claim {
-  // The handle a caller reads back is a public claim, so its `meta` is the
-  // declared shape; the rest of the sub-entity locator crosses whole rather
-  // than member by member, which is how `fields` used to die on this hop.
-  const { meta, ...details } = subTarget(claim.target);
-  return {
-    object: 'claim',
-    id: claim.id,
-    ...(claim.status ? { status: claim.status } : {}),
-    // The server always stamps a description; default only for total safety.
-    description: claim.description ?? 'editing',
-    heldBy: claim.actor,
-    participantKind: claim.participantKind,
-    expiresAt: claim.expiresAt,
-    ...(claim.position !== undefined ? { position: claim.position } : {}),
-    target: {
-      ...streamTarget(claim.target),
-      ...details,
-      ...(meta !== undefined ? { meta: declaredMeta(meta) } : {}),
-    },
-  };
-}
 
 /** @internal Constructed only by the typed HTTP facade. */
 export function createHttpTransport(options: HttpTransportOptions): HttpTransport {
@@ -703,14 +662,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     readonly response: CommitResponse;
   }
 
-  interface ExactHttpCommitRequest {
-    readonly idempotencyKey: string;
-    readonly method: DurableHttpCommitMethod;
-    readonly path: string;
-    readonly body: string;
-    readonly sealedProtocolVersion?: number;
-  }
-
   function observeCommitReceipt(
     request: ExactHttpCommitRequest,
     receipt: CommitResponse,
@@ -738,25 +689,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     }
   }
 
-  function replicationLagTimeout(
-    request: ExactHttpCommitRequest,
-    response: CommitResponse
-  ): AbloConnectionError {
-    return new AbloConnectionError(
-      `The source accepted commit ${request.idempotencyKey}, but its replication echo did not arrive within ${requestTimeoutMs}ms.`,
-      {
-        code: 'replication_lag_timeout',
-        httpStatus: 504,
-        details: {
-          clientTxId: request.idempotencyKey,
-          ...(response.correlationId ? { correlationId: response.correlationId } : {}),
-          timeoutMs: requestTimeoutMs,
-          accepted: true,
-        },
-      }
-    );
-  }
-
   /**
    * Replays one byte-identical, idempotent HTTP commit until mutation-log
    * replay reports the source echo as confirmed. `queued` is acceptance only:
@@ -779,7 +711,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     while (current.status === 'queued') {
       const remaining = deadlineAt === null ? null : deadlineAt - Date.now();
       if (remaining !== null && remaining <= 0) {
-        throw replicationLagTimeout(request, current);
+        throw replicationLagTimeout(request, current, requestTimeoutMs);
       }
 
       const confirmationController = new AbortController();
@@ -817,7 +749,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           confirmationController.signal.aborted ||
           (deadlineAt !== null && Date.now() >= deadlineAt)
         ) {
-          throw replicationLagTimeout(request, current);
+          throw replicationLagTimeout(request, current, requestTimeoutMs);
         }
         throw error;
       } finally {
@@ -1126,57 +1058,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       }
       return response;
     });
-  }
-
-  function createClientTxId(idempotencyKey?: string | null): string {
-    if (idempotencyKey && idempotencyKey.length > 0) return idempotencyKey;
-    return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-  }
-
-  function createModelId(modelName: string, idempotencyKey?: string | null): string {
-    if (idempotencyKey) {
-      return uuidv5(`${modelName}:${idempotencyKey}`, 'aa4ba6d4-bf0b-5b38-9c45-116f79a6e548');
-    }
-    return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-  }
-
-  function normalizeCommitOperation(
-    op: CommitOperationInput,
-    defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
-    fence: BatchFence | null,
-    claim: Claim | null,
-  ): CommitOperationInput {
-    return {
-      action: op.action,
-      model: op.model,
-      id: op.id ?? null,
-      data: op.data ?? null,
-      where: op.where ?? null,
-      transactionId: op.transactionId ?? null,
-      claimId:
-        op.claimId ?? claimIdFor(claim?.target, claim?.id, op.model, op.id ?? null),
-      readAt: op.readAt ?? defaults.readAt ?? null,
-      onStale: op.onStale ?? defaults.onStale ?? null,
-      fenceToken: op.fenceToken ?? fenceTokenFor(fence, op.model, op.id ?? null),
-    };
-  }
-
-  function normalizeCommitOperations(
-    commitOptions: CommitCreateOptions,
-    fence: BatchFence | null
-  ): readonly CommitOperationInput[] {
-    if (commitOptions.operations.length === 0) {
-      throw new AbloValidationError('Commit requires a non-empty `operations` array.', {
-        code: 'commit_operation_required',
-      });
-    }
-    return commitOptions.operations.map((op) =>
-      normalizeCommitOperation(op, commitOptions, fence, commitOptions.claim ?? null)
-    );
   }
 
   async function listClaimState(
@@ -1607,6 +1488,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       },
       `${modelName} ${action}`
     );
+    if (action !== 'create') assertWriteTarget(action, modelName, id);
     const clientTxId = createClientTxId(options?.idempotencyKey);
     const encModel = encodeURIComponent(modelName);
     const path =
@@ -1945,11 +1827,25 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       if (!claimInput) return run(input);
 
       if (isClaimHandle(claimInput)) {
+        // The lease's watermark travels with it. Unwrapping the handle to a
+        // `claimRef` is what put this here: `mutateModel` reads `readAt` off a
+        // handle on `claim`, and this sets `claim: undefined` before it looks,
+        // so the stale guard was silently dropped on every write that named a
+        // handle. The result was mutual exclusion without lost-update
+        // detection, on the transport agents run, under code that reads as
+        // though it had both. The reactive client binds the same three values
+        // from the claim it holds; a caller's own `readAt`/`onStale` win.
         return run({
           ...input,
           claimRef: { id: claimInput.id },
           ...(claimInput.fenceToken !== undefined
             ? { fenceToken: claimInput.fenceToken }
+            : {}),
+          ...(input?.readAt === undefined && claimInput.readAt !== undefined
+            ? { readAt: claimInput.readAt }
+            : {}),
+          ...(input?.onStale === undefined && claimInput.readAt !== undefined
+            ? { onStale: 'reject' as const }
             : {}),
           claim: undefined,
         });
@@ -2077,6 +1973,60 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             });
           }
           return created;
+        });
+      },
+      /**
+       * Creates many rows as ONE commit, and returns them.
+       *
+       * Atomic on purpose: a batch that half-lands leaves the caller to work
+       * out which half, and every other write door here declines whole. One
+       * rejected row declines the batch.
+       *
+       * A fresh receipt returns the authoritative rows directly from the
+       * writing transaction. A durable idempotency replay deliberately redacts
+       * those rows, so that path verifies every deterministic id with a point
+       * read and fails loudly if policy prevents a complete answer. Neither
+       * path can report a partial collection as success.
+       *
+       * Ids are resolved here rather than left to the server, so the results
+       * can be returned in the caller's own order rather than the order the
+       * transaction happened to settle them.
+       */
+      async createMany(
+        params: ModelCreateManyParams<Record<string, unknown>>
+      ): Promise<T[]> {
+        if (params.data.length === 0) return [];
+
+        // A claim/stale guard addresses one existing row, so the canonical
+        // batch-create options do not admit those fields at all.
+        const { data, ...options } = params;
+        const ids = data.map(
+          (row, index) =>
+            resolveCreateId(undefined, row) ??
+            createModelId(
+              name,
+              params.idempotencyKey ? `${params.idempotencyKey}:${index}` : null
+            )
+        );
+        const receipt = await commits.create({
+          ...options,
+          operations: data.map((row, index) => ({
+            action: 'create' as const,
+            model: name,
+            id: ids[index] ?? null,
+            data: row,
+          })),
+          wait: 'confirmed',
+        });
+
+        return resolveCreatedRows<T>({
+          modelName: name,
+          ids,
+          operationResults: receipt.operationResults,
+          readRow: async (id) => {
+            const read = await retrieveModel<T>(name, { id });
+            return read.data;
+          },
         });
       },
       update: updateModel,

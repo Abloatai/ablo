@@ -35,6 +35,7 @@ export const PUBLIC_MODEL_VERBS = [
   'get',
   'retrieve',
   'list',
+  'listAll',
   'local',
   'create',
   'update',

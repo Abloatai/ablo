@@ -19,9 +19,12 @@ import type {
   CommitRecordList,
   CommitRecordListOptions,
   CommitRecordWhere,
+  CommitOperationBody,
+  ModelOperationAction,
 } from '../wire/commit.js';
 import type { LogListResponse, LogQuery } from '../wire/feedEvent.js';
 import type { ModelListEvidence } from '../wire/modelResponses.js';
+import { AbloValidationError } from '../errors.js';
 // Re-exported, not redeclared. `wire/commit.ts` owns the commit-status vocabulary
 // and derives the waitable subset from it; this module serves that name to SDK
 // consumers. Restating the subset here as its own union produced a type that
@@ -63,6 +66,7 @@ import type {
   AwaitedClaimMethod,
   ModelTrackParams,
   ModelTrackResult,
+  ModelCreateManyParams,
   ServerReadOptions,
 } from './modelOperations.js';
 
@@ -77,12 +81,7 @@ import type {
  *   `claim({ id })` — a durable claim handle for coordinated writes
  */
 
-export type ModelOperationAction =
-  | 'create'
-  | 'update'
-  | 'delete'
-  | 'archive'
-  | 'unarchive';
+export type { ModelOperationAction };
 
 
 /** @internal Transport envelope; the public typed client returns the row. */
@@ -130,20 +129,119 @@ export interface HttpTransportList<T = Record<string, unknown>> {
  * and a complete one the same value, so the caller with 500 matching rows got
  * 20 and no way to find out.
  */
-export type ModelList<T> = T[] & Pick<HttpTransportList<T>, 'hasMore' | 'nextCursor'>;
+export type ModelList<T> = T[] & Pick<HttpTransportList<T>, 'hasMore' | 'nextCursor'> &
+  AsyncIterable<T>;
 
 /**
- * Attach the page state to the rows. Non-enumerable so the result stays
- * indistinguishable from a plain array everywhere the properties aren't read.
+ * How far a `for await` over a list will walk before it gives up.
+ *
+ * A cursor that stops advancing would otherwise spin forever. The bound is
+ * high enough that no real collection reaches it and low enough that a broken
+ * server is a failed read rather than a hung process.
+ */
+const AUTO_PAGE_LIMIT = 10_000;
+const LIST_ALL_PAGE_LIMIT = 100;
+
+const nextPageFor = new WeakMap<object, (cursor: string) => Promise<ModelList<unknown>>>();
+
+export interface ModelListWalkOptions {
+  readonly maxPages?: number;
+  readonly signal?: AbortSignal;
+}
+
+async function* walkModelList<T>(
+  first: ModelList<T>,
+  options: ModelListWalkOptions = {},
+): AsyncGenerator<T> {
+  const maxPages = options.maxPages ?? AUTO_PAGE_LIMIT;
+  if (!Number.isInteger(maxPages) || maxPages < 1) {
+    throw new AbloValidationError('maxPages must be a positive integer.', {
+      code: 'invalid_options',
+      param: 'maxPages',
+    });
+  }
+
+  let current = first;
+  for (let visited = 0; visited < maxPages; visited += 1) {
+    options.signal?.throwIfAborted();
+    for (let i = 0; i < current.length; i += 1) {
+      options.signal?.throwIfAborted();
+      yield current[i] as T;
+    }
+    const cursor = current.nextCursor;
+    const fetchNext = nextPageFor.get(current) as
+      | ((nextCursor: string) => Promise<ModelList<T>>)
+      | undefined;
+    if (!current.hasMore || cursor === null || fetchNext === undefined) return;
+    const next = await fetchNext(cursor);
+    if (next.nextCursor === cursor) {
+      throw new AbloValidationError(
+        `Walking this list received the same continuation cursor twice (${JSON.stringify(cursor)}). ` +
+          'The collection may be incomplete, so traversal stopped with an error.',
+        { code: 'malformed_response', param: 'nextCursor' },
+      );
+    }
+    current = next;
+  }
+  throw new AbloValidationError(
+    `Walking this list passed ${maxPages} pages without reaching the end. ` +
+      `Narrow the read with \`where\` or raise \`maxPages\` deliberately.`,
+    { code: 'invalid_options', param: 'maxPages' },
+  );
+}
+
+/** Collect a complete list through the same guarded cursor loop as async iteration. */
+export async function collectModelList<T>(
+  first: ModelList<T>,
+  options: ModelListWalkOptions = {},
+): Promise<T[]> {
+  const rows: T[] = [];
+  for await (const row of walkModelList(first, {
+    maxPages: options.maxPages ?? LIST_ALL_PAGE_LIMIT,
+    signal: options.signal,
+  })) rows.push(row);
+  return rows;
+}
+
+/**
+ * Attach the page state to the rows, and make the list walk its own pages.
+ *
+ * `hasMore` and `nextCursor` are non-enumerable, so the result stays
+ * indistinguishable from a plain array everywhere they are not read: it maps,
+ * filters, spreads, and `JSON.stringify`s exactly as the rows always did.
+ *
+ * The async iterator is the answer to the question that shape raises. A list
+ * read is a page — the server applies a default size and caps the largest —
+ * and a page of 20 looks precisely like a complete answer of 20, so every
+ * caller either checked `hasMore` or, far more often, reasoned about a
+ * truncated set without knowing it. Hand-rolled page walkers were the common
+ * result, and each one re-derived the same cursor loop and the same
+ * non-advancing-cursor guard.
+ *
+ * So iterate the value to get the page, and `for await` it to get the
+ * collection:
+ *
+ * ```ts
+ * const page = await ablo.issue.list({ where: { teamId } });
+ * for (const issue of page) …            // the 20 rows that came back
+ * for await (const issue of page) …      // every issue, paged as it goes
+ * ```
  */
 export function modelList<T>(
   rows: readonly T[],
   page: Pick<HttpTransportList<unknown>, 'hasMore' | 'nextCursor'>,
+  /** Reads the page after `cursor`. Omitted where no transport can follow. */
+  fetchNext?: (cursor: string) => Promise<ModelList<T>>,
 ): ModelList<T> {
-  return Object.defineProperties([...rows], {
+  const list = Object.defineProperties([...rows], {
     hasMore: { value: page.hasMore, enumerable: false },
     nextCursor: { value: page.nextCursor, enumerable: false },
+    [Symbol.asyncIterator]: { value: () => walkModelList(list), enumerable: false },
   }) as ModelList<T>;
+  if (fetchNext) {
+    nextPageFor.set(list, fetchNext as (cursor: string) => Promise<ModelList<unknown>>);
+  }
+  return list;
 }
 
 export type IfClaimedPolicy = 'return' | 'fail';
@@ -206,21 +304,8 @@ export interface ClaimCreateOptions {
   readonly onStatus?: (event: ClaimAttemptEvent) => void;
 }
 
-export interface CommitOperationInput {
-  readonly action: ModelOperationAction;
-  /** The model name — matches `ablo.<model>` and the schema's `model()`. */
-  readonly model: string;
-  readonly id?: string | null;
-  readonly data?: Record<string, unknown> | null;
-  readonly where?: Record<string, unknown> | null;
-  readonly transactionId?: string | null;
-  /** Claim identity derived from a held claim; not an application id. */
-  readonly claimId?: string | null;
-  readonly readAt?: number | null;
-  readonly onStale?: OnStaleMode | null;
-  /** Fencing token (Option B) from the batch's claim handle; server-validated. */
-  readonly fenceToken?: number | null;
-}
+/** Public commit operation inferred from the canonical request-body schema. */
+export type CommitOperationInput = CommitOperationBody;
 
 export interface CommitCreateOptions {
   readonly idempotencyKey?: string | null;
@@ -402,6 +487,12 @@ export interface HttpTransportModel<
    * returned, not the input.
    */
   create(params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null }): Promise<T>;
+  /**
+   * Creates many rows as one atomic commit and returns them, in the caller's
+   * order. One rejected row declines the batch. The rows are the server's own,
+   * carried back on the commit rather than read again afterwards.
+   */
+  createMany(params: ModelCreateManyParams<Record<string, unknown>>): Promise<T[]>;
   update(params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> }): Promise<CommitReceipt>;
   /**
    * Update under contention with a function of the latest state —

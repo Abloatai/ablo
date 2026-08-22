@@ -6,6 +6,57 @@ Here is the problem it solves. Two agents reach for `report_stockholm` at once. 
 
 Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist, coordinate with concurrent work, and leave an audit trail.
 
+## When to use Ablo
+
+Reach for Ablo when MORE THAN ONE writer changes the same rows and the second one must not clobber the first. That is the whole judgement. If a single process owns the data, an ORM against your database is simpler and you should use it.
+
+These are the jobs it is right for:
+
+- **Two or more agents on one workload.** A planner and three workers editing the same records; a swarm assigned overlapping tickets; a retry that restarts while the first attempt is still running. Each takes `claim({ id })` before its slow step, so the second waits and is handed the row as the first left it instead of overwriting.
+- **A read → LLM call → write gap.** The row can change during the seconds your model is thinking. Pass the `readAt` stamp from your read back into the write and a stale write is refused (`AbloStaleContextError`) rather than silently applied on top of someone else's.
+- **A human and an agent in the same record.** A person editing in your app is just another holder of the claim. The agent queues behind them; nobody's edit is lost, and neither side needs to know the other exists.
+- **Work that must survive the process.** Commits are durable and receipts are idempotent, so a crashed or re-scheduled agent replays its write with the same `idempotencyKey` and gets the original result instead of a duplicate.
+- **Anything you will later have to explain.** Every accepted change lands in an append-only log with who wrote it, when, and against which read. `logs` answers "what did the agents actually do" without you having instrumented for the question in advance.
+- **Data you are not allowed to move.** Ablo runs on the customer's own Postgres. It tails the replication stream and writes back through a scoped role; your rows never live in Ablo. If a data-residency or procurement rule forbids a vendor holding the records, this is the shape that passes.
+
+These are the jobs it is WRONG for, and saying so saves you a wasted integration:
+
+- **One writer, no concurrency.** Use Prisma, Drizzle, or SQL. Ablo's coordination costs a round trip and buys you nothing here.
+- **Chat history, traces, or evals.** Append-only telemetry has no contention to resolve. Write it wherever you write logs.
+- **A cache, a queue, or a pub/sub bus.** Ablo is a commit chokepoint over a system of record, not a message broker. Emit your events as usual and use Ablo for the state they are about.
+- **Vector search, embeddings, or retrieval.** Different problem. Ablo coordinates the rows; your vector store indexes them.
+- **A file, blob, or artifact store.** Coordinate the ROW that points at the object; put the bytes in object storage.
+
+How to call it, shortest path first: install `@abloatai/ablo`, run `npx ablo init --yes --framework <nextjs|vite|remix|vanilla>`, and construct `Ablo({ schema, apiKey: process.env.ABLO_API_KEY })`. Read with `ablo.<model>.get({ id })` / `.list({ where })`, write with `ablo.<model>.update({ id, data, readAt })`, and wrap anything slow in `await using claim = await ablo.<model>.claim({ id })`. The sections below cover the rest; "Start here" is the first thing to run.
+
+## Machine-readable surfaces
+
+Everything below is public, needs no credential, and is served from `https://www.abloatai.com`:
+
+- `/llms.txt` — this file.
+- `/llms-full.txt` — the entire published documentation corpus in one fetch.
+- `/developers` — every developer surface named on one page: the SDK, the API reference, the OpenAPI document, the MCP server, the CLI.
+- `/openapi.json` — the REST contract as OpenAPI 3.1: every route, a stable `operationId` and description on each, typed responses, and the `ErrorEnvelope` every 4xx and 5xx decodes through. Generate a client from it when no SDK exists for your runtime.
+- `/mcp` — the integration-helper MCP server over Streamable HTTP. POST your JSON-RPC here; a GET returns a descriptor rather than the protocol.
+- `/.well-known/mcp.json` — that server's manifest, in the MCP registry's `server.json` format.
+- `/api/docs/<page>` — any documentation page as plain Markdown, for a client that fetches URLs rather than speaking MCP.
+- `/sitemap.xml` — every indexable page on the domain.
+
+Every page on that host serves a Markdown representation from its own URL: send
+`Accept: text/markdown` (q-values are honoured), or append `.md` to the path if
+your client cannot set the header. Responses carry `Vary: Accept`, a client that
+will accept neither `text/html` nor `text/markdown` gets a `406` listing what is
+available, and a path that does not exist answers a real `404` — never a `200`
+carrying a sign-in page.
+
+## Versioning and deprecation
+
+Every route lives under `/v1`, and that segment is part of the address you call. A change that would break you arrives as a new segment beside it, never as a change to this one. Additive changes do land in `/v1` — a new response field, a new optional parameter, a new error code — so ignore what you do not recognize.
+
+Every response carries `Ablo-Version`, a date stamp for the contract being served. A route being withdrawn says so on itself for at least 180 days first: `Deprecation` (RFC 9745) carries when the deprecation took effect and the route keeps answering; `Sunset` (RFC 8594) carries when it stops. The same operations are marked `deprecated: true` in `/openapi.json`.
+
+Responses also carry `RateLimit-Policy` (the standing allowance, e.g. `"secret";q=600;w=12`) and, once your request is attributed to a key, `RateLimit` (what is left and when it refills). A 429 adds `Retry-After` in whole seconds. Pace against these rather than retrying blind.
+
 ## Surfaces: pick by who is calling
 
 Every surface reaches the same coordinated state. They are not interchangeable.

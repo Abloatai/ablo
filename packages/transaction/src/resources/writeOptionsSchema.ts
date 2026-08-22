@@ -107,3 +107,31 @@ const _writeOptionsContractInSync: AssertExact<
   keyof WriteOptionsContract
 > = true;
 void _writeOptionsContractInSync;
+
+/**
+ * Refuse a per-model write that does not name its row.
+ *
+ * `update` and `delete` address the row through the URL, so an absent `id`
+ * used to be spelled into the path by `encodeURIComponent` as the literal
+ * string `"undefined"`. The request was well-formed, it matched no row, and it
+ * came back as an ordinary receipt: `delete({ where: { id } })` reported
+ * success and deleted nothing. `{ where }` is the shape the commit protocol
+ * takes one layer down, so reaching for it here is an easy and quiet mistake.
+ *
+ * The typed surface already rejects it at compile time. This is the same
+ * refusal for callers who reach the transport without those types.
+ */
+export function assertWriteTarget(
+  action: 'update' | 'delete',
+  modelName: string,
+  id: unknown,
+): void {
+  if (typeof id === 'string' && id.length > 0) return;
+  const namedAFilter =
+    typeof id === 'object' && id !== null && 'where' in (id as Record<string, unknown>);
+  throw new AbloValidationError(
+    `A ${modelName} ${action} has to name the row it acts on: ${action}({ id })` +
+      (namedAFilter ? ', not a `where` filter.' : '.'),
+    { code: 'invalid_body', param: 'id' },
+  );
+}

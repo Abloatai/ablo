@@ -154,12 +154,16 @@ export {
   type InsertValue,
   type UpsertValue,
   type UpdateValue,
+  type Clearable,
   type DeleteId,
   type DefineSchemaOptions,
   type Casing,
   type CasingConvention,
   type CasingFn,
   composeEntitySyncGroups,
+  syncGroupsForRow,
+  InvalidRecordSubjectError,
+  type RecordSyncGroupSpec,
   intersectRequestedWithAllowed,
   type IdentityRole,
   type IdentityContext,
@@ -209,6 +213,18 @@ export {
   type ModelJSON,
   type RelationJSON,
 } from './serialize.js';
+
+export {
+  auditSchemaAccessPolicies,
+  type SchemaAuditFinding,
+} from './audit.js';
+
+export {
+  subjectRuleSchema,
+  subjectGroupForRow,
+  subjectAuthorized,
+  type SubjectRule,
+} from './subject.js';
 
 // Schema projection — derive an app's subset from one canonical schema.
 export { selectModels, omitModels, omittedModelError } from './select.js';

@@ -28,7 +28,7 @@ export const schema = defineSchema({
 `;
 }
 
-export function generateSyncConfig(auth: string): string {
+export function generateSyncConfig(auth: string, options: { serverOnly?: boolean } = {}): string {
   const authLine = auth === 'apikey'
     ? ''
     : auth === 'firebase'
@@ -43,7 +43,7 @@ export function generateSyncConfig(auth: string): string {
     ? `\n  // auth: async () => { const session = await authClient.getSession(); return session?.token ?? ''; },`
     : `\n  // auth: () => 'your-jwt-token', // replace with your auth provider`;
 
-  return `import Ablo from '@abloatai/ablo';
+  return `${options.serverOnly ? "import 'server-only';\n\n" : ''}import Ablo from '@abloatai/ablo';
 import { schema } from './schema';
 
 // SERVER-ONLY client — it holds your \`sk_\` key. Use it from server code: the
@@ -230,7 +230,10 @@ export async function POST(req: Request): Promise<Response> {
     const model: unknown = Reflect.get(prisma, event.model); // prisma.record, prisma.task, …
     if (!isModelDelegate(model)) continue; // a model you don't mirror locally — skip it
     if (event.data === null) {
-      await model.delete({ where: { id: event.objectId } }).catch(() => {}); // already gone
+      await model.delete({ where: { id: event.objectId } }).catch((error) => {
+        // Idempotent replay: a missing local row is already the desired state.
+        void error;
+      });
     } else {
       await model.upsert({ where: { id: event.objectId }, create: event.data, update: event.data });
     }
@@ -312,7 +315,7 @@ async function main() {
 main().catch((err) => {
   // Ablo errors stringify to one clean line (code + message + docs link),
   // never a stack/object dump — see AbloError.toString().
-  console.error(String(err));
+  process.stderr.write(String(err) + '\\n');
   process.exit(1);
 });
 `;

@@ -95,6 +95,7 @@ import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 	          ...(receipt.correlationId ? { correlationId: receipt.correlationId } : {}),
 	          ...(receipt.notifications ? { notifications: receipt.notifications } : {}),
 	          ...(receipt.missingIds ? { missingIds: receipt.missingIds } : {}),
+	          ...(receipt.operationResults ? { operationResults: receipt.operationResults } : {}),
 	        });
 	      }
 	      if (!ws.sendCommit) {

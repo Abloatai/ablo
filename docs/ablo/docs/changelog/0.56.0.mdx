@@ -1,23 +1,32 @@
 ---
 title: "v0.56.0"
 type: changelog
+date: 2026-08-19T19:31:06.069Z
 changelog:
   version: "0.56.0"
   category: "Features"
 ---
 
-### One customer no longer sees another's live work
+### Coordination reads are scoped to the customer, not the organization
 
-A platform's customers are rows in its own schema, so they share one
-organization and one plane. The claim listing and the presence read were scoped
-to exactly that pair and nothing finer. One customer could therefore see which
-rows another had claimed, who held them, what the work was called, and who was
-online. Row contents were never exposed; everything around them was.
+Coordination has always been scoped to the organization, and through 0.51.0 that
+was the whole boundary: a platform gave each customer its own organization, and
+the sessions guide was explicit that sync groups decide which changes travel
+rather than what a session may read.
 
-Both reads now apply the same cut the delivery path already applies, taken from
-the groups each side already carries. A customer sees the coordination for the
-rows it can see, and nothing else. If you serve many customers from one
-organization, this closes the gap without any change on your side.
+This release moves that line. A platform's customers are rows in its own schema,
+reached by the sync groups on the session, so many customers share one
+organization and the organization is no longer the finest boundary. The delivery
+path already applied the finer cut. The claim listing and the presence read did
+not, so under that newer arrangement one customer could see which rows another
+had claimed, who held them, what the work was called, and who was online. Row
+contents were never exposed; everything around them was.
+
+Both reads now take the same cut, from the groups each side already carries.
+
+If you give each customer its own organization, nothing changes for you and
+nothing was reachable across customers. If you serve many customers from one
+organization, this closes the gap with no change on your side.
 
 ### A client converges on the head it was measured against
 

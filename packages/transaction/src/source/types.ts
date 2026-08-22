@@ -80,8 +80,9 @@ export type SourceListResult<Row> =
  * see. Ablo attaches this so your `authorize` and model handlers can reject
  * calls that fall outside the participant's permitted sync groups.
  *
- * It is advisory. Because the canonical data lives in your database, your
- * handlers are the only place that can actually enforce these limits.
+ * The ORM adapters enforce schema-declared subject rules from this trusted
+ * scope. Custom handlers receive the same signed facts; Ablo also checks their
+ * returned rows and preflights writes before forwarding the customer transaction.
  */
 export interface SourceRequestContext {
   readonly participantId?: string;
@@ -91,6 +92,14 @@ export interface SourceRequestContext {
   readonly branchId?: string;
   /** Trusted project selected by the authenticating credential. */
   readonly projectId?: string;
+  readonly syncGroups?: readonly string[];
+  /**
+   * @deprecated Renamed to {@link SourceRequestContext.syncGroups}. Removed in
+   * 0.58.0. Ablo populates both spellings with the same value for this release,
+   * so an adapter still reading this one gets the groups rather than
+   * `undefined`, which on a routing field would read as "no groups" rather than
+   * as a missing field.
+   */
   readonly requiredSyncGroups?: readonly string[];
 }
 
@@ -122,6 +131,8 @@ export interface SourceDelta {
   readonly type: SourceOperation['type'];
   /** The changed row, in the key shape {@link SourceEvent.data} defines. */
   readonly data?: Record<string, unknown> | null;
+  /** Exact record routes derived inside the write transaction. */
+  readonly syncGroups?: readonly string[];
   readonly transactionId?: string | null;
 }
 
@@ -162,6 +173,8 @@ export interface SourceEvent {
    * a tenant boundary.
    */
   readonly data?: Record<string, unknown> | null;
+  /** Exact record routes captured while the changed row was transactionally visible. */
+  readonly syncGroups: readonly string[];
   /**
    * The tenant this event belongs to. Populate it from the row's organization
    * column for multi-tenant data; a single-tenant source may omit it and let
@@ -206,6 +219,8 @@ export interface SourceEventForOperationOptions {
    * valid but leaves less for clients to hydrate from in realtime.
    */
   readonly data?: Record<string, unknown> | null;
+  /** Exact record routes derived inside the write transaction. */
+  readonly syncGroups: readonly string[];
   /**
    * @deprecated Legacy echo identity. Prefer the explicit correlation fields.
    */
@@ -243,6 +258,7 @@ export function sourceEventForOperation(
     entityId,
     type: options.operation.type,
     ...(options.data !== undefined ? { data: options.data } : {}),
+    syncGroups: options.syncGroups,
     ...(options.organizationId ? { organizationId: options.organizationId } : {}),
     ...(options.clientTxId ? { clientTxId: options.clientTxId } : {}),
     ...(options.correlationId ? { correlationId: options.correlationId } : {}),
@@ -424,6 +440,18 @@ export interface SourceModelHandlers<Row, CreateInput, TAuth = unknown> {
     | SourceListResult<Row>;
 
   /**
+   * Subject-aware list boundary. The handler MUST apply `subject.values` in
+   * its database predicate before ordering, cursoring, or limiting. A model
+   * declaring `subject` is served only through this hook; plain `list()` is
+   * deliberately not accepted because post-page filtering is incomplete.
+   */
+  subjectList?(params: {
+    readonly query: SourceListQuery;
+    readonly subject: { readonly field: string; readonly values: readonly string[] };
+    readonly context: SourceHandlerContext<TAuth>;
+  }): Promise<SourceListResult<Row>> | SourceListResult<Row>;
+
+  /**
    * Apply one or more operations for this model within your own database
    * transaction. Your handler must be idempotent on the scoped server
    * `correlationId`, so that a retried commit does not apply the change twice.
@@ -445,6 +473,32 @@ export interface SourceModelHandlers<Row, CreateInput, TAuth = unknown> {
 export type SourceCommitHandler<TAuth = unknown> = (
   params: SourceCommitParams<TAuth>,
 ) => Promise<SourceCommitResult> | SourceCommitResult;
+
+export interface SourceSubjectTransactionBoundary {
+  /**
+   * Serialize a caller-selected CREATE id even when no row exists yet. This
+   * must be an absent-key-capable transaction lock (for example a Postgres
+   * transaction advisory lock), acquired on the SAME transaction as load and
+   * commit. It coordinates framework writers; `commit` must still reject a
+   * database uniqueness conflict as `entity_already_exists`, because external
+   * writers do not participate in advisory locking.
+   */
+  readonly lockCreate: (operation: SourceOperation) => Promise<void>;
+  /** Lock and return the current row on the SAME transaction used by commit. */
+  readonly load: (operation: SourceOperation) => Promise<Record<string, unknown> | null>;
+  /** Apply the complete batch on that transaction after authorization succeeds. */
+  readonly commit: () => Promise<SourceCommitResult>;
+}
+
+/**
+ * Transaction owner for hand-written subject-scoped commits. Open one database
+ * transaction, then call `run` with load/commit functions bound to it. `run`
+ * performs authorization first and invokes commit only after it succeeds.
+ */
+export type SourceSubjectTransactionHandler<TAuth = unknown> = (
+  params: SourceCommitParams<TAuth>,
+  run: (boundary: SourceSubjectTransactionBoundary) => Promise<SourceCommitResult>,
+) => Promise<SourceCommitResult>;
 
 export type SourceApiKey =
   | string

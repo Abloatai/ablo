@@ -211,7 +211,7 @@ describe('flattened commit record', () => {
       lifetime: 'commit' as const,
       onStale: 'reject' as const,
     }],
-    operations: [{ action: 'UPDATE', model: 'Item', id: 'item-1', data: { retention: 'redacted' } }],
+    operations: [{ action: 'update', model: 'Item', id: 'item-1', data: { retention: 'redacted' } }],
     receipt: { clientTxId: 'commit-1', serverTxId: 'server-1', ops: 1 },
   };
 
@@ -260,7 +260,7 @@ describe('flattened commit record', () => {
       ...evidence,
       ...confirmedStatus,
       operations: [{
-        action: 'UPDATE',
+        action: 'update',
         model: 'Item',
         id: 'item-1',
         data: { prompt: 'do not retain me' },

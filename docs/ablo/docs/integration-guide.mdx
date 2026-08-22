@@ -497,6 +497,31 @@ const completeReport = tool({
 
 Keep agent writes on the same schema client surface as the app.
 
+## One command changes an Ablo model and an ORM-only table
+
+Two independently committed calls are not one atomic command. If an Ablo write
+lands and a following Prisma/Drizzle transaction fails—or the reverse—the
+application must expect and repair the partial result. Calling that path
+“coordinated” does not extend Ablo’s claims, stale-read checks, attribution, or
+commit ordering into the ORM transaction.
+
+The supported atomic answer is to model every invariant-bearing row in the
+Ablo schema and submit the operations in one `commits.create` batch (the HTTP
+equivalent is `POST /api/v1/commits`). This applies on both database paths:
+
+- With direct logical replication, Ablo’s batch is one customer-database
+  transaction. A separate ORM transaction is still separate.
+- With a signed Data Source endpoint, the adapter applies the Ablo batch,
+  idempotency record, and outbox entry in one customer-database transaction.
+  Unrelated ORM work outside that adapter is still separate.
+
+There is no general transactional callback that can safely splice arbitrary
+application SQL into the hosted direct-write path. If a table must remain
+ORM-only, treat the command as a saga: give both steps the same durable business
+operation id, make each step idempotent, record progress, retry unfinished
+steps, and define compensation for a result that cannot be completed. State
+that guarantee as eventual completion with repair—not atomicity.
+
 ## Optional Surface
 
 | Optional piece                            | Why it exists                                                     |
@@ -520,6 +545,7 @@ them.
 | -------------------------------------- | -------------------------------------------------------------------------------- |
 | `get({ id })`                     | Async read of one row from the server (await it).                                |
 | `list({ where })`                      | Async read of many rows from the server (await it).                              |
+| `listAll({ where, maxPages?, signal? })` | Explicit bounded traversal of every matching page; filter before collecting.   |
 | `local.get(id)`                   | Synchronous local read of one synced row (use in render).                        |
 | `local.list({ where })`                | Synchronous local read of many synced rows.                                      |
 | `local.count({ where })`               | Synchronous local count of synced rows.                                          |

@@ -15,6 +15,7 @@ import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
 import { tenancyColumn } from '../../schema/tenancy.js';
 import type { AdapterReadRequest, Row } from '../adapter.js';
 import type { Operation } from '../contract.js';
+import { sourceSubjectRule, sourceSubjectValues } from '../subjectAuthorization.js';
 
 /** The subset of a Kysely instance, or transaction handle, used by the core. */
 export interface KyselyLike {
@@ -48,6 +49,7 @@ export interface KyselySelectBuilder {
   where(column: string, operator: string, value: unknown): KyselySelectBuilder;
   orderBy(column: string, direction: 'asc' | 'desc'): KyselySelectBuilder;
   limit(limit: number): KyselySelectBuilder;
+  forUpdate(): KyselySelectBuilder;
   execute(): Promise<readonly Row[]>;
 }
 
@@ -140,7 +142,11 @@ function suppliedOperationRowId(operation: Operation): string | undefined {
 
 /** The transport-independent Kysely field/column mutation boundary. */
 export interface KyselyMutationCore {
-  read(request: AdapterReadRequest): Promise<readonly Row[]>;
+  read(
+    request: AdapterReadRequest,
+    database?: KyselyLike,
+    options?: { readonly forUpdate?: boolean },
+  ): Promise<readonly Row[]>;
   applyOperation(transaction: KyselyLike, operation: Operation): Promise<Row>;
 }
 
@@ -185,22 +191,28 @@ export function createKyselyMutationCore<S extends SchemaRecord>(
   };
 
   return {
-    async read(request): Promise<readonly Row[]> {
+    async read(request, database = db, options): Promise<readonly Row[]> {
       const columns = modelColumns(request.model);
       if (request.kind === 'load') {
-        const rows = await db
+        let query = database
           .selectFrom(columns.table)
           .selectAll()
           .where(columnFor(columns, 'id'), '=', request.id)
-          .limit(1)
-          .execute();
+          .limit(1);
+        if (options?.forUpdate) query = query.forUpdate();
+        const rows = await query.execute();
         return rows.map((row) => toFields(columns, row));
       }
-      const rows = await db
+      let query = database
         .selectFrom(columns.table)
-        .selectAll()
-        .limit(request.query?.limit ?? 1000)
-        .execute();
+        .selectAll();
+      const rule = sourceSubjectRule(schema, request.model);
+      const subjects = sourceSubjectValues(rule, request.scope?.syncGroups);
+      if (subjects) {
+        if (subjects.length === 0) return [];
+        query = query.where(columnFor(columns, rule!.field), 'in', subjects);
+      }
+      const rows = await query.limit(request.query?.limit ?? 1000).execute();
       return rows.map((row) => toFields(columns, row));
     },
 

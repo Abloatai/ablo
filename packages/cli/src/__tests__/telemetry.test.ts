@@ -24,7 +24,7 @@ describe('CLI product telemetry', () => {
     delete process.env.DO_NOT_TRACK;
     delete process.env.ABLO_TELEMETRY_DISABLED;
     resetTelemetry();
-    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
 
   afterEach(() => {
@@ -37,7 +37,7 @@ describe('CLI product telemetry', () => {
   it('discloses once, creates a separate identity, and flushes a bounded batch', async () => {
     trackCliInitStarted({ interactive: true });
     trackCliInitCompleted(1_500, 'nextjs');
-    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(process.stderr.write).toHaveBeenCalledTimes(1);
 
     const requests: Array<{ url: string; body: unknown }> = [];
     await flushProductAnalytics({

@@ -120,6 +120,8 @@ export {
   // The request side of the same boundary — one definition, which the published
   // OpenAPI reference derives from rather than describing separately.
   commitOperationControlShape,
+  modelOperationActionSchema,
+  normalizeStorageOperationAction,
   commitOperationBodySchema,
   commitActorSchema,
   commitAttemptSchema,
@@ -133,6 +135,7 @@ export {
   commitRecordListSchema,
 } from './commit.js';
 export type {
+  ModelOperationAction,
   CommitOperationBody,
   CommitOperationResult,
   CommitActor,
@@ -408,3 +411,31 @@ export type {
   CapabilityRequest,
   CapabilityMintResponse,
 } from './auth.js';
+
+// How a rate limit is stated on a response, so a caller can pace itself rather
+// than discover the ceiling by hitting it. The field names and their Structured
+// Fields spellings live in one module because every producer — the engine's
+// per-key limiter and the public docs surfaces both — has to spell them the
+// same way for a client to read either.
+export {
+  RATE_LIMIT_HEADER,
+  RATE_LIMIT_POLICY_HEADER,
+  RETRY_AFTER_HEADER,
+  rateLimitField,
+  rateLimitPolicyField,
+  rateLimitHeaders,
+} from './rateLimit.js';
+export type { QuotaPolicy, ServiceLimit, RateLimitSignal } from './rateLimit.js';
+
+// What a caller can rely on about this surface not moving under it: the path
+// segment the routes live under, the header carrying the contract date, and the
+// two standard fields a withdrawal is announced on. The published OpenAPI
+// description renders `API_LIFECYCLE` rather than restating it.
+export {
+  API_PATH_VERSION,
+  API_VERSION_HEADER,
+  API_DEPRECATION_HEADER,
+  API_SUNSET_HEADER,
+  API_DEPRECATION_NOTICE_DAYS,
+  API_LIFECYCLE,
+} from './apiLifecycle.js';

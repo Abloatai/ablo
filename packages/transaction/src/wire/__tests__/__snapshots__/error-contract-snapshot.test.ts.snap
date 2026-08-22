@@ -489,6 +489,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "client",
     },
+    "entity_already_exists": {
+      "category": "conflict",
+      "httpStatus": 409,
+      "retryable": false,
+      "surface": "wire",
+    },
     "entity_claimed": {
       "category": "claim",
       "httpStatus": 409,

@@ -27,6 +27,7 @@ import { AbloValidationError } from '../errors.js';
 import type { IdentityRole } from './roles.js';
 import { fieldRef, type FieldRef } from './fieldRef.js';
 import { scopeSchema, grantsRefSchema } from './roles.js';
+import { subjectRuleSchema } from './subject.js';
 
 // Sync-group roles (identity and entity) are defined in `./roles.js` and
 // re-exported here so they can also be imported from this module. See
@@ -49,6 +50,9 @@ export {
   extractEntityIds,
   composeIdentitySyncGroups,
   composeEntitySyncGroups,
+  syncGroupsForRow,
+  InvalidRecordSubjectError,
+  type RecordSyncGroupSpec,
   intersectRequestedWithAllowed,
   syncGroup,
   identityAnchor,
@@ -150,6 +154,7 @@ export const RESERVED_SESSION_SETTINGS: readonly string[] = [
   'app.current_participant_id',
   'app.current_participant_kind',
   'app.current_user_id',
+  'app.current_subject_groups',
 ];
 
 export interface DefineSchemaOptions {
@@ -524,13 +529,33 @@ export type UpsertValue<S extends Schema, ModelName extends keyof S['models']> =
   InsertValue<S, ModelName>;
 
 /**
+ * A patch over a row's fields: send a field to change it, omit it to leave it,
+ * send `null` to CLEAR it.
+ *
+ * The third of those is why this is a mapped type rather than `Partial`.
+ * Omitting a field and clearing a field are different intentions that
+ * `Partial` spells the same way, because `undefined` is what an absent key
+ * already means: it is dropped from the payload, so a caller who wrote
+ * `{ assigneeId: undefined }` to unassign kept the old assignee, and the
+ * unassign, the un-project and the cleared due date all did nothing without
+ * erroring. `null` is the value that clears, so `null` is what the type has to
+ * accept — otherwise the only way to write a working clear is to cast the
+ * payload, and a cast is what people reached for.
+ *
+ * Only a field the schema lets be absent is clearable. A required field cannot
+ * be nulled, which is the same rule the column has.
+ */
+export type Clearable<T> = {
+  [K in keyof T]?: undefined extends T[K] ? T[K] | null : T[K];
+};
+
+/**
  * The value type for updating an existing row. `id` is required (identifies
- * the row to update); all other fields are optional (only provided fields
- * are changed).
+ * the row to update); every other field is a {@link Clearable} patch.
  */
 export type UpdateValue<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape>
-    ? { id: string } & Partial<z.input<z.ZodObject<Shape>>>
+    ? { id: string } & Clearable<z.input<z.ZodObject<Shape>>>
     : never;
 
 /**
@@ -708,6 +733,7 @@ export function defineSchema<const S extends SchemaRecord>(
   }
 
   validateSyncGroupSchema(resolvedModels);
+  validateSubjectSchema(resolvedModels);
   validateSessionSettings(options?.sessionSettings ?? {});
 
   return {
@@ -719,6 +745,45 @@ export function defineSchema<const S extends SchemaRecord>(
     identityRoles: options?.identityRoles ?? [],
     sessionSettings: options?.sessionSettings ?? {},
   };
+}
+
+function validateSubjectSchema(models: Record<string, ModelDef>): void {
+  for (const [name, def] of Object.entries(models)) {
+    if (!def.subject) continue;
+    const parsed = subjectRuleSchema.safeParse(def.subject);
+    if (!parsed.success) {
+      throw new AbloValidationError(
+        `Model "${name}": subject must be { field, group } with valid identifiers.`,
+        { code: 'schema_definition_invalid', param: `${name}.subject` },
+      );
+    }
+    if (!(def.subject.field in def.fields)) {
+      throw new AbloValidationError(
+        `Model "${name}": subject.field "${def.subject.field}" is not a declared field on this model.`,
+        { code: 'schema_definition_invalid', param: `${name}.subject.field` },
+      );
+    }
+    const field = def.shape[def.subject.field];
+    const meta = def.fields[def.subject.field];
+    if (!field || !meta) {
+      throw new AbloValidationError(
+        `Model "${name}": subject.field "${def.subject.field}" is not a declared field on this model.`,
+        { code: 'schema_definition_invalid', param: `${name}.subject.field` },
+      );
+    }
+    const subjectField = field as z.ZodType;
+    const acceptsInvalidValue =
+      subjectField.safeParse('').success ||
+      subjectField.safeParse(null).success ||
+      subjectField.safeParse(undefined).success ||
+      subjectField.safeParse(1).success;
+    if (!['string', 'enum'].includes(meta.type) || meta.isOptional || acceptsInvalidValue) {
+      throw new AbloValidationError(
+        `Model "${name}": subject.field "${def.subject.field}" must be a required, non-empty string field.`,
+        { code: 'schema_definition_invalid', param: `${name}.subject.field` },
+      );
+    }
+  }
 }
 
 /**

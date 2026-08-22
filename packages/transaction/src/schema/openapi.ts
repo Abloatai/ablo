@@ -53,6 +53,20 @@ import {
   claimReleaseReplySchema,
 } from '../wire/claims.js';
 import { errorEnvelopeSchema } from '../wire/errorEnvelope.js';
+// The lifecycle promise and the rate-limit fields are contract, not prose about
+// contract: the document renders the same constants the server emits, so the
+// published policy cannot describe a signal the runtime does not send.
+import {
+  API_DEPRECATION_HEADER,
+  API_LIFECYCLE,
+  API_SUNSET_HEADER,
+  API_VERSION_HEADER,
+} from '../wire/apiLifecycle.js';
+import {
+  RATE_LIMIT_HEADER,
+  RATE_LIMIT_POLICY_HEADER,
+  RETRY_AFTER_HEADER,
+} from '../wire/rateLimit.js';
 import { modelReadResponseSchema, modelListResponseSchema } from '../wire/modelResponses.js';
 import { modelMutationRequestSchema } from '../wire/modelMutations.js';
 import { logListResponseSchema, logQuerySchema } from '../wire/feedEvent.js';
@@ -400,6 +414,106 @@ const claimIdParam = (): Json => ({
  */
 const commitBody = (): Json => jsonBody(derive(commitRequestSchema, 'input'));
 
+/**
+ * The response headers every operation carries, declared once under
+ * `components/headers` and referenced from each response.
+ *
+ * A header a caller is expected to act on has to be IN the document to be
+ * actionable: a generated client surfaces what the spec declares and drops what
+ * it does not, so an undeclared `RateLimit` is a header the caller never sees
+ * and therefore never paces against. Declaring them here rather than at each
+ * response is what keeps one description of each — the reason the names are
+ * imported rather than typed out.
+ */
+const RESPONSE_HEADER_COMPONENTS: Readonly<Record<string, Json>> = {
+  AbloVersion: {
+    description:
+      'The date-stamped contract version this response was served under. Record ' +
+      'the value your integration was built against; a change means something ' +
+      'observable was added.',
+    schema: { type: 'string', examples: ['2026-08-15'] },
+  },
+  RateLimitPolicy: {
+    description:
+      'The standing allowance for this credential kind, as a Structured Fields ' +
+      'List: `"secret";q=600;w=12`. It does not move between responses, so read ' +
+      'it once and pace against it.',
+    schema: { type: 'string', examples: ['"secret";q=600;w=12'] },
+  },
+  RateLimit: {
+    description:
+      'This caller\u2019s live position in the allowance: `r` units left, `t` ' +
+      'seconds until they refill. Present once the request is attributed to a ' +
+      'credential.',
+    schema: { type: 'string', examples: ['"secret";r=412;t=8'] },
+  },
+  RetryAfter: {
+    description: 'Whole seconds to wait before retrying. Sent with 429 and 503.',
+    schema: { type: 'integer', minimum: 1, examples: [8] },
+  },
+  RequestId: {
+    description:
+      'Correlation id for this request, repeated in the error envelope\u2019s ' +
+      '`request_id`. Quote it in a support request.',
+    schema: { type: 'string', examples: ['req_52bb7f46-17bc-4f2d-9988-89d1398d2990'] },
+  },
+  Deprecation: {
+    description:
+      'Present only on a route being withdrawn: an sf-Date of when the ' +
+      'deprecation took effect (RFC 9745). The route still answers normally.',
+    schema: { type: 'string', examples: ['@1774483200'] },
+  },
+  Sunset: {
+    description:
+      'Present only on a route being withdrawn: the HTTP-date it stops ' +
+      'answering (RFC 8594). Never less than the published notice window after ' +
+      `\`${API_DEPRECATION_HEADER}\`.`,
+    schema: { type: 'string', examples: ['Tue, 08 Sep 2026 00:00:00 GMT'] },
+  },
+};
+
+const headerRef = (name: string): Json => ({ $ref: `#/components/headers/${name}` });
+
+/** Carried by every response, whatever its status. */
+const UNIVERSAL_RESPONSE_HEADERS: Readonly<Record<string, Json>> = {
+  [API_VERSION_HEADER]: headerRef('AbloVersion'),
+  'X-Request-Id': headerRef('RequestId'),
+  [RATE_LIMIT_POLICY_HEADER]: headerRef('RateLimitPolicy'),
+  [RATE_LIMIT_HEADER]: headerRef('RateLimit'),
+  [API_DEPRECATION_HEADER]: headerRef('Deprecation'),
+  [API_SUNSET_HEADER]: headerRef('Sunset'),
+};
+
+/** Statuses where a wait is what resolves the failure, so `Retry-After` is sent. */
+const RETRY_AFTER_STATUSES = new Set(['429', '503']);
+
+/**
+ * Stamp the documented headers onto every response of every operation.
+ *
+ * Runs after the responses are built — including the canonical error ones — so
+ * a response added later cannot quietly ship without them.
+ */
+function attachResponseHeaders(paths: Json): void {
+  for (const rawPathItem of Object.values(paths)) {
+    const pathItem = rawPathItem as Json;
+    for (const [method, rawOperation] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method)) continue;
+      const operation = rawOperation as Json;
+      const responses = (operation.responses ?? {}) as Json;
+      for (const [status, rawResponse] of Object.entries(responses)) {
+        const response = rawResponse as Json;
+        response.headers = {
+          ...UNIVERSAL_RESPONSE_HEADERS,
+          ...(RETRY_AFTER_STATUSES.has(status)
+            ? { [RETRY_AFTER_HEADER]: headerRef('RetryAfter') }
+            : {}),
+          ...((response.headers as Json | undefined) ?? {}),
+        };
+      }
+    }
+  }
+}
+
 /** The envelope shared by both specs — same server, same auth, same version. */
 function envelope(options: SchemaToOpenApiOptions, description: string, paths: Json, schemas: Record<string, Json>): Json {
   return {
@@ -407,7 +521,11 @@ function envelope(options: SchemaToOpenApiOptions, description: string, paths: J
     info: {
       title: options.title ?? 'Ablo API',
       version: options.version ?? 'development',
-      description,
+      // The lifecycle policy travels WITH the routes it governs. An agent
+      // deciding whether to integrate needs to know the surface will not move
+      // under it, and a policy published somewhere else is one it has to go
+      // find — so the document that describes the calls describes the promise.
+      description: `${description}\n\n${API_LIFECYCLE}`,
       license: {
         name: 'Apache License 2.0',
         identifier: 'Apache-2.0',
@@ -417,8 +535,9 @@ function envelope(options: SchemaToOpenApiOptions, description: string, paths: J
     security: [{ bearerAuth: [] }],
     components: {
       securitySchemes: {
-        bearerAuth: { type: 'http', scheme: 'bearer', description: 'Your Ablo API key (sk_… / rk_…).' },
+        bearerAuth: { type: 'http', scheme: 'bearer', description: 'Your Ablo API key (sk_\u2026 / rk_\u2026).' },
       },
+      headers: { ...RESPONSE_HEADER_COMPONENTS },
       schemas,
     },
     paths,
@@ -950,6 +1069,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
 
   applyOperationIds(paths, ABLO_OPERATION_IDS);
   attachCanonicalErrors(paths);
+  attachResponseHeaders(paths);
 
   return envelope(
     options,
@@ -1078,6 +1198,7 @@ export function schemaToOpenApi<S extends SchemaRecord>(
   operationIds['GET /v1/commits/{id}'] = 'getCommit';
   applyOperationIds(paths, operationIds);
   attachCanonicalErrors(paths);
+  attachResponseHeaders(paths);
 
   Object.assign(schemas, abloComponentSchemas());
 

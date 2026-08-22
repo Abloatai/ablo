@@ -1,0 +1,16 @@
+---
+/**
+ * The `Footer` layout slot.
+ *
+ * Blume exposes exactly one site-wide injection point below the content grid,
+ * so this is where every page-level behavior has to mount. It owns no chrome
+ * and renders nothing visible; its single job is composing the behaviors, each
+ * of which stays a module with one responsibility rather than being folded in
+ * here as a second concern.
+ */
+import SidebarAccordion from "./SidebarAccordion.astro";
+import DocsAnalytics from "./DocsAnalytics.astro";
+---
+
+<SidebarAccordion />
+<DocsAnalytics />

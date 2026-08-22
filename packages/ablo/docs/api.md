@@ -53,6 +53,7 @@ Each schema model becomes a typed model on the client:
 
 - `ablo.weatherReports.get({ id })` reads one row asynchronously (server read).
 - `ablo.weatherReports.list({ where })` reads a collection asynchronously (server read).
+- `ablo.weatherReports.listAll({ where })` explicitly reads every matching page.
 - `ablo.weatherReports.local.get(id)` reads one row synchronously from the local graph.
 - `ablo.weatherReports.create({ data })` creates a row.
 - `ablo.weatherReports.update({ id, data, ...options })` updates a row.
@@ -68,6 +69,7 @@ fallback removed — nothing to await, so they return a value.
 |---|---|---|
 | `get({ id })` | `Promise<T \| undefined>` | You need one row, hydrating from local store and server. |
 | `list({ where })` | `Promise<ModelList<T>>` | You need to hydrate a collection from local store and server. |
+| `listAll({ where, maxPages?, signal? })` | `Promise<T[]>` | You deliberately need every matching row. |
 | `local.get(id)` | `T \| undefined` | You want a synchronous snapshot of one local row. |
 | `local.list(options?)` | `T[]` | You want a synchronous snapshot of a local collection. |
 | `local.count(options?)` | `number` | You want a synchronous count of local rows. |
@@ -79,24 +81,57 @@ fallback removed — nothing to await, so they return a value.
 through the server. The `local` reads work off the rows a session has already
 synced, so a cheap re-read needs no round-trip.
 
-### Paging a collection
+### Reading a whole collection
 
-`list` returns a page. The result is an array, so it maps and iterates as
-before, and it carries `hasMore` and `nextCursor` alongside the rows:
+Prefer a filtered `listAll` when the application truly needs one complete
+array. It follows the same cursor loop as async iteration, defaults to at most
+100 pages, and checks an abort signal between requests and rows:
 
 ```ts
-let cursor: string | null = null;
+const controller = new AbortController();
+const open = await ablo.weatherReports.listAll({
+  where: { status: ['draft', 'review'] },
+  orderBy: { createdAt: 'asc' },
+  maxPages: 25,
+  signal: controller.signal,
+});
+```
+
+A complete traversal can be expensive in latency, memory, and read volume.
+Narrow it with `where`; use `list` and its cursor when a UI or worker can process
+one page at a time.
+
+`for await` walks the pages:
+
+```ts
 const open = [];
-do {
-  const page = await ablo.weatherReports.list({
-    where: { status: ['draft', 'review'] },
-    orderBy: { createdAt: 'asc' },
-    limit: 100,
-    ...(cursor ? { cursor } : {}),
-  });
-  open.push(...page);
-  cursor = page.hasMore ? page.nextCursor : null;
-} while (cursor);
+for await (const report of await ablo.weatherReports.list({
+  where: { status: ['draft', 'review'] },
+  orderBy: { createdAt: 'asc' },
+})) {
+  open.push(report);
+}
+```
+
+`list` returns a page, because the server applies a default size and caps the
+largest. The result is an array, so it maps and iterates as before, and it
+carries `hasMore` and `nextCursor` alongside the rows. Iterate it to work with
+the page you were handed; `for await` it to work with the collection.
+
+```ts
+const page = await ablo.weatherReports.list({ where: { status: 'draft' } });
+page.length;    // the rows this page carries
+page.hasMore;   // whether the collection continues past them
+```
+
+Take the cursor yourself when the pages go somewhere other than a loop — one
+screenful at a time, or a job that stops and resumes:
+
+```ts
+const page = await ablo.weatherReports.list({ where: { status: 'draft' }, limit: 100 });
+const next = page.hasMore
+  ? await ablo.weatherReports.list({ where: { status: 'draft' }, limit: 100, cursor: page.nextCursor })
+  : null;
 ```
 
 Keep `where` and `orderBy` the same across pages: the cursor encodes the sort
@@ -105,6 +140,22 @@ position it was issued for, and a read that changes either starts a new walk.
 `where` accepts operators as well as equality, and both travel to the server:
 `{ status: ['draft', 'review'] }` is an `IN`, and tuple form spells the rest
 out, as in `[['title', 'ILIKE', '%storm%'], ['createdAt', '>=', cutoff]]`.
+
+### Changing a field, and clearing one
+
+`null` clears a field:
+
+```ts
+await ablo.weatherReports.update({ id, data: { reviewerId: null } });   // unassigned
+await ablo.weatherReports.update({ id, data: { reviewerId: 'usr_2' } }); // reassigned
+```
+
+An update is a patch, so a field you leave out keeps its value. That makes
+`undefined` and "leave it alone" the same thing: `{ reviewerId: undefined }`
+is dropped from the payload and the old reviewer stays. Reach for `null`
+whenever a value is going away, and the type will hold you to it — only a
+field your schema declares optional accepts one, since a required field has no
+empty value to move to.
 
 ## Protected Writes
 

@@ -62,7 +62,7 @@ const make = () =>
 describe("Ablo({ transport: 'http' }) facade shape", () => {
   it('exposes typed model proxies with the full HTTP surface', () => {
     const items = make().items;
-    for (const m of ['get', 'list', 'create', 'update', 'delete'] as const) {
+    for (const m of ['get', 'list', 'listAll', 'create', 'update', 'delete'] as const) {
       expect(typeof Reflect.get(items, m)).toBe('function');
     }
     expect(typeof items.claim).toBe('function'); // claim is callable
@@ -663,7 +663,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     expect(mutationBody).not.toHaveProperty('readAt');
   });
 
-  it('carries a claim independently without adding an implicit read dependency', async () => {
+  it('guards a claimed write with the lease watermark, without an implicit read dependency', async () => {
     let mutationBody: Record<string, unknown> | undefined;
     let rowReads = 0;
     const c = Ablo({
@@ -707,12 +707,65 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       idempotencyKey: 'claimed-update',
     });
 
+    // Two axes, and only one of them is a read dependency. `reads` is the
+    // batch premise — what the caller looked at — and taking a claim must not
+    // enrol the row into it implicitly. `readAt` is the write's own stale
+    // guard, and the claim is exactly where it should come from: the lease
+    // carries the watermark the row was read at, so a write that names the
+    // claim is guarded by it without restating it.
     expect(mutationBody).toMatchObject({
       claim: 'claim-read-set',
       fenceToken: 9,
+      readAt: 51,
+      onStale: 'reject',
     });
-    expect(mutationBody).not.toHaveProperty('readAt');
     expect(mutationBody).not.toHaveProperty('reads');
+  });
+
+  it('lets an explicit stale guard override the one the claim supplies', async () => {
+    let mutationBody: Record<string, unknown> | undefined;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_claim_readat_override',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'POST' && path.endsWith('/item-1/claim')) {
+          return Promise.resolve(jsonResponse(claimAcquiredResponse(modelClaim({
+            id: 'claim-override', model: 'items', entityId: 'item-1', fenceToken: 9,
+          }))));
+        }
+        if (method === 'GET' && path.endsWith('/item-1')) {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'items', id: 'item-1',
+            data: { id: 'item-1', title: 'Claimed', status: 'todo' },
+            stamp: 51,
+          })));
+        }
+        if (method === 'PATCH' && path.endsWith('/item-1')) {
+          mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Promise.resolve(jsonResponse(confirmedCommitReceiptResponse({
+            clientTxId: 'override-update',
+            serverTxId: 'server-override-update',
+            lastSyncId: 52,
+          })));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const held = await c.items.claim({ id: 'item-1' });
+    await c.items.update({
+      id: 'item-1', data: { status: 'done' }, claim: held,
+      readAt: 40, onStale: 'overwrite',
+      idempotencyKey: 'override-update',
+    });
+
+    expect(mutationBody).toMatchObject({ readAt: 40, onStale: 'overwrite' });
   });
 
   it('rejects cloned rows and leaves idempotency identity explicit', async () => {
@@ -1254,5 +1307,31 @@ describe('collection reads carry the whole filter and say where the page ends', 
     const rows = await c.items.list();
     expect(rows.hasMore).toBe(false);
     expect(rows.nextCursor).toBeNull();
+  });
+
+  it('collects all cursor pages through the public listAll facade', async () => {
+    const cursors: (string | null)[] = [];
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_list_all',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input) => {
+        const cursor = new URL(String(input)).searchParams.get('cursor');
+        cursors.push(cursor);
+        return Promise.resolve(jsonResponse(modelListResponse({
+          model: 'items',
+          data: cursor
+            ? [{ id: 'item-2', title: 'Two', status: 'done' }]
+            : [{ id: 'item-1', title: 'One', status: 'todo' }],
+          hasMore: cursor === null,
+          nextCursor: cursor === null ? 'cur_next' : null,
+        })));
+      },
+    });
+
+    const rows = await c.items.listAll({ where: { status: ['todo', 'done'] } });
+    expect(rows.map(({ id }) => id)).toEqual(['item-1', 'item-2']);
+    expect(cursors).toEqual([null, 'cur_next']);
   });
 });

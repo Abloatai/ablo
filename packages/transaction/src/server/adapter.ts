@@ -25,6 +25,7 @@ import type { ServerSyncDelta } from '../wire/delta.js';
 import type { BootstrapModel } from './readConfig.js';
 import type { CommitContext, CommitExecutionResult } from './commit.js';
 import type { StorageMode } from './storageMode.js';
+import type { SubjectRule } from '../schema/subject.js';
 
 /**
  * A canonical database row: one record, keyed by column name. The value type is
@@ -141,6 +142,7 @@ export type ReadRequest =
       readonly sourceModel?: string;
       /** `__typename` stamped on each returned row. */
       readonly typename: string;
+      readonly subject?: SubjectRule;
       readonly query: SourceListQuery;
       readonly scope?: SourceRequestContext;
       /** Runs the query against a hosted database: compile, take the tenant pool, apply row-level security, unpack the rows. */

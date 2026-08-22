@@ -589,6 +589,9 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       hydration,
       {
         createClaim: (claimOptions) => publicClaims.create(claimOptions),
+        // Lazily referenced: `commits` is declared below this loop, and this
+        // only runs when someone actually writes a batch.
+        commitBatch: (commitOptions) => commits.create(commitOptions),
         readPoint,
         createSnapshot: (modelKey, id) =>
           createSnapshot({
@@ -701,7 +704,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	        return { id: clientTxId, status: 'queued' };
 	      }
 
-	      const { lastSyncId, notifications, missingIds } =
+	      const { lastSyncId, notifications, missingIds, operationResults } =
 	        await queue.waitForCommitReceipt(clientTxId);
 	      return {
 	        id: clientTxId,
@@ -709,6 +712,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	        lastSyncId,
 	        ...(notifications && notifications.length > 0 ? { notifications } : {}),
 	        ...(missingIds && missingIds.length > 0 ? { missingIds } : {}),
+	        ...(operationResults && operationResults.length > 0 ? { operationResults } : {}),
 	      };
 	    },
 	    async get({ id }) {

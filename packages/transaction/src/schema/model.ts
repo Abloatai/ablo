@@ -21,6 +21,7 @@
 import { z } from 'zod';
 import type { RelationDef } from './relation.js';
 import type { EntityRole, GroupsInput } from './roles.js';
+import type { SubjectRule } from './subject.js';
 import { getFieldMeta, inferFieldMetaFromZod, type FieldMeta } from './field.js';
 // Tenancy lives in `tenancy.ts`. Authoring uses the `policy` option
 // (`PolicyInput`), which `resolvePolicy` normalizes into the canonical `Tenancy`
@@ -153,6 +154,14 @@ export interface ModelOptions {
   policy?: PolicyInput;
 
   /**
+   * Credential-bound row authorization below organization tenancy. The named
+   * row field must match a trusted credential group: `{ field: 'workspaceId',
+   * group: 'workspace' }` authorizes only rows whose `workspaceId` has a
+   * matching `workspace:<id>` group on the request.
+   */
+  subject?: SubjectRule;
+
+  /**
    * Which database a model's rows live in. `tenant` (the default) is tenant data
    * that provisioning places in the customer's own database; `control` is Ablo's own
    * data — the sync log, attribution, and audit records — which never leaves Ablo's
@@ -176,6 +185,8 @@ export interface ModelOptions {
    * - `roles` — explicit record-to-group roles keyed on a plain field, for routing
    *   that does not follow a relation, such as fanning a message into a recipient's
    *   inbox. Accepts one role or many.
+   * - `routingOnly: true` — explicitly acknowledges that these delivery groups
+   *   are intentionally narrower than the model's independently safe read policy.
    *
    * ```ts
    * // archiveMember: { userId, archiveId }
@@ -353,6 +364,8 @@ export interface ModelDef<
   /** The canonical tenancy descriptor for this model, normalized from the `policy`
    *  option at build time. See {@link ModelOptions.policy}. */
   readonly tenancy: Tenancy;
+  /** Credential-bound row authorization. See {@link ModelOptions.subject}. */
+  readonly subject?: SubjectRule;
   /** Which database this model's rows live in — `tenant` (default) can be a
    *  customer's own database; `control` is Ablo's. See {@link ModelOptions.plane}. */
   readonly plane?: ModelResidency;
@@ -362,6 +375,8 @@ export interface ModelDef<
   readonly grants?: GrantsRef;
   /** Explicit record-to-group roles, normalized to an array. See {@link ModelOptions.groups}. */
   readonly entityRoles?: readonly EntityRole[];
+  /** Explicit acknowledgement that sync groups are routing, not row access. */
+  readonly routingOnly?: true;
   /** The write-conflict disposition per committer kind, carried as plain data. See
    *  {@link ModelOptions.conflict}. */
   readonly conflict?: ConflictAxis;
@@ -445,11 +460,13 @@ export function model<
     // Normalize the `policy` option into the canonical tenancy descriptor (defaults
     // to a row-local organization column).
     tenancy: resolvePolicy(options?.policy),
+    subject: options?.subject,
     plane: options?.plane ?? DEFAULT_RESIDENCY,
     // Unpack the `groups` option into the individual routing fields the server reads.
     scope: options?.groups?.root,
     grants: options?.groups?.grants,
     entityRoles: normalizeEntityRoles(options?.groups?.roles),
+    routingOnly: options?.groups?.routingOnly,
     // The conflict disposition is already plain data, so it passes through unchanged.
     conflict: options?.conflict,
     mutable: options?.mutable ?? true,

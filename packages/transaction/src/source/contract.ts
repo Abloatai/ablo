@@ -29,6 +29,7 @@ import {
   type SourceCommitEchoMarker,
   type SourceOperation,
 } from './types.js';
+import type { SourceRequestContext } from './types.js';
 
 const jsonObject = z.record(z.string(), z.unknown());
 
@@ -149,6 +150,14 @@ export const changeSetSchema = z.object({
   correlationId: correlationIdSchema,
   intentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   echo: sourceCommitEchoSchema.optional(),
+  scope: z.object({
+    participantId: z.string().optional(),
+    participantKind: z.enum(['user', 'agent', 'system']).optional(),
+    organizationId: z.string().optional(),
+    branchId: z.string().optional(),
+    projectId: z.string().optional(),
+    syncGroups: z.array(z.string()).optional(),
+  }).optional() satisfies z.ZodType<SourceRequestContext | undefined>,
 });
 export type ChangeSet = z.infer<typeof changeSetSchema>;
 
@@ -168,6 +177,8 @@ export const outboxEventSchema = z.object({
   /** The changed row, in the key shape `SourceEvent.data` defines: the model's
    *  declared schema fields, never the table's physical column names. */
   data: jsonObject.nullish(),
+  /** Exact record routes captured in the same transaction as the row change. */
+  syncGroups: z.array(z.string().min(1)).readonly(),
   organizationId: z.string().nullish(),
   /** Legacy source transaction id. Never use this field to settle a queued commit. */
   clientTxId: z.string().nullish(),

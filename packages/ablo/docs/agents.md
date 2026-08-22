@@ -46,6 +46,63 @@ and `claim`. It does **not** expose stateful-only `local` reads or `onChange`
 subscriptions. Those need a live connection, so with `transport: 'http'` they
 are compile errors rather than runtime surprises.
 
+## Managed scoped agents
+
+When this process owns the secret client and also runs the agent, prefer
+`agents.create`. It mints the restricted credential, returns a schema-typed
+client, and renews that credential for a long run. `sessions.create({ agent })`
+is the raw-token path for handing identity to another runtime.
+
+Derive identity and groups from the run row or trusted job payload—not from
+model output or an HTTP request body. A serverless handler normally creates and
+disposes one child per invocation:
+
+```ts
+const run = await control.runs.get({ id: verifiedRunId });
+if (!run) throw new Error('run not found');
+
+const agent = await control.agents.create({
+  id: `run:${run.id}`,
+  name: 'run-worker',
+  can: { records: ['read', 'update'] },
+  syncGroups: [`workspace:${run.workspaceId}`],
+});
+try {
+  await executeRun(agent, run);
+} finally {
+  await agent.dispose();
+}
+```
+
+Use a stable id only when one logical run is serialized; two concurrent workers
+that share an id appear as the same participant. For independent concurrent
+work, omit `id` and let Ablo create distinct identities.
+
+A long-running worker may cache one managed client per stable scope, but the
+cache owns lifecycle: evict idle clients, call `dispose()` on eviction, and
+dispose every client during graceful shutdown. Never cache a client and later
+reuse it for a different workspace or capability set.
+
+```ts
+const agents: Record<
+  string,
+  Awaited<ReturnType<typeof control.agents.create>> | undefined
+> = {};
+
+async function agentFor(run: Run) {
+  const key = `${run.workspaceId}:${run.workerSlot}`;
+  const cached = agents[key];
+  if (cached) return cached;
+  const created = await control.agents.create({
+    id: `worker:${key}`,
+    can: { records: ['read', 'update'] },
+    syncGroups: [`workspace:${run.workspaceId}`],
+  });
+  agents[key] = created;
+  return created;
+}
+```
+
 ## AI SDK tools
 
 Keep AI SDK in charge of the model loop and expose only the Ablo operations the

@@ -268,13 +268,6 @@ const streamTargetSchema = targetRefSchema
 export const onStaleModeSchema = z.enum(['reject', 'overwrite', 'notify']);
 export type OnStaleMode = z.infer<typeof onStaleModeSchema>;
 
-/** @deprecated A ReadSet entry retains a {@link logPositionSchema} like every
- *  other position; the reader is the owner, and the owner belongs in the field
- *  name rather than in a second type. Removed in 0.57.0. */
-export const readSetWatermarkSchema = logPositionSchema;
-/** @deprecated Use {@link LogPosition}. Removed in 0.57.0. */
-export type ReadSetWatermark = LogPosition;
-
 /** Maximum decision-input entries one logical commit may ask the server to scan. */
 export const MAX_READ_SET_ENTRIES = 500;
 

@@ -846,6 +846,12 @@ export const ERROR_CODES = {
     false,
     'The database rejected the write on a foreign-key constraint: a referenced row does not exist, or the row being deleted is still referenced by others. The error details name the constraint.'
   ),
+  entity_already_exists: wire(
+    'conflict',
+    409,
+    false,
+    'A row already exists with this id. CREATE is strict; use UPDATE for an existing row.'
+  ),
   unique_violation: wire(
     'conflict',
     409,

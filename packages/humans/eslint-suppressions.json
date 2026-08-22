@@ -263,11 +263,6 @@
       "count": 1
     }
   },
-  "__tests__/unit/applyPool.bench.test.ts": {
-    "jest/unbound-method": {
-      "count": 1
-    }
-  },
   "__tests__/unit/BaseSyncedStore.hydrateGroups.test.ts": {
     "@typescript-eslint/require-await": {
       "count": 2
@@ -410,6 +405,11 @@
   "__tests__/unit/SyncWebSocket.test.ts": {
     "@typescript-eslint/no-empty-function": {
       "count": 4
+    }
+  },
+  "__tests__/unit/applyPool.bench.test.ts": {
+    "jest/unbound-method": {
+      "count": 1
     }
   },
   "__tests__/unit/architecture/abloNamespace.test.ts": {
@@ -685,9 +685,6 @@
     },
     "@typescript-eslint/no-unused-vars": {
       "count": 2
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 1
     },
     "@typescript-eslint/require-await": {
       "count": 1

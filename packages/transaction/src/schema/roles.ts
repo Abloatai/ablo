@@ -219,6 +219,8 @@ export const groupsInputSchema = z.object({
   root: scopeSchema.optional(),
   grants: grantsRefSchema.optional(),
   roles: z.union([entityRoleSchema, z.array(entityRoleSchema)]).optional(),
+  /** Acknowledge that these groups are delivery routing, not row access. */
+  routingOnly: z.literal(true).optional(),
 });
 export type GroupsInput = z.infer<typeof groupsInputSchema>;
 
@@ -312,6 +314,57 @@ export function composeEntitySyncGroups(
     }
   }
   return Array.from(out);
+}
+
+/** The row fields needed to derive its durable delivery groups. */
+export interface RecordSyncGroupSpec {
+  readonly subject?: { readonly kind: string; readonly field: string };
+  readonly selfKind?: string;
+  readonly parents: readonly { readonly kind: string; readonly field: string }[];
+}
+
+/** A subject-scoped row cannot be routed safely without its declared subject. */
+export class InvalidRecordSubjectError extends Error {
+  readonly field: string;
+
+  constructor(field: string) {
+    super(`Record lacks non-empty subject field "${field}".`);
+    this.name = 'InvalidRecordSubjectError';
+    this.field = field;
+  }
+}
+
+/**
+ * Derive the exact durable delivery groups for a row.
+ *
+ * Delivery matching is OR-based, so a declared subject is an exclusive
+ * authorization route: self, parent, entity-role, writer, and transitive groups
+ * must not become alternate ways to receive the row. Additional groups are
+ * accepted here so every producer applies that rule in this one place.
+ */
+export function syncGroupsForRow(
+  spec: RecordSyncGroupSpec | undefined,
+  record: Readonly<Record<string, unknown>>,
+  additionalGroups: readonly string[] = [],
+): string[] {
+  if (spec?.subject) {
+    const value = record[spec.subject.field];
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new InvalidRecordSubjectError(spec.subject.field);
+    }
+    return [syncGroup(spec.subject.kind, value)];
+  }
+
+  const groups = new Set<string>(additionalGroups);
+  if (!spec) return [...groups];
+  if (spec.selfKind && typeof record.id === 'string' && record.id.length > 0) {
+    groups.add(syncGroup(spec.selfKind, record.id));
+  }
+  for (const parent of spec.parents) {
+    const value = record[parent.field];
+    if (value) groups.add(syncGroup(parent.kind, String(value)));
+  }
+  return [...groups];
 }
 
 /**

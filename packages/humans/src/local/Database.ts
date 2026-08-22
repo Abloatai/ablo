@@ -5,7 +5,6 @@
  * server. {@link BaseSyncedStore} drives it, and {@link InstanceCache} holds the
  * in-memory mirror of what this class persists.
  */
-
 import { DatabaseManager, type DatabaseInfo, type WorkspaceMetadata } from './stores/DatabaseManager.js';
 import type { PersistenceIdentity } from './stores/persistenceIdentity.js';
 import { StoreManager } from './stores/StoreManager.js';

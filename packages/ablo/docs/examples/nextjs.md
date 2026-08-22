@@ -45,6 +45,8 @@ has no credential and the engine fails to initialize with `session_expired`.
 
 ```ts
 // lib/ablo.ts — server-only
+import 'server-only';
+
 import Ablo from '@abloatai/ablo';
 import { schema } from './ablo.schema';
 
@@ -58,30 +60,59 @@ export const ablo = Ablo({
 ## Session Route
 
 The browser can't hold `sk_`, so a backend route mints a scoped, short-lived
-`ek_` for the signed-in user. Guard it with your own auth.
+`ek_` for the signed-in user. Being signed in is not workspace authorization:
+revalidate the active membership immediately before every mint, and derive all
+organization, workspace, team, and group ids on the server. Never accept them
+from the request body.
 
 ```ts
 // app/api/ablo-session/route.ts
 import { ablo } from '@/lib/ablo';
 import { getCurrentUser } from '@/auth';
+import { headers } from 'next/headers';
 import {
   credentialEndpointErrorSchema,
   credentialEndpointSuccessSchema,
 } from '@abloatai/ablo/auth';
 
-export async function POST() {
+const noStore = { 'Cache-Control': 'no-store' };
+
+export async function POST(request: Request) {
+  if (!(await isSameOrigin(request))) {
+    return Response.json(
+      credentialEndpointErrorSchema.parse({
+        error: { code: 'origin_mismatch', message: 'Cross-origin mint rejected' },
+      }),
+      { status: 403, headers: noStore },
+    );
+  }
+
   const user = await getCurrentUser();
   if (!user) {
     return Response.json(
       credentialEndpointErrorSchema.parse({
         error: { code: 'session_expired' },
       }),
-      { status: 401, headers: { 'Cache-Control': 'no-store' } },
+      { status: 401, headers: noStore },
+    );
+  }
+
+  // Query your membership table now—not when the login session was created.
+  // The helper reads the active workspace from server-side session state and
+  // returns null when the membership is stale or revoked.
+  const scope = await authorizeActiveWorkspace(user.id);
+  if (!scope) {
+    return Response.json(
+      credentialEndpointErrorSchema.parse({
+        error: { code: 'policy_denied', message: 'Workspace membership is stale or revoked' },
+      }),
+      { status: 403, headers: noStore },
     );
   }
 
   const { token, expiresAt } = await ablo.sessions.create({
     user: { id: user.id },
+    syncGroups: scope.syncGroups,
     can: { records: ['read', 'create', 'update'] },
   });
   return Response.json(
@@ -90,10 +121,22 @@ export async function POST() {
       expiresAt,
       credentialKind: 'ephemeral',
     }),
-    { headers: { 'Cache-Control': 'no-store' } },
+    { headers: noStore },
   );
 }
+
+async function isSameOrigin(request: Request): Promise<boolean> {
+  const origin = request.headers.get('origin');
+  if (!origin) return request.headers.get('sec-fetch-site') !== 'cross-site';
+  const host = (await headers()).get('host');
+  return host !== null && new URL(origin).host === host;
+}
 ```
+
+`authorizeActiveWorkspace` is application code: it must query the authoritative
+membership store and return server-derived sync groups. If fifteen-minute token
+expiry is too slow for your revocation requirements, mint a shorter
+`ttlSeconds` and revoke active sessions when membership changes.
 
 ## Provider
 

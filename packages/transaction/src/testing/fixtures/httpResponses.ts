@@ -53,6 +53,12 @@ export function confirmedCommitReceiptResponse(args: {
   lastSyncId?: number;
   serverTxId?: string;
   ops?: number;
+  /** The exact rows the writing transaction returned, one per operation. */
+  operationResults?: {
+    transactionId: string;
+    outcome: 'created' | 'updated' | 'deleted' | 'archived' | 'unarchived';
+    row: Record<string, unknown>;
+  }[];
 }): CommitReceiptWire {
   const lastSyncId = args.lastSyncId ?? 0;
   return {
@@ -65,6 +71,7 @@ export function confirmedCommitReceiptResponse(args: {
     status: 'confirmed',
     lastSyncId,
     ops: args.ops ?? 1,
+    ...(args.operationResults ? { operationResults: args.operationResults } : {}),
   } satisfies CommitReceiptWire;
 }
 

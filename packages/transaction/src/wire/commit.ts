@@ -405,10 +405,25 @@ export const commitOperationControlShape = {
   fenceToken: z.number().nullish(),
 };
 
+/** Canonical public spelling of a model operation. */
+export const modelOperationActionSchema = z.enum([
+  'create',
+  'update',
+  'delete',
+  'archive',
+  'unarchive',
+]);
+export type ModelOperationAction = z.infer<typeof modelOperationActionSchema>;
+
+/** Convert a storage operation verb into the canonical lowercase commit action. */
+export function normalizeStorageOperationAction(value: string): ModelOperationAction {
+  return modelOperationActionSchema.parse(value.toLowerCase());
+}
+
 /** One write inside a commit, in the canonical spelling. */
 export const commitOperationBodySchema = z.object({
   ...commitOperationControlShape,
-  action: z.string(),
+  action: modelOperationActionSchema,
   model: z.string(),
   data: z.record(z.string(), z.unknown()).nullish(),
   where: z.record(z.string().min(1), z.unknown()).nullish(),

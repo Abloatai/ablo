@@ -37,11 +37,14 @@ import type {
   AbloSession,
   SessionResource,
 } from '../resources/httpResources.js';
-import { modelList } from '../resources/httpResources.js';
+import { collectModelList, modelList } from '../resources/httpResources.js';
+import { resolveCreateId } from '../resources/modelCreate.js';
 import type {
   ModelCreateParams,
+  ModelCreateManyParams,
   ModelDeleteParams,
   ServerReadOptions,
+  ListAllOptions,
   ModelRetrieveParams,
   ModelTrackParams,
   ModelTrackResult,
@@ -136,6 +139,8 @@ export interface HttpModelClient<T, C = T> {
    * back as `cursor`, with the same `where` and `orderBy`, to walk it.
    */
   list(options?: ServerReadOptions<T>): Promise<ModelList<CapturedRow<T>>>;
+  /** Reads every matching row, following cursors with a bounded traversal. */
+  listAll(options?: ListAllOptions<T>): Promise<CapturedRow<T>[]>;
   /**
    * Creates a row and returns it, including any framework-applied defaults.
    * Passing an id that already exists is idempotent: the existing row is
@@ -148,6 +153,11 @@ export interface HttpModelClient<T, C = T> {
    * of `update` and `delete`.
    */
   create(params: HttpModelMutationParams<ModelCreateParams<T, C>>): Promise<T>;
+  /**
+   * Creates many rows as one atomic commit, and resolves to them in the order
+   * they were given. One rejected row declines the batch.
+   */
+  create(params: HttpModelMutationParams<ModelCreateManyParams<C>>): Promise<T[]>;
   update(params: HttpModelMutationParams<ModelUpdateParams<T, C>>): Promise<T>;
   /**
    * Updates a row with a function of its latest value — `update(id, current =>
@@ -434,6 +444,65 @@ function createHttpModelClient<T, C = T>(
     return read.data as CapturedRow<T> | undefined;
   };
 
+  // `create` is overloaded: one row, or a list of them as one atomic commit.
+  // A real overloaded function rather than a property arrow, so both public
+  // signatures survive — the same reason `updateModel` is written this way.
+  function createModel(
+    params: HttpModelMutationParams<ModelCreateParams<T, C>>,
+  ): Promise<CapturedRow<T>>;
+  function createModel(
+    params: HttpModelMutationParams<ModelCreateManyParams<C>>,
+  ): Promise<CapturedRow<T>[]>;
+  async function createModel(
+    params:
+      | HttpModelMutationParams<ModelCreateParams<T, C>>
+      | HttpModelMutationParams<ModelCreateManyParams<C>>,
+  ): Promise<CapturedRow<T> | CapturedRow<T>[]> {
+    const prepared = preparedMutation(params);
+    try {
+      // The list form is one atomic commit through the protocol's batch door.
+      // Same verb because it is the same act; the argument says how many.
+      if (Array.isArray(params.data)) {
+        const rows = await protocol.createMany({
+          data: params.data as readonly Record<string, unknown>[],
+          ...(prepared.options.idempotencyKey
+            ? { idempotencyKey: prepared.options.idempotencyKey }
+            : {}),
+          ...(prepared.options.reads
+            ? { reads: [...prepared.options.reads] }
+            : {}),
+          ...(prepared.options.track
+            ? { track: [...prepared.options.track] }
+            : {}),
+        });
+        consumeReadSet(
+          readSetContext,
+          clientIdentity,
+          prepared.consumed,
+          prepared.automaticCommit,
+        );
+        return rows as CapturedRow<T>[];
+      }
+      const single = params as HttpModelMutationParams<ModelCreateParams<T, C>>;
+      const resolvedId = resolveCreateId(single.id, single.data);
+      const row = await protocol.create({
+        ...prepared.options,
+        ...(resolvedId !== undefined ? { id: resolvedId } : {}),
+        data: single.data as Record<string, unknown>,
+      });
+      consumeReadSet(
+        readSetContext,
+        clientIdentity,
+        prepared.consumed,
+        prepared.automaticCommit,
+      );
+      return row as CapturedRow<T>;
+    } catch (error) {
+      abortReadSetCommit(readSetContext, prepared.automaticCommit);
+      throw error;
+    }
+  }
+
   const list = async (
     options?: ServerReadOptions<T>,
   ): Promise<ModelList<CapturedRow<T>>> => {
@@ -441,6 +510,10 @@ function createHttpModelClient<T, C = T>(
     const page = modelList<CapturedRow<T>>(
       snapshot.data as readonly CapturedRow<T>[],
       snapshot,
+      // Following pages re-enter this same read, so each one is captured into
+      // the read set exactly as the first was. A `for await` over the result
+      // therefore carries the same evidence a manual cursor walk would.
+      (cursor) => list({ ...options, cursor }),
     );
     const registry = readSetContext?.getStore();
     if (!registry) return page;
@@ -465,6 +538,15 @@ function createHttpModelClient<T, C = T>(
       capturePointRead(readSetContext, clientIdentity, modelName, id, row, stamp);
     }
     return page;
+  };
+
+  const listAll = async (
+    options: ListAllOptions<T> = {},
+  ): Promise<CapturedRow<T>[]> => {
+    const { maxPages, signal, ...readOptions } = options;
+    signal?.throwIfAborted();
+    const first = await list(readOptions);
+    return collectModelList(first, { maxPages, signal });
   };
 
   // Claim acquisition performs its authoritative read only after the grant.
@@ -493,28 +575,8 @@ function createHttpModelClient<T, C = T>(
     get,
     retrieve: get,
     list,
-    async create(params): Promise<T> {
-      const id = params.id ?? '';
-      const prepared = preparedMutation(params);
-      let row: T;
-      try {
-        row = await protocol.create({
-          ...prepared.options,
-          ...(params.id !== undefined ? { id: params.id } : {}),
-          data: params.data as Record<string, unknown>,
-        });
-      } catch (error) {
-        abortReadSetCommit(readSetContext, prepared.automaticCommit);
-        throw error;
-      }
-      consumeReadSet(
-        readSetContext,
-        clientIdentity,
-        prepared.consumed,
-        prepared.automaticCommit,
-      );
-      return row;
-    },
+    listAll,
+    create: createModel,
     update,
     async delete(params): Promise<void> {
       const prepared = preparedMutation(params);

@@ -53,6 +53,7 @@ context, whether or not you map anything:
 | `app.current_participant_id` | The participant making the write |
 | `app.current_participant_kind` | Whether that participant is a person, an agent, or the system |
 | `app.current_user_id` | The person on whose behalf the write is made |
+| `app.current_subject_groups` | The subject groups the caller belongs to, as a JSON array of `group:value` strings |
 
 If your policies read these names directly, you need no mapping at all — this
 page is for the case where they read different ones.
@@ -64,6 +65,14 @@ Callers do not supply it, and the column does not need a SQL default. A default
 from `app.current_org_id` can be useful as defense in depth, but it is not a
 substitute for the tenant policy and you should never loosen RLS to make an
 Ablo write pass.
+
+`app.current_subject_groups` is the one a model with a `subject` rule reads. A
+subject rule names a field and a group — `subject: { field: 'teamId', group:
+'team' }` — and Ablo provisions a policy asking whether the array contains
+`team:` followed by that row's value. The setting is always present, and it is
+`[]` when the caller belongs to no group, so a policy on a pooled connection
+reads an empty membership as an empty membership rather than inheriting what the
+previous transaction left behind.
 
 `app.current_user_id` is worth reading twice, because it has three states rather
 than two. It carries a person's id when a person is behind the write. It carries

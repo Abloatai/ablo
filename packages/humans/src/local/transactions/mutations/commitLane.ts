@@ -1,6 +1,9 @@
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { ReadDependency, TrackDependency, OnStaleMode, StaleNotification } from '@abloatai/transaction/coordination/schema';
-import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
+import type {
+  CommitOperationResult,
+  MutationCommitResult,
+} from '@abloatai/transaction/wire/commit';
 import type {
   DurableCommitEnvelope,
   DurableCommitOperation,
@@ -28,6 +31,8 @@ export interface CommitTransaction {
   transientAttempts?: number;
   firstTransientFailureAt?: number;
   lastSyncId?: number;
+  /** Fresh transport rows. Deliberately transient: durable server replays redact row data. */
+  operationResults?: CommitOperationResult[];
   correlationId?: string;
   error?: Error;
   sealedAt: number;
@@ -77,7 +82,12 @@ export interface CommitReceiptContext {
 export function waitForCommitReceipt(
   ctx: CommitReceiptContext,
   clientTxId: string,
-): Promise<{ lastSyncId: number; notifications?: StaleNotification[]; missingIds?: string[] }> {
+): Promise<{
+  lastSyncId: number;
+  notifications?: StaleNotification[];
+  missingIds?: string[];
+  operationResults?: CommitOperationResult[];
+}> {
   const drainNotifications = (): StaleNotification[] | undefined => {
     const notifications = ctx.commitNotifications.get(clientTxId);
     if (!notifications) return undefined;
@@ -90,21 +100,28 @@ export function waitForCommitReceipt(
     ctx.commitMissingIds.delete(clientTxId);
     return ids.length > 0 ? ids : undefined;
   };
-  const receipt = (lastSyncId: number) => {
+  const receipt = (transaction: CommitTransaction, lastSyncId: number) => {
     const missingIds = drainMissingIds();
     return {
       lastSyncId,
       notifications: drainNotifications(),
+      ...(transaction.operationResults
+        ? { operationResults: transaction.operationResults }
+        : {}),
       ...(missingIds ? { missingIds } : {}),
     };
   };
   return new Promise((resolve, reject) => {
     const existing = ctx.commitStore.get(clientTxId);
-    if (existing?.status === 'completed') { resolve(receipt(existing.lastSyncId ?? 0)); return; }
+    if (existing?.status === 'completed') { resolve(receipt(existing, existing.lastSyncId ?? 0)); return; }
     if (existing?.status === 'failed' && existing.error) { reject(existing.error); return; }
     const lagError = ctx.replicationLagErrors.get(clientTxId);
     if (lagError) { reject(lagError); return; }
-    const onCompleted = (tx: object) => { cleanup(); resolve(receipt((tx as CommitTransaction).lastSyncId ?? 0)); };
+    const onCompleted = (tx: object) => {
+      cleanup();
+      const completed = tx as CommitTransaction;
+      resolve(receipt(completed, completed.lastSyncId ?? 0));
+    };
     const onFailed = (payload: object) => { cleanup(); reject((payload as { error: Error }).error); };
     const onLagged = (payload: object) => { cleanup(); reject((payload as { error: Error }).error); };
     const cleanup = () => {
@@ -152,6 +169,7 @@ export async function processCommitLane(ctx: CommitLaneContext): Promise<void> {
         const result = await ctx.dispatchCommit(durableEnvelope);
         tx.durableEnvelope = await ctx.persistDurableCommitAcceptance(durableEnvelope, result);
         tx.lastSyncId = result.lastSyncId;
+        if (result.operationResults?.length) tx.operationResults = [...result.operationResults];
         if (result.notifications?.length) ctx.commitNotifications.set(tx.id, result.notifications);
         if (result.missingIds?.length) ctx.commitMissingIds.set(tx.id, result.missingIds);
         ctx.commitLane.shift();

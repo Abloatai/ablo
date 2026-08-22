@@ -37,8 +37,25 @@ import {
   resolveHeartbeatPlan,
   startClaimHeartbeatLoop,
 } from '@abloatai/transaction/coordination/claimHeartbeatLoop';
-import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
-import { modelList, type ModelList } from '@abloatai/transaction/resources/httpResources';
+import {
+  assertWriteOptions,
+  assertWriteTarget,
+} from '@abloatai/transaction/resources/writeOptionsSchema';
+import {
+  createModelId,
+  resolveCreatedRows,
+  resolveCreateId,
+} from '@abloatai/transaction/resources/modelCreate';
+import type {
+  CommitCreateOptions,
+  CommitReceipt,
+} from '@abloatai/transaction/resources/httpResources';
+import type { HttpModelMutationParams } from '@abloatai/transaction/transport/httpClient';
+import {
+  collectModelList,
+  modelList,
+  type ModelList,
+} from '@abloatai/transaction/resources/httpResources';
 import { subTarget } from '@abloatai/transaction/coordination';
 // A named claim-meta crossing (see `claim-meta-crossings-are-enumerated` in
 // .dependency-cruiser.cjs): the reactive proxy's self-claim targets are
@@ -76,6 +93,7 @@ export type {
   LocalReadOptions,
   LocalCountOptions,
   ServerReadOptions,
+  ListAllOptions,
   ServerGetOptions,
   ServerRetrieveOptions,
   ClaimTargetOptions,
@@ -112,6 +130,7 @@ import type {
   JoinOptions,
   LocalCountOptions,
   LocalReadOptions,
+  ModelCreateManyParams,
   ModelCreateParams,
   ModelDeleteParams,
   ModelRetrieveParams,
@@ -119,6 +138,7 @@ import type {
   ModelTrackResult,
   ModelUpdateParams,
   ServerReadOptions,
+  ListAllOptions,
 } from '@abloatai/transaction/resources/modelOperations';
 import {
   claimQueueView,
@@ -165,6 +185,17 @@ type EntityHalf = Pick<ModelTarget, 'model' | 'id'>;
 export interface ModelCollaboration {
   /** Exact point evidence from the HTTP read boundary (stamp captured before data). */
   readPoint(model: string, id: string): Promise<{ data: unknown; stamp: number }>;
+  /**
+   * The batch commit lane, for a create handed a list of rows.
+   *
+   * A reactive client's single writes go through the mutation queue and land
+   * optimistically, because a rejected write rolls one row back. A batch
+   * cannot: it is atomic, so applying the rows one at a time would paint a
+   * half-written state the server may then decline whole. It goes down the
+   * same commit door the stateless client uses and the rows arrive on the
+   * ordinary stream, the way a teammate's would.
+   */
+  commitBatch(options: CommitCreateOptions): Promise<CommitReceipt>;
   createClaim(options: {
     /**
      * The locator, in the spelling the SDK surface and the HTTP routes use.
@@ -1198,19 +1229,98 @@ export function createModelProxy<T, C>(
     return page;
   });
 
-  const operations: ModelOperations<T, C> = {
-    local,
+  /**
+   * Creates many rows as one atomic commit, and returns them in caller order.
+   */
+  const createManyRows = async (
+    params: HttpModelMutationParams<ModelCreateManyParams<C>>,
+  ): Promise<T[]> => {
+    if (params.data.length === 0) return [];
+    if (!collaboration) {
+      throw new AbloValidationError(
+        `Model "${schemaKey}" was built without the collaboration runtime, so a batch ` +
+          `create is unavailable here. Use the standard Ablo({ schema, apiKey }) client.`,
+        { code: 'model_claim_not_configured' },
+      );
+    }
 
-    get,
-    retrieve: get,
+    const prepared = prepareReadSet(
+      readSetContext,
+      readSetClientIdentity,
+      undefined,
+      undefined,
+      params.idempotencyKey,
+      params.reads,
+    );
+    try {
+      const organizationId = syncClient.getOrganizationId() ?? undefined;
+      const ids: string[] = [];
+      const operations = params.data.map((row) => {
+        const fields = row as Record<string, unknown>;
+        const id =
+          resolveCreateId(undefined, fields) ??
+          createModelId(
+            registeredModelName,
+            params.idempotencyKey ? `${params.idempotencyKey}:${ids.length}` : null,
+          );
+        ids.push(id);
+        return {
+          action: 'create' as const,
+          model: registeredModelName,
+          data: { organizationId: fields.organizationId ?? organizationId, ...fields, id },
+          id,
+        };
+      });
 
-    // No automatic scope enrolment on bulk `list`: that would subscribe to an
-    // unbounded set of rows' entity groups.
-    list,
+      const receipt = await collaboration.commitBatch({
+        operations,
+        wait: 'confirmed',
+        ...(prepared.idempotencyKey
+          ? { idempotencyKey: prepared.idempotencyKey }
+          : params.idempotencyKey
+            ? { idempotencyKey: params.idempotencyKey }
+            : {}),
+        ...(prepared.reads
+          ? { reads: [...prepared.reads] }
+          : {}),
+        ...(params.track ? { track: [...params.track] } : {}),
+      });
 
-    create: guardWrite(async (params: ModelCreateParams<T, C>): Promise<T> => {
-      const id = params.id ?? Model.generateId();
-      const claim = params.claim;
+      const rows = await resolveCreatedRows<T>({
+        modelName: registeredModelName,
+        ids,
+        operationResults: receipt.operationResults,
+        readRow: async (id) => {
+          const read = await collaboration.readPoint(registeredModelName, id);
+          return read.data as T | undefined;
+        },
+      });
+      consumeReadSet(
+        readSetContext,
+        readSetClientIdentity,
+        prepared.consumed,
+        prepared.automaticCommit,
+      );
+      return rows;
+    } catch (error) {
+      abortReadSetCommit(readSetContext, prepared.automaticCommit);
+      throw error;
+    }
+  };
+
+  // `create` takes one row or a list of them. The list form is atomic and
+  // is therefore NOT applied optimistically: see `createManyRows`.
+  const createImpl = guardWrite(async (
+    params:
+      | HttpModelMutationParams<ModelCreateParams<T, C>>
+      | HttpModelMutationParams<ModelCreateManyParams<C>>,
+  ): Promise<T | T[]> => {
+    if (Array.isArray(params.data)) {
+      return createManyRows(params as HttpModelMutationParams<ModelCreateManyParams<C>>);
+    }
+    const single = params as ModelCreateParams<T, C>;
+      const id = resolveCreateId(single.id, single.data) ?? Model.generateId();
+      const claim = single.claim;
       let autoLease: Claim | undefined;
       if (claim && !isClaimHandle(claim)) {
         if (!collaboration) {
@@ -1258,7 +1368,7 @@ export function createModelProxy<T, C>(
       });
       let prepared: PreparedReadSet | undefined;
       try {
-        const resolved = preparedMutation(params);
+        const resolved = preparedMutation(single);
         prepared = resolved.prepared;
         const effective: MutationOptions = {
           ...resolved.options,
@@ -1294,7 +1404,41 @@ export function createModelProxy<T, C>(
       } finally {
         await autoLease?.release?.().catch(() => {});
       }
+  });
+
+  // Two public signatures over one implementation. A property arrow would
+  // collapse them to their union, and a single create would start
+  // resolving to `T | T[]` for every caller.
+  function createRows(
+    params: HttpModelMutationParams<ModelCreateParams<T, C>>,
+  ): Promise<T>;
+  function createRows(
+    params: HttpModelMutationParams<ModelCreateManyParams<C>>,
+  ): Promise<T[]>;
+  function createRows(
+    params:
+      | HttpModelMutationParams<ModelCreateParams<T, C>>
+      | HttpModelMutationParams<ModelCreateManyParams<C>>,
+  ): Promise<T | T[]> {
+    return createImpl(params);
+  }
+
+  const operations: ModelOperations<T, C> = {
+    local,
+
+    get,
+    retrieve: get,
+
+    // No automatic scope enrolment on bulk `list`: that would subscribe to an
+    // unbounded set of rows' entity groups.
+    list,
+    listAll: guard(async (options: ListAllOptions<T> = {}) => {
+      const { maxPages, signal, ...readOptions } = options;
+      signal?.throwIfAborted();
+      return collectModelList(await list(readOptions), { maxPages, signal });
     }),
+
+    create: createRows,
 
     // `update` is overloaded — classic `update({ id, data })` + functional
     // `update(id, current => next)`. The IIFE keeps the shared error-guard
@@ -1400,6 +1544,10 @@ export function createModelProxy<T, C>(
           });
         }
         const params = arg;
+        // Named before anything reads it. Without this the row lookup below
+        // reports `Entity not found: Model/undefined`, which sends the reader
+        // looking for a missing row rather than at the unaddressed write.
+        assertWriteTarget('update', registeredModelName, params.id);
         const autoClaim =
           params.claim && !isClaimHandle(params.claim) ? params.claim : null;
         if (autoClaim) {
@@ -1495,6 +1643,9 @@ export function createModelProxy<T, C>(
     })(),
 
     delete: guardWrite(async (params: ModelDeleteParams<T, C>): Promise<void> => {
+      // Before the idempotent "ensure absent" below can read this as a row that
+      // is simply not here. An unaddressed delete is a mistake, not an absence.
+      assertWriteTarget('delete', registeredModelName, params.id);
       const autoClaim =
         params.claim && !isClaimHandle(params.claim) ? params.claim : null;
       if (autoClaim) {

@@ -47,13 +47,6 @@ import { z } from 'zod';
 export const logPositionSchema = z.number().int().nonnegative();
 export type LogPosition = z.infer<typeof logPositionSchema>;
 
-/** @deprecated One position type, one name: use {@link logPositionSchema}.
- *  This spelling is removed in 0.57.0. It resolves to the definition above, so
- *  the two cannot drift while both are exported. */
-export const deltaPositionSchema = logPositionSchema;
-/** @deprecated One position type, one name: use {@link LogPosition}. Removed in 0.57.0. */
-export type DeltaPosition = LogPosition;
-
 export const clientMutationIdSchema = z.string().min(1).max(255);
 export type ClientMutationId = z.infer<typeof clientMutationIdSchema>;
 

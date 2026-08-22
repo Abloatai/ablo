@@ -97,9 +97,15 @@ export function publishCommitRecord(
   registry.commitRecords.set(record.id, record);
   try {
     const observed = registry.onCommitRecord?.(record);
-    if (observed) void Promise.resolve(observed).catch(() => undefined);
-  } catch {
+    if (observed) {
+      void Promise.resolve(observed).catch((error) => {
+        // The observer is outside the transaction outcome by contract.
+        void error;
+      });
+    }
+  } catch (error) {
     // Observability must never change a commit's outcome.
+    void error;
   }
 }
 

@@ -47,6 +47,13 @@ import {
 } from '../migrations.js';
 import { ABLO_POSTGRES_COMMIT_ECHO_PREFIX } from '../types.js';
 import {
+  authorizeSourceChange,
+  authorizeSourceRead,
+  lockSourceSubjectCreates,
+  rethrowStrictCreateConflict,
+  sourceSyncGroups,
+} from '../subjectAuthorization.js';
+import {
   createKyselyMutationCore,
   kyselyOperationRowId,
   type KyselyCompiledQuery,
@@ -259,6 +266,8 @@ export interface KyselyMutationAdapterOptions {
    * typenames equal its keys.
    */
   readonly markerModelFor?: (operationModel: string) => string;
+  /** Schema required to enforce row/subject authorization in this adapter. */
+  readonly schema?: Schema;
 }
 
 export function createKyselyMutationAdapter(
@@ -287,8 +296,9 @@ export function createKyselyMutationAdapter(
         : idempotencyLedgerMigrations();
     },
 
-    read(request) {
-      return core.read(request);
+    async read(request) {
+      const rows = await core.read(request);
+      return options.schema ? authorizeSourceRead(options.schema, request, rows) : rows;
     },
 
     async commit(change: ChangeSet): Promise<AdapterCommitResult> {
@@ -326,6 +336,25 @@ export function createKyselyMutationAdapter(
           return { rows: parseCachedRows(cachedRow.response) };
         }
 
+        if (options.schema) {
+          await lockSourceSubjectCreates(options.schema, request, async (_operation, key) => {
+            await transaction.executeQuery(rawQuery(
+              'subject-create-lock',
+              'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+              [key],
+            ));
+          });
+          await authorizeSourceChange(options.schema, request, async (operation) => {
+            if (!operation.id) return null;
+            const rows = await core.read(
+              { kind: 'load', model: operation.model, id: operation.id },
+              transaction,
+              { forUpdate: true },
+            );
+            return rows[0] ?? null;
+          });
+        }
+
         // Direct mode dispatches every operation before awaiting any of them, so
         // the driver pipelines them into one trip instead of paying a full
         // round trip per row. Postgres still executes them IN ORDER on the
@@ -339,9 +368,17 @@ export function createKyselyMutationAdapter(
         // returned row, so operation i+1's write cannot be dispatched before
         // operation i has answered.
         const rows: Row[] = [];
+        const applyStrict = async (operation: ChangeSet['operations'][number]): Promise<Row> => {
+          try {
+            return await core.applyOperation(transaction, operation);
+          } catch (error) {
+            if (operation.type === 'CREATE') rethrowStrictCreateConflict(error, operation);
+            throw error;
+          }
+        };
         if (mode === 'direct') {
           const dispatched = request.operations.map((operation) =>
-            core.applyOperation(transaction, operation),
+            applyStrict(operation),
           );
           // Settle every dispatch before inspecting, so a later rejection is
           // never an unhandled rejection, then surface the FIRST failure in
@@ -354,7 +391,7 @@ export function createKyselyMutationAdapter(
           }
         } else {
           for (const [index, operation] of request.operations.entries()) {
-            const row = await core.applyOperation(transaction, operation);
+            const row = await applyStrict(operation);
             rows.push(row);
 
             const entityId = String(row.id ?? kyselyOperationRowId(operation));
@@ -366,6 +403,9 @@ export function createKyselyMutationAdapter(
                 entity_id: entityId,
                 type: operation.type,
                 data: operation.type === 'DELETE' ? null : JSON.stringify(row),
+                sync_groups: options.schema
+                  ? sourceSyncGroups(options.schema, operation.model, row)
+                  : [],
                 correlation_id: request.correlationId,
                 transaction_id: operation.transactionId ?? null,
                 occurred_at: Date.now(),
@@ -402,6 +442,7 @@ export function kyselyDataSource<S extends SchemaRecord>(
     db,
     createKyselyMutationCore(db, schema),
     'endpoint',
+    { schema },
   );
 
   return defineDatabaseAdapter({
@@ -423,6 +464,7 @@ export function kyselyDataSource<S extends SchemaRecord>(
           entityId: row.entity_id,
           type: row.type,
           data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data ?? null,
+          syncGroups: row.sync_groups ?? [],
           organizationId: row.organization_id ?? null,
           clientTxId: row.client_tx_id ?? null,
           correlationId: row.correlation_id ?? null,
@@ -458,6 +500,7 @@ export function kyselyDirectMutation<S extends SchemaRecord>(
         markerModels.get(operationModel) ??
         markerModels.get(operationModel.toLowerCase()) ??
         operationModel,
+      schema,
     },
   );
 }

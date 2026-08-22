@@ -720,6 +720,15 @@
       "docUrl": "https://docs.abloatai.com/errors#duration_invalid"
     },
     {
+      "code": "entity_already_exists",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "A row already exists with this id. CREATE is strict; use UPDATE for an existing row.",
+      "docUrl": "https://docs.abloatai.com/errors#entity_already_exists"
+    },
+    {
       "code": "entity_claimed",
       "category": "claim",
       "surface": "wire",

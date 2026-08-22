@@ -1106,7 +1106,7 @@ export abstract class Model {
     }
 
     // Try to get model class by identifier
-    let ModelClass = getActiveRegistry().getModelByName(modelIdentifier);
+    const ModelClass = getActiveRegistry().getModelByName(modelIdentifier);
 
     if (!ModelClass) {
       throw new AbloValidationError(

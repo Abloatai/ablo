@@ -1,5 +1,47 @@
 # @abloatai/transaction
 
+## 0.57.0
+
+### Minor Changes
+
+- Detect mutable schemas that use narrower sync-group routing without a matching
+  row-access policy, with an explicit routing-only acknowledgement for intentional
+  designs. Generate membership-revalidating, same-origin Next.js session routes
+  and protect secret clients with the framework's `server-only` boundary.
+
+  Add `listAll({ where, maxPages, signal })` as an explicit bounded complete-read
+  API backed by the existing `ModelList` cursor walker. Document managed scoped
+  agent lifecycles and the non-atomic contract for commands split across Ablo and
+  ORM-only tables.
+
+  Enforce schema-declared row subjects across reads, writes, claims, presence,
+  and every storage adapter. Caller-selected CREATE ids now use strict conflict
+  semantics, and source outboxes persist transactionally derived `syncGroups` so
+  tombstones reach only the row's authorized subject group. Subject-scoped models
+  stamp exactly that one group because delivery matching is OR-based. Before
+  applying the `sync_groups` migration, operators must use the previous release to
+  consume every legacy endpoint-outbox event, verify its polling cursor has
+  advanced past them, and then explicitly purge those historical `ablo_outbox`
+  rows. The migration rejects any remaining legacy row instead of silently
+  assigning unroutable groups.
+
+  `SourceRequestContext.requiredSyncGroups` is renamed `syncGroups`; both spellings
+  carry the same value this release and the old one is removed in 0.58.0.
+  `DeltaPosition`, `deltaPositionSchema`, `ReadSetWatermark`, and
+  `readSetWatermarkSchema` are removed, as 0.56.0 announced; use `LogPosition` and
+  `logPositionSchema`.
+
+  Every response now states your rate-limit allowance rather than leaving you to
+  find it: `RateLimit-Policy` always, `RateLimit` once the request is attributed to
+  a key, and `Retry-After` on a 429. Every response also carries `Ablo-Version`,
+  and a route being withdrawn says so on itself for at least 180 days first
+  through `Deprecation` and `Sunset`, with the same operations marked
+  `deprecated: true` in the OpenAPI document.
+
+  The documentation answers a reader that is not a browser: `/llms-full.txt`,
+  `/openapi.json`, `/developers` and `/.well-known/mcp.json` are routes, and every
+  page serves Markdown from its own URL under `Accept: text/markdown`.
+
 ## 0.56.0
 
 ### Minor Changes

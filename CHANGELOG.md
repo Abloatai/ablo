@@ -1,19 +1,251 @@
 # Changelog
 
+## 0.57.0
+
+### Before you upgrade: drain the endpoint outbox
+
+This release adds a `sync_groups` column to the source outbox, and the migration
+refuses to run while legacy rows are still sitting in it. That refusal is
+deliberate. A legacy row has no routes recorded, and assigning it one would
+either invent an audience or give it none, so the migration stops and tells you
+rather than guessing.
+
+If you run a `dataSource()` endpoint, do this on the previous release, in order:
+
+1. Let Ablo poll until every event already in `ablo_outbox` has been consumed.
+2. Confirm the polling cursor has advanced past the last of them.
+3. Delete those consumed rows.
+
+Then upgrade and run the migration. If you connect your database over
+replication rather than an endpoint, there is no outbox and nothing to do.
+
+### A row is authorized by the subject its schema declares
+
+A model may now declare which field decides who a row belongs to, and that rule
+is enforced on every path: reads, writes, claims, presence, and every storage
+adapter, including the endpoint ones. A row is authorized exactly when the
+request carries the sync group `${group}:${row[field]}`.
+
+This is what 0.56.0's boundary change was heading towards. Sync groups routed
+delivery and did not decide authorization, so a model that used them as though
+they did was relying on something the guide told you not to rely on. A declared
+subject is that rule made real, checked in one place and failing closed.
+
+Two consequences worth knowing. A subject-scoped model stamps exactly one group
+on a change, because delivery matching is OR-based and a second group would
+widen the audience rather than narrow it. And a tombstone now reaches only the
+row's authorized subject group, where before a delete could be announced more
+widely than the row ever was.
+
+A schema that routes by sync group without a matching row-access policy is
+flagged. If the routing really is only routing, acknowledge it explicitly and
+the flag goes quiet.
+
+### Creating many rows is one commit
+
+`create` takes a list as well as a single row, under the same verb:
+
+```ts
+const rows = await ablo.weatherReports.create({
+  data: [
+    { location: 'Stockholm', summary: 'Clear' },
+    { location: 'Oslo', summary: 'Rain' },
+  ],
+});
+```
+
+They are written as one atomic commit rather than one request each, so either
+every row lands or none does. The result comes back in the order you gave it,
+not the order the batch settled, and carries whatever defaults the server
+stamped. An empty list writes nothing rather than opening an empty commit.
+
+### Reading a whole collection, in as many words
+
+`listAll({ where, maxPages, signal })` reads a complete collection by walking the
+same cursor `list` returns, so the common case stops being a hand-rolled loop:
+
+```ts
+const open = await ablo.weatherReports.listAll({
+  where: { status: ['draft', 'review'] },
+  maxPages: 20,
+});
+```
+
+It is bounded on purpose. `maxPages` is how you say how much you are willing to
+read, and `signal` cancels a walk that is taking longer than the work is worth.
+A complete read that cannot say when it will stop is how a page turns into an
+outage.
+
+### A claimed write carries its stale guard again
+
+Holding a claim and then writing gave mutual exclusion but not lost-update
+detection, on the stateless transport agents run. The claim handle carries the
+position the row was read at, and the write defaults to rejecting on a change
+since then. Unwrapping the handle cleared the claim before that default was
+read, so the guard was unreachable and every model write through the public
+surface lost it.
+
+It read as though both protections were present: claim, read, decide, write. The
+watermark now travels with the handle, and your own `readAt` or `onStale` still
+win where you set them.
+
+### A create on an id that already exists is refused
+
+It reported success and returned a row. A caller-selected id is a claim about
+which row this is, so a create that finds one already there is a conflict rather
+than an update, and it now says so.
+
+### CLI: a session route that revalidates before it mints
+
+`ablo init` scaffolds a Next.js session route that re-checks membership at mint
+time rather than trusting the caller, and puts secret clients behind the
+framework's `server-only` boundary so a key cannot be imported into a component
+that ships to a browser.
+
+### Filtering a server read by a reference field
+
+`list({ where: { issueId } })` matched nothing on a replicated plane. It raised
+no error and returned a well-formed empty array, so the read looked like a
+question with no answers rather than a filter that never ran. Filtering on
+`id`, `title` or `body` worked, which made the failure look like a property of
+the data instead of a property of the field name.
+
+The cause was a key space. A row served from the log is a snapshot in the wire
+shape, so its fields are spelled the way your schema spells them, while the
+filter looked them up by their database column. Those two agree exactly when a
+column is a single word, and part ways on every `issueId`, `teamId` or
+`assigneeId`. Ordering, relation expansion and any field declared with
+`.from()` were reading the same wrong spelling: a `related` list came back
+empty, and a `.from()` field was simply absent from the row.
+
+If you page a collection and filter it in your own code to work around this,
+that code can go.
+
+A filter naming a field the model does not declare is now refused, with the
+same error the direct-database plane already gave it. It used to return
+nothing, which reads as an answer.
+
+### A list read walks its own pages
+
+`list` returns a page, and a page of 20 looks exactly like a complete answer of 20. Every caller either checked `hasMore` or, more often, reasoned about a
+truncated collection without knowing there was more.
+
+Iterate the result for the page. Walk it for the collection:
+
+```ts
+for await (const issue of await ablo.issues.list({ where: { teamId } })) {
+  …
+}
+```
+
+`hasMore` and `nextCursor` are unchanged, and taking the cursor yourself is
+still the right thing when the pages go somewhere other than a loop.
+
+### Clearing a field
+
+`null` clears a field, and the types now say so. They used to accept only the
+field's own type or `undefined`, and `undefined` means "leave this alone": it
+is dropped from the payload, so an unassign written that way kept the old
+assignee and reported success. The only spelling that both compiled and worked
+was one that cast the payload, which turned off type checking for the whole
+write.
+
+Only a field your schema declares optional accepts `null`. A required field has
+no empty value to move to, and the type says that too.
+
+### A write that does not name its row is refused
+
+`delete({ where: { id } })` reads like it should work, and `where` is what the
+commit protocol takes one layer down. It used to spell the missing id into the
+request as the literal text `undefined`, match no row, and return an ordinary
+receipt. It now fails at the call, naming the model, the action, and `{ id }`.
+
+The same guard covers `update`.
+
+### A create honours the id you gave it
+
+An id passed inside `data`, which the create input has always allowed, was
+never read: the row was written under a generated id and you were handed back
+one you had not named. Both spellings now work, and the standalone `id` wins if
+they disagree.
+
+### Every response says what your allowance is
+
+The limiter knew the allowance and the refill and told you neither, so the only
+strategy available was to retry and find the wall again.
+
+```
+RateLimit-Policy: "secret";q=600;w=12
+RateLimit: "secret";r=573;t=8
+Retry-After: 3
+```
+
+`RateLimit-Policy` is the standing allowance and is always present.
+`RateLimit` reports what is left and when it refills, once a request is
+attributed to a key. A 429 adds `Retry-After` in whole seconds. Pace against
+these rather than retrying blind.
+
+### A route says when it is going away
+
+Every response carries `Ablo-Version`, a date stamp for the contract being
+served, so a caller can notice the contract moved under it.
+
+A route being withdrawn now says so on itself for at least 180 days first.
+`Deprecation` (RFC 9745) carries when the deprecation took effect, and the route
+keeps answering; `Sunset` (RFC 8594) carries when it stops. The same operations
+are marked `deprecated: true` in the OpenAPI document, so a generated client
+sees it too.
+
+Breaking changes still arrive as a new path segment beside `/v1`, never as a
+change to it. Additive ones land in `/v1`, so ignore what you do not recognise.
+
+### The documentation answers a reader that is not a browser
+
+The surfaces `llms.txt` names are routes now rather than a promise:
+`/llms-full.txt` for the whole corpus in one fetch, `/openapi.json` for the REST
+contract, `/developers` naming every developer surface on one page,
+`/.well-known/mcp.json` for the MCP manifest.
+
+Every page also answers from its own URL in Markdown. Send
+`Accept: text/markdown`, or append `.md` where a client cannot set headers.
+Responses carry `Vary: Accept`, a client that will take neither type gets a 406
+listing what is available, and a path that does not exist answers a real 404
+rather than a 200 carrying a sign-in page.
+
+### Renamed and removed
+
+`SourceRequestContext.requiredSyncGroups` is now `syncGroups`. Ablo populates
+both spellings this release, so a source adapter still reading the old name gets
+the groups rather than `undefined`, which on a routing field would read as "no
+groups" rather than as a field that moved. The old spelling is removed in
+0.58.0.
+
+`DeltaPosition`, `deltaPositionSchema`, `ReadSetWatermark`, and
+`readSetWatermarkSchema` are removed, as 0.56.0 announced. Use `LogPosition` and
+`logPositionSchema`, which they have resolved to since then.
+
 ## 0.56.0
 
-### One customer no longer sees another's live work
+### Coordination reads are scoped to the customer, not the organization
 
-A platform's customers are rows in its own schema, so they share one
-organization and one plane. The claim listing and the presence read were scoped
-to exactly that pair and nothing finer. One customer could therefore see which
-rows another had claimed, who held them, what the work was called, and who was
-online. Row contents were never exposed; everything around them was.
+Coordination has always been scoped to the organization, and through 0.51.0 that
+was the whole boundary: a platform gave each customer its own organization, and
+the sessions guide was explicit that sync groups decide which changes travel
+rather than what a session may read.
 
-Both reads now apply the same cut the delivery path already applies, taken from
-the groups each side already carries. A customer sees the coordination for the
-rows it can see, and nothing else. If you serve many customers from one
-organization, this closes the gap without any change on your side.
+This release moves that line. A platform's customers are rows in its own schema,
+reached by the sync groups on the session, so many customers share one
+organization and the organization is no longer the finest boundary. The delivery
+path already applied the finer cut. The claim listing and the presence read did
+not, so under that newer arrangement one customer could see which rows another
+had claimed, who held them, what the work was called, and who was online. Row
+contents were never exposed; everything around them was.
+
+Both reads now take the same cut, from the groups each side already carries.
+
+If you give each customer its own organization, nothing changes for you and
+nothing was reachable across customers. If you serve many customers from one
+organization, this closes the gap with no change on your side.
 
 ### A client converges on the head it was measured against
 

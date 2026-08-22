@@ -231,7 +231,10 @@ export async function runInit(args: readonly string[] = []): Promise<SetupInitRe
   }
 
   files.push({ path: join(abloDir, 'schema.ts'), content: schemaSource, note: schemaNote });
-  files.push({ path: join(abloDir, 'index.ts'), content: generateSyncConfig(auth) });
+  files.push({
+    path: join(abloDir, 'index.ts'),
+    content: generateSyncConfig(auth, { serverOnly: framework === 'nextjs' }),
+  });
   files.push({ path: join(abloDir, 'register.ts'), content: generateRegister() });
 
   const orm = detectOrm(opts.orm);

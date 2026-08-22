@@ -1,0 +1,136 @@
+---
+/**
+ * Docs-side product analytics: the `docs_page_viewed` and `docs_cta_clicked`
+ * emitter.
+ *
+ * Both event names and their property keys are defined once, in
+ * `packages/product-analytics/src/events.ts`, and the engine rejects anything
+ * that does not match. This file is the browser end of that contract; it is
+ * pinned to the schema by `packages/product-analytics/test/docsEmitter.test.ts`,
+ * which reads this source and fails if an event name or property key here stops
+ * existing upstream. Change the schema first, then this.
+ *
+ * Inline rather than a bundled module import: `docs/ablo` is deliberately a
+ * standalone npm project outside the monorepo workspace, so it has no path to
+ * `@ablo/product-analytics` at build time. An inline script cannot break the
+ * documentation deploy, which is the property that matters most on a public
+ * site; the test above is what keeps it honest instead.
+ *
+ * Identity note: the anonymous id lives in `localStorage`, which is per-origin.
+ * A reader who moves between docs.abloatai.com and www.abloatai.com is
+ * therefore two anonymous identities, not one. Joining them needs a cookie on
+ * the shared parent domain, which is a separate decision.
+ */
+---
+
+<script is:inline>
+  (() => {
+    const INSTALLATION_KEY = "ablo.analytics.installation.v1";
+    const ENDPOINT = "https://api.abloatai.com/api/v1/analytics/web-events";
+    let lastCapturedPath = null;
+
+    const disabled = () => {
+      try {
+        return (
+          localStorage.getItem("ablo.analytics.disabled") === "1" ||
+          navigator.doNotTrack === "1"
+        );
+      } catch {
+        return true;
+      }
+    };
+
+    const installationId = () => {
+      try {
+        const existing = localStorage.getItem(INSTALLATION_KEY);
+        if (existing) return existing;
+        const created = crypto.randomUUID();
+        localStorage.setItem(INSTALLATION_KEY, created);
+        return created;
+      } catch {
+        return null;
+      }
+    };
+
+    // A class, never a raw path: lowercased, punctuation folded, length capped.
+    // Documentation routes are static and carry no reader-identifying segment,
+    // so the normalized route is itself the class.
+    const routeClass = (pathname) => {
+      const trimmed = String(pathname || "").replace(/\/+$/, "");
+      if (!trimmed) return "docs_home";
+      const cleaned = trimmed
+        .toLowerCase()
+        .replace(/^\/+/, "")
+        .replace(/[^a-z0-9/_-]+/g, "_");
+      return cleaned.slice(0, 160) || "docs_home";
+    };
+
+    const destinationClass = (href) => {
+      if (!href) return "in_page";
+      try {
+        const url = new URL(href, window.location.origin);
+        if (url.origin === window.location.origin) return "internal";
+        const host = url.hostname.toLowerCase();
+        if (host === "github.com" || host.endsWith(".github.com")) return "github";
+        if (host === "www.npmjs.com" || host === "npmjs.com") return "npm";
+        if (host.endsWith("abloatai.com")) {
+          return url.pathname.includes("signup") ? "signup" : "owned_web";
+        }
+        return "external";
+      } catch {
+        return "unknown";
+      }
+    };
+
+    const send = (eventName, properties) => {
+      const anonymousId = installationId();
+      if (!anonymousId) return;
+      fetch(ENDPOINT, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({
+          anonymousId,
+          events: [
+            {
+              producerEventId: crypto.randomUUID(),
+              eventVersion: 1,
+              occurredAt: new Date().toISOString(),
+              eventName,
+              properties,
+            },
+          ],
+        }),
+      }).catch(() => undefined);
+    };
+
+    const capturePageView = () => {
+      if (disabled()) return;
+      const pathname = window.location.pathname;
+      if (pathname === lastCapturedPath) return;
+      lastCapturedPath = pathname;
+      send("docs_page_viewed", { documentationRouteClass: routeClass(pathname) });
+    };
+
+    // Only links that LEAVE the documentation are worth an event: an internal
+    // link already produces its own page view on arrival, so counting it twice
+    // would inflate the funnel it feeds.
+    const onClick = (event) => {
+      if (disabled()) return;
+      const target =
+        event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!target) return;
+      const destination = destinationClass(target.getAttribute("href"));
+      if (destination === "internal" || destination === "in_page") return;
+      send("docs_cta_clicked", {
+        ctaId: `${routeClass(window.location.pathname)}:${destination}`.slice(0, 100),
+        destinationClass: destination,
+      });
+    };
+
+    capturePageView();
+    document.addEventListener("click", onClick);
+    // Re-fire after client-side navigation, which does not reload the document.
+    document.addEventListener("astro:page-load", capturePageView);
+  })();
+</script>

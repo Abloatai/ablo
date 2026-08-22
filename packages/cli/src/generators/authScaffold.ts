@@ -44,8 +44,21 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  const authorizedScope = await authorizeActiveWorkspace(user.id);
+  if (!authorizedScope) {
+    return Response.json(
+      credentialEndpointErrorSchema.parse({
+        error: { code: 'policy_denied', message: 'Workspace membership is stale or revoked' },
+      }),
+      { status: 403, headers: noStore },
+    );
+  }
+
   const { token, expiresAt } = await sync.sessions.create({
     user: { id: user.id },
+    // These ids came from the server-side membership lookup below. Never take
+    // organization, workspace, team, or group ids from the request body.
+    syncGroups: authorizedScope.syncGroups,
     can: { records: ['read', 'create', 'update'] },
   });
   return Response.json(
@@ -68,6 +81,27 @@ async function isSameOrigin(request: Request): Promise<boolean> {
 async function getCurrentUser(): Promise<{ id: string } | null> {
   const session = await auth.api.getSession({ headers: await headers() });
   return session?.user ? { id: session.user.id } : null;
+}
+
+type AuthorizedWorkspace = {
+  workspaceId: string;
+  syncGroups: readonly [\`workspace:\${string}\`, ...\`\${string}:\${string}\`[]];
+};
+
+async function authorizeActiveWorkspace(userId: string): Promise<AuthorizedWorkspace | null> {
+  void userId;
+  // REQUIRED: query your membership table here, immediately before minting.
+  // Read the active workspace from the server-side session, verify this user has
+  // an active membership, and derive every team/group id on the server. Return
+  // null for a stale or revoked membership. This refusal keeps a newly generated
+  // route from turning "signed in" into workspace authorization by accident.
+  //
+  // Example after your membership query:
+  // return {
+  //   workspaceId: membership.workspaceId,
+  //   syncGroups: [\`workspace:\${membership.workspaceId}\`],
+  // };
+  return null;
 }
 `;
 }

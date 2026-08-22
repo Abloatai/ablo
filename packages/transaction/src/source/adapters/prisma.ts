@@ -33,11 +33,22 @@ import {
   sourceChangeIntentHash,
 } from '../idempotency.js';
 import type { SchemaRecord, Schema } from '../../schema/schema.js';
+import { toSchemaJSON } from '../../schema/serialize.js';
+import { camelToSnake } from '../../schema/ddl.js';
 import {
   ABLO_POSTGRES_COMMIT_ECHO_PREFIX,
   type SourceListQuery,
   type SourceWhere,
 } from '../types.js';
+import {
+  authorizeSourceChange,
+  authorizeSourceRead,
+  lockSourceSubjectCreates,
+  rethrowStrictCreateConflict,
+  sourceSyncGroups,
+  sourceSubjectRule,
+  sourceSubjectValues,
+} from '../subjectAuthorization.js';
 
 /** A Prisma model delegate — the subset of its methods the adapter calls. */
 export interface PrismaDelegate {
@@ -146,7 +157,19 @@ export function prismaDataSource<S extends SchemaRecord>(
   options: PrismaDataSourceOptions = {},
 ): DataSourceAdapter {
   const delegateName = options.delegateName ?? lowerFirst;
-  void schema; // held for typed reads and model validation
+  const lockTargets = new Map<string, { table: string; subjectColumn: string }>();
+  for (const [key, definition] of Object.entries(toSchemaJSON(schema).models)) {
+    if (!definition.subject) continue;
+    const target = {
+      table: definition.tableName ?? key,
+      subjectColumn:
+        definition.fields[definition.subject.field]?.column ??
+        camelToSnake(definition.subject.field),
+    };
+    lockTargets.set(key.toLowerCase(), target);
+    if (definition.typename) lockTargets.set(definition.typename.toLowerCase(), target);
+  }
+  const quoted = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
 
   const applyOperation = async (tx: PrismaRaw, op: Operation): Promise<Row> => {
     if (op.where) {
@@ -188,9 +211,18 @@ export function prismaDataSource<S extends SchemaRecord>(
       const delegate = delegateFor(prisma, delegateName(req.model));
       if (req.kind === 'load') {
         const row = await delegate.findUnique({ where: { id: req.id } });
-        return row ? [row] : [];
+        return authorizeSourceRead(schema, req, row ? [row] : []);
       }
-      return delegate.findMany(findManyArgs(req.query));
+      const args = findManyArgs(req.query);
+      const rule = sourceSubjectRule(schema, req.model);
+      const subjects = sourceSubjectValues(rule, req.scope?.syncGroups);
+      if (subjects?.length === 0) return [];
+      if (subjects) {
+        args.where = {
+          AND: [args.where ?? {}, { [rule!.field]: { in: subjects } }],
+        };
+      }
+      return authorizeSourceRead(schema, req, await delegate.findMany(args));
     },
 
     async commit(change: ChangeSet): Promise<AdapterCommitResult> {
@@ -211,22 +243,52 @@ export function prismaDataSource<S extends SchemaRecord>(
           return { rows: cachedRow.response };
         }
 
+        await lockSourceSubjectCreates(schema, change, async (_operation, key) => {
+          await tx.$queryRawUnsafe(
+            `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+            key,
+          );
+        });
+
+        await authorizeSourceChange(schema, change, async (operation) => {
+          if (!operation.id) return null;
+          const rule = sourceSubjectRule(schema, operation.model);
+          const target = lockTargets.get(operation.model.toLowerCase());
+          if (!rule || !target) return null;
+          const rows = await tx.$queryRawUnsafe<Row[]>(
+            `SELECT id, ${quoted(target.subjectColumn)} AS ${quoted(rule.field)}
+               FROM ${quoted(target.table)}
+              WHERE id = $1
+              LIMIT 1
+              FOR UPDATE`,
+            operation.id,
+          );
+          return rows[0] ?? null;
+        });
+
         const rows: Row[] = [];
         for (const [index, op] of change.operations.entries()) {
-          const row = await applyOperation(tx, op);
+          let row: Row;
+          try {
+            row = await applyOperation(tx, op);
+          } catch (error) {
+            if (op.type === 'CREATE') rethrowStrictCreateConflict(error, op);
+            throw error;
+          }
           rows.push(row);
           const entityId = String(row.id ?? rowId(op));
           // Transactional outbox: one event per operation, written in this same transaction.
           await tx.$executeRawUnsafe(
             `INSERT INTO ablo_outbox (
-               id, model, entity_id, type, data,
+               id, model, entity_id, type, data, sync_groups,
                correlation_id, transaction_id, occurred_at
-             ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
+             ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::text[], $7, $8, $9)`,
             `${change.correlationId}:${index}`,
             op.model,
             entityId,
             op.type,
             JSON.stringify(op.type === 'DELETE' ? null : row),
+            sourceSyncGroups(schema, op.model, row),
             change.correlationId,
             op.transactionId ?? null,
             Date.now(),
@@ -260,7 +322,7 @@ export function prismaDataSource<S extends SchemaRecord>(
     async events(cursor: string | null, limit: number): Promise<EventsPage> {
       const after = cursor ? cursor : '0';
       const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
-        `SELECT cursor, id, model, entity_id, type, data, organization_id,
+        `SELECT cursor, id, model, entity_id, type, data, sync_groups, organization_id,
                 client_tx_id, correlation_id, transaction_id, occurred_at
          FROM ablo_outbox WHERE cursor > $1 ORDER BY cursor ASC LIMIT $2`,
         after,
@@ -273,6 +335,7 @@ export function prismaDataSource<S extends SchemaRecord>(
           entityId: r.entity_id,
           type: r.type,
           data: r.data ?? null,
+          syncGroups: r.sync_groups ?? [],
           organizationId: r.organization_id ?? null,
           clientTxId: r.client_tx_id ?? null,
           correlationId: r.correlation_id ?? null,

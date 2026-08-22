@@ -15,7 +15,7 @@ import type { ResolveClaimMeta } from '../types/global.js';
 import type { AbloError } from '../errors.js';
 import type { StaleNotification, TrackDependency } from '../coordination/schema.js';
 import type { FieldRef, FieldSelector } from '../schema/fieldRef.js';
-import type { BaseModelFields } from '../schema/schema.js';
+import type { BaseModelFields, Clearable } from '../schema/schema.js';
 import type { ClaimHeartbeatPlan } from '../coordination/claimHeartbeatLoop.js';
 import type { Duration } from '../utils/duration.js';
 import type {
@@ -230,6 +230,14 @@ export interface ServerReadOptions<T> {
    * and emits the JOIN.
    */
   expand?: readonly string[];
+}
+
+/** Options for an explicit complete collection traversal. */
+export interface ListAllOptions<T> extends Omit<ServerReadOptions<T>, 'cursor'> {
+  /** Maximum pages to read before refusing an unexpectedly broad traversal. @default 100 */
+  maxPages?: number;
+  /** Stops traversal between page requests and row yields. */
+  signal?: AbortSignal;
 }
 
 /** Options for the single-row async server read `get({ id })`. A subset of
@@ -588,6 +596,21 @@ export interface ModelCreateParams<T, CreateInput>
   readonly claim?: Claim<T> | ClaimTargetOptions<CreateInput> | null;
 }
 
+/**
+ * Creating many rows at once: the same verb, handed a list.
+ *
+ * One atomic commit, so the batch lands whole or not at all, and the rows come
+ * back in the order they were given. There is no `id` beside `data` here the
+ * way there is for a single create, since one id cannot address many rows;
+ * write it into each row instead, which the create input has always allowed.
+ */
+export type ModelCreateManyParams<CreateInput> = Pick<
+  ModelWriteOptions,
+  'idempotencyKey' | 'reads' | 'track'
+> & {
+  readonly data: readonly CreateInput[];
+};
+
 export interface ModelUpdateParams<T, Fields = T>
   extends ModelWriteOptions {
   readonly id: string;
@@ -595,8 +618,12 @@ export interface ModelUpdateParams<T, Fields = T>
    * Patch only fields declared by the model's Zod input shape. Hydrated rows
    * also carry framework fields, relations, methods, and computed values; none
    * of those are writable data.
+   *
+   * Send a field to change it, omit it to leave it, send `null` to clear it —
+   * see {@link Clearable}. `undefined` is not a clear: it is dropped from the
+   * payload and the old value survives.
    */
-  readonly data: Partial<ClaimableFields<Fields>>;
+  readonly data: Clearable<ClaimableFields<Fields>>;
   readonly claim?: Claim<T> | ClaimTargetOptions<Fields> | null;
 }
 

@@ -19,6 +19,8 @@
  * Plain data, no database driver — it feeds the read side of the data adapter
  * contract, and your query builder reads it to load a model's initial rows.
  */
+import type { SubjectRule } from '../schema/subject.js';
+
 
 /** A mapping from a declared field to a physical column, with the alias to apply after a `SELECT *`. */
 export interface ColumnOverride {
@@ -88,6 +90,8 @@ export interface ReadModelShape {
   readonly orgColumn?: string;
   /** Parent-table scoping for rows with no tenancy column of their own. */
   readonly scopedVia?: ParentScope;
+  /** Credential-bound row authorization compiled by every read plane. */
+  readonly subject?: SubjectRule;
   /** Client-facing field name → physical DB column for declared fields. */
   readonly fieldColumns?: Readonly<Record<string, string>>;
   /** Physical-column aliases needed after SELECT * for `.from(...)` fields. */

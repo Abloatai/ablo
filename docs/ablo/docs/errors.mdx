@@ -441,6 +441,12 @@ A functional update kept losing to concurrent writes and exhausted its reconcile
 
 This database is already connected to another environment in your organization. Ablo streams a database from one environment at a time, so connecting it to a second one would leave the two reading the same change stream, and the newer connection would take the stream over from the older. Give this environment a database of its own — on a branching provider a branch of the same database is the usual answer, and it is what sandbox is for. If you meant to move the connection rather than add one, disconnect it from the environment that holds it with `ablo connect deregister` first.
 
+### entity_already_exists
+
+`HTTP 409` · not retryable
+
+A row already exists with this id. CREATE is strict; use UPDATE for an existing row.
+
 ### foreign_key_violation
 
 `HTTP 409` · not retryable
