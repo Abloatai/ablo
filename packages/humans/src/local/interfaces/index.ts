@@ -7,9 +7,8 @@
  * mutations to your backend. The SDK ships sensible no-op defaults where it can.
  */
 
-import type { MutationCommitResultInput } from '@abloatai/transaction/wire/commit';
-import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
-export type { ClaimEvent, ConflictEvent } from '@abloatai/transaction/coordination/events';
+import type { MutationCommitResultInput } from '@abloatai/transaction/commit';
+export type { ClaimEvent, ConflictEvent } from '@abloatai/transaction/claims/events';
 import type { CoordinationObservability } from '@abloatai/transaction/observability';
 export type { CoordinationObservability } from '@abloatai/transaction/observability';
 
@@ -231,8 +230,8 @@ export type MutationCommitResult = MutationCommitResultInput;
 // re-exports without binding X in this module's scope, and `Pick<X, K>` on an
 // unbound X silently yields all-required properties rather than a missing-name
 // error at the Pick site.
-export type { MutationOptions } from '@abloatai/transaction/resources/mutationOptions';
-import type { MutationOptions } from '@abloatai/transaction/resources/mutationOptions';
+export type { MutationOptions } from '@abloatai/transaction/client/resources/mutationOptions';
+import type { MutationOptions } from '@abloatai/transaction/client/resources/mutationOptions';
 
 /**
  * The subset of {@link MutationOptions} that travels with each write as it is
@@ -243,7 +242,7 @@ import type { MutationOptions } from '@abloatai/transaction/resources/mutationOp
  */
 export type WriteOptions = Pick<
   MutationOptions,
-  'readAt' | 'onStale' | 'idempotencyKey' | 'label' | 'fenceToken' | 'claimRef'
+  'readAt' | 'idempotencyKey' | 'label' | 'fenceToken' | 'claimRef'
 >;
 
 /** A single mutation within a batch. Its `options` travel with it so the server
@@ -268,7 +267,6 @@ export interface MutationOperation {
   /** Server-issued claim identity the operation is attributed to. */
   claimId?: string | null;
   readAt?: number | null;
-  onStale?: OnStaleMode | null;
   /**
    * The fencing token (Option B) carried on the wire for this op — the held
    * claim's token, validated against the entity's high-water at commit.

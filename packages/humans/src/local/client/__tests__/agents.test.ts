@@ -101,6 +101,7 @@ describe('ablo.agents.create', () => {
 
     const agent = await ablo.agents.create({
       id: 'draft-7',
+      onBehalfOf: { user: { id: 'user-42' } },
       can: { records: ['read', 'update'] },
     });
 
@@ -114,6 +115,7 @@ describe('ablo.agents.create', () => {
     expect(mintCall.body).toMatchObject({
       participantKind: 'agent',
       participantId: 'draft-7',
+      onBehalfOf: { user: { id: 'user-42' } },
       // No typename override on `records` → key === wire token.
       operations: ['records.read', 'records.update'],
     });

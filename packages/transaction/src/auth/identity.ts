@@ -17,20 +17,20 @@
 
 import { AbloAuthenticationError } from '../errors.js';
 import type { ParticipantKind } from '../types/participant.js';
-import { exchangeApiKey } from '../auth/index.js';
-import { mintUserSessionKey } from '../auth/index.js';
-import { resolveIdentity } from '../auth/index.js';
+import { exchangeApiKey } from './runtime.js';
+import { mintUserSessionKey } from './runtime.js';
+import { resolveIdentity } from './runtime.js';
 import {
   createRefreshScheduler,
   type RefreshScheduler,
-} from '../auth/index.js';
+} from './runtime.js';
 import {
   resolveCredential,
   type ResolvedCredential,
-} from '../auth/credentialPolicy.js';
-import type { BootstrapScope } from '../auth/bootstrapScope.js';
+} from './credentialPolicy.js';
+import type { BootstrapScope } from './bootstrapScope.js';
 import type { Logger } from '../logger.js';
-import type { AuthCredentialSource } from '../auth/credentialSource.js';
+import type { AuthCredentialSource } from './credentialSource.js';
 import type { CredentialProvider } from './credentialResult.js';
 import { resolveApiKeyValue, resolveBootstrapBaseUrl } from './apiKey.js';
 import type { DeliveryPartitionRoute } from './deliveryPartition.js';

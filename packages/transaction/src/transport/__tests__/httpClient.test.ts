@@ -15,9 +15,9 @@
  * type; here we confirm they're not present at runtime either, so a loose `any`
  * access can't accidentally hit one).
  */
-import { Ablo } from '../../ablo.js';
+import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, selectModels, z } from '../../schema/index.js';
-import { AbloError } from '../../errors.js';
+import { AbloError, AbloNotFoundError } from '../../errors.js';
 import {
   claimAcquiredResponse,
   claimHeartbeatReply,
@@ -62,7 +62,7 @@ const make = () =>
 describe("Ablo({ transport: 'http' }) facade shape", () => {
   it('exposes typed model proxies with the full HTTP surface', () => {
     const items = make().items;
-    for (const m of ['get', 'list', 'listAll', 'create', 'update', 'delete'] as const) {
+    for (const m of ['get', 'read', 'list', 'listAll', 'create', 'update', 'delete'] as const) {
       expect(typeof Reflect.get(items, m)).toBe('function');
     }
     expect(typeof items.claim).toBe('function'); // claim is callable
@@ -118,7 +118,7 @@ describe("Ablo({ transport: 'http' }) facade shape", () => {
       status: 'confirmed' as const,
       statusAt: COMMIT_TIMES.statusAt,
       lastSyncId: 41,
-      readSet: [],
+      reads: [],
       operations: [{
         action: 'update',
         model: 'items',
@@ -230,7 +230,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
 
   it('returns the stateless HTTP facade (typed model proxies + protocol members)', () => {
     const c = makeViaAblo();
-    for (const m of ['get', 'list', 'create', 'update', 'delete'] as const) {
+    for (const m of ['get', 'read', 'list', 'create', 'update', 'delete'] as const) {
       expect(typeof Reflect.get(c.items, m)).toBe('function');
     }
     expect(typeof c.items.claim).toBe('function');
@@ -239,7 +239,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     expect(typeof c.dispose).toBe('function');
   });
 
-  it('forwards reads and track through a per-model update', async () => {
+  it('forwards compact reads through a per-model update', async () => {
     let mutationBody: unknown;
     const c = Ablo({
       schema,
@@ -281,12 +281,10 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       data: { status: 'done' },
       idempotencyKey: 'client-tx-1',
       reads: [{ model: 'runs', id: 'run-1', readAt: 16 }],
-      track: [{ model: 'reports', id: 'report-1', readAt: 15 }],
     });
 
     expect(mutationBody).toMatchObject({
       reads: [{ model: 'runs', id: 'run-1', readAt: 16 }],
-      track: [{ model: 'reports', id: 'report-1', readAt: 15 }],
     });
   });
 
@@ -329,7 +327,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    const item = await c.items.get({ id: 'item-1' });
+    const item = await c.items.read({ id: 'item-1' });
     expect(item).toEqual({ id: 'item-1', title: 'Ship it', status: 'todo' });
     expect(item).not.toHaveProperty('stamp');
     await c.items.update({
@@ -344,6 +342,31 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         reads: [{ model: 'items', id: 'item-1', readAt: 17 }],
       }),
     ]);
+  });
+
+  it('keeps get observational and read guardable', async () => {
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_get_vs_read',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: () => Promise.resolve(jsonResponse(modelReadResponse({
+        model: 'items', id: 'item-1',
+        data: { id: 'item-1', title: 'Observed', status: 'todo' },
+        stamp: 17,
+      }))),
+    });
+
+    const observed = await c.items.get({ id: 'item-1' });
+    expect(observed).toEqual({ id: 'item-1', title: 'Observed', status: 'todo' });
+    await expect(c.items.update({
+      id: 'item-1',
+      data: { status: 'done' },
+      reads: [observed as never],
+    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
+
+    const decisionInput = await c.items.read({ id: 'item-1' });
+    expect(decisionInput).toEqual(observed);
   });
 
   it('keeps explicit dependencies on every functional CAS attempt', async () => {
@@ -404,7 +427,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    const dependency = await c.items.get({ id: 'item-2' });
+    const dependency = await c.items.read({ id: 'item-2' });
     if (!dependency) throw new Error('expected cross-target dependency');
     await expect(c.items.update('item-1', updater, {
       retries: 1,
@@ -472,7 +495,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    await expect(c.items.get({ id: 'item-new' })).resolves.toBeUndefined();
+    await expect(c.items.read({ id: 'item-new' })).resolves.toBeUndefined();
     await c.items.create({
       id: 'item-new',
       data: { title: 'Created', status: 'todo' },
@@ -488,7 +511,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     expect(createBody).not.toHaveProperty('reads');
   });
 
-  it('accepts an exact list row through explicit reads without a point reread', async () => {
+  it('keeps list rows observational until they are deliberately read', async () => {
     let mutationBody: Record<string, unknown> | undefined;
     let listReads = 0;
     let pointReads = 0;
@@ -537,21 +560,16 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     const [item] = await c.items.list({ where: { status: 'todo' } });
     expect(item).toEqual({ id: 'item-1', title: 'Listed', status: 'todo' });
     if (!item) throw new Error('expected listed item');
-    await c.items.update({
+    await expect(c.items.update({
       id: item.id,
       data: { status: 'done' },
-      reads: [item],
+      // Compile-time types reject this too; the cast proves the runtime boundary.
+      reads: [item] as never,
       idempotencyKey: 'list-update:item-1',
-    });
+    })).rejects.toMatchObject({ code: 'write_options_invalid' });
 
-    // The only point read is the update's established result readback.
-    expect({ listReads, pointReads }).toEqual({ listReads: 1, pointReads: 1 });
-    expect(mutationBody).toMatchObject({
-      reads: [{ model: 'items', id: 'item-1', readAt: 80 }],
-    });
-    expect(mutationBody).not.toMatchObject({
-      reads: [{ model: 'items', id: 'item-1', readAt: 9_999 }],
-    });
+    expect({ listReads, pointReads }).toEqual({ listReads: 1, pointReads: 0 });
+    expect(mutationBody).toBeUndefined();
   });
 
   it('does not turn an incidental read into a write dependency', async () => {
@@ -590,7 +608,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    await c.items.get({ id: 'item-2' });
+    await c.items.read({ id: 'item-2' });
     await c.items.update({
       id: 'item-1', data: { status: 'done' }, idempotencyKey: 'incidental-update',
     });
@@ -635,7 +653,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    const dependency = await c.items.get({ id: 'item-2' });
+    const dependency = await c.items.read({ id: 'item-2' });
     expect(dependency).toBeDefined();
     await expect(c.items.update({
       id: 'item-1', data: { status: 'done' },
@@ -661,6 +679,74 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       reads: [{ model: 'items', id: 'item-2', readAt: 41 }],
     });
     expect(mutationBody).not.toHaveProperty('readAt');
+  });
+
+  it('resolves captured rows for an atomic commits.create batch', async () => {
+    let commitBody: Record<string, unknown> | undefined;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_atomic_context_reads',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && path.endsWith('/item-2')) {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'items', id: 'item-2',
+            data: { id: 'item-2', title: 'Premise', status: 'ready' }, stamp: 51,
+          })));
+        }
+        if (method === 'POST' && path.endsWith('/commits')) {
+          commitBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Promise.resolve(jsonResponse(confirmedCommitReceiptResponse({
+            clientTxId: 'atomic-context-reads',
+            serverTxId: 'server-atomic-context-reads',
+            lastSyncId: 52,
+            ops: 2,
+          })));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const premise = await c.items.read({ id: 'item-2' });
+    await expect(c.commits.create({
+      operations: [
+        { action: 'update', model: 'items', id: 'item-1', data: { status: 'done' } },
+      ],
+      reads: [{ ...premise! }],
+      idempotencyKey: 'atomic-context-clone-must-fail',
+    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
+    const otherClient = Ablo({
+      schema,
+      apiKey: 'sk_test_atomic_context_other_client',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: () => Promise.reject(new Error('cross-client row reached the network')),
+    });
+    await expect(otherClient.commits.create({
+      operations: [
+        { action: 'update', model: 'items', id: 'item-1', data: { status: 'done' } },
+      ],
+      reads: [premise!],
+      idempotencyKey: 'atomic-context-cross-client-must-fail',
+    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
+    await c.commits.create({
+      operations: [
+        { action: 'update', model: 'items', id: 'item-1', data: { status: 'done' } },
+        { action: 'create', model: 'items', id: 'item-3', data: { title: 'Audit', status: 'done' } },
+      ],
+      reads: [premise!],
+      idempotencyKey: 'atomic-context-reads',
+      wait: 'confirmed',
+    });
+
+    expect(commitBody).toMatchObject({
+      reads: [{ model: 'items', id: 'item-2', readAt: 51 }],
+    });
   });
 
   it('guards a claimed write with the lease watermark, without an implicit read dependency', async () => {
@@ -717,7 +803,6 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       claim: 'claim-read-set',
       fenceToken: 9,
       readAt: 51,
-      onStale: 'reject',
     });
     expect(mutationBody).not.toHaveProperty('reads');
   });
@@ -761,11 +846,11 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     const held = await c.items.claim({ id: 'item-1' });
     await c.items.update({
       id: 'item-1', data: { status: 'done' }, claim: held,
-      readAt: 40, onStale: 'overwrite',
+      readAt: 40,
       idempotencyKey: 'override-update',
     });
 
-    expect(mutationBody).toMatchObject({ readAt: 40, onStale: 'overwrite' });
+    expect(mutationBody).toMatchObject({ readAt: 40 });
   });
 
   it('rejects cloned rows and leaves idempotency identity explicit', async () => {
@@ -802,7 +887,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     });
 
     const run = async () => {
-      const item = await c.items.get({ id: 'item-1' });
+      const item = await c.items.read({ id: 'item-1' });
       if (!item) throw new Error('expected item read');
       const cloned = { ...item } as typeof item;
       await expect(
@@ -885,6 +970,36 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       expiresAt: 1234,
       target: { type: 'items', id: 'item-1' },
     });
+  });
+
+  it('lists every holder of a row over HTTP, leaving the waiters out', async () => {
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_claimlist',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/v1/claims'))
+          return Promise.reject(new Error(`unexpected fetch: ${url}`));
+        return Promise.resolve(
+          jsonResponse(
+            claimListResponse({
+              claims: [
+                modelClaim({ id: 'claim-a', model: 'items', entityId: 'item-1', actor: 'agent-2', participantKind: 'agent', status: 'active', field: 'title', expiresAt: 1234 }),
+                modelClaim({ id: 'claim-b', model: 'items', entityId: 'item-1', actor: 'agent-3', participantKind: 'agent', status: 'active', field: 'status', expiresAt: 1234 }),
+                modelClaim({ id: 'claim-w', model: 'items', entityId: 'item-1', actor: 'agent-4', participantKind: 'agent', status: 'queued', position: 0, expiresAt: 1234 }),
+              ],
+            }),
+          ),
+        );
+      },
+    });
+
+    const held = await c.items.claim.list({ id: 'item-1' });
+    expect(held.object).toBe('list');
+    expect(held.data.map((claim) => claim.id)).toEqual(['claim-a', 'claim-b']);
   });
 
   // One spelling on both transports: a contended claim WAITS — the same
@@ -1169,6 +1284,92 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       type: 'skipped',
       error: expect.objectContaining({ code: 'entity_claimed' }),
     });
+  });
+
+  it('claims a key by id alone: no read after the grant, a lease without data, given back on release', async () => {
+    const calls: string[] = [];
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_rowfree',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const method = init?.method ?? 'GET';
+        const path = new URL(url).pathname;
+        calls.push(`${method} ${path}`);
+        if (method === 'POST' && path === '/api/v1/models/items/ghost-1/claim') {
+          return Promise.resolve(
+            jsonResponse(
+              claimAcquiredResponse(
+                modelClaim({ id: 'claim-rf1', model: 'items', entityId: 'ghost-1', fenceToken: 3 }),
+              ),
+              201,
+            ),
+          );
+        }
+        if (method === 'DELETE' && path === '/api/v1/models/items/ghost-1/claim') {
+          return Promise.resolve(jsonResponse({ released: true }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const lease = await c.items.claim('ghost-1');
+    expect(lease.id).toBe('claim-rf1');
+    expect(lease.fenceToken).toBe(3);
+    expect('data' in lease).toBe(false);
+    await lease.release();
+    // Two requests and no GET between them: a row Ablo never held has nothing to re-read.
+    expect(calls).toEqual([
+      'POST /api/v1/models/items/ghost-1/claim',
+      'DELETE /api/v1/models/items/ghost-1/claim',
+    ]);
+  });
+
+  it('a claim on a row that does not exist gives the lease back before reporting the miss', async () => {
+    const calls: string[] = [];
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_ghostclaim',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const method = init?.method ?? 'GET';
+        const path = new URL(url).pathname;
+        calls.push(`${method} ${path}`);
+        if (method === 'POST' && path === '/api/v1/models/items/ghost-2/claim') {
+          return Promise.resolve(
+            jsonResponse(
+              claimAcquiredResponse(modelClaim({ id: 'claim-g2', model: 'items', entityId: 'ghost-2' })),
+              201,
+            ),
+          );
+        }
+        if (method === 'GET' && path === '/api/v1/models/items/ghost-2') {
+          return Promise.resolve(
+            jsonResponse(modelReadResponse({ model: 'items', id: 'ghost-2', data: null })),
+          );
+        }
+        if (method === 'DELETE' && path === '/api/v1/models/items/ghost-2/claim') {
+          return Promise.resolve(jsonResponse({ released: true }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    await expect(c.items.claim({ id: 'ghost-2' })).rejects.toBeInstanceOf(AbloNotFoundError);
+    // The grant preceded the read, so the miss must hand the lease back. Without
+    // the DELETE the key stays held under this credential until the TTL lapses,
+    // behind no handle, and every other participant is refused meanwhile.
+    expect(calls).toEqual([
+      'POST /api/v1/models/items/ghost-2/claim',
+      'GET /api/v1/models/items/ghost-2',
+      'DELETE /api/v1/models/items/ghost-2/claim',
+    ]);
   });
 
   it('claims.release gives a ticket back by id', async () => {

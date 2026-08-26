@@ -27,6 +27,7 @@ import { doctor } from './doctor';
 import { logs } from './logs';
 import { webhooks } from './webhooks';
 import { check } from './check';
+import { claims } from './claims';
 import { docs } from './docs';
 import { feedback } from './feedback';
 import { upgrade } from './upgrade';
@@ -74,6 +75,7 @@ const HANDLERS: Readonly<Record<CommandName, (argv: readonly string[]) => Promis
   whoami: (argv) => whoami([...argv]),
   doctor: (argv) => doctor([...argv]),
   logs: (argv) => logs([...argv]),
+  claims: (argv) => claims([...argv]),
   webhooks: (argv) => webhooks([...argv]),
   check: (argv) => check([...argv]),
   docs: (argv) => docs([...argv]),

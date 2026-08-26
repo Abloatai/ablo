@@ -64,15 +64,32 @@ import { schema } from './schema';
 
 const server = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
-export async function mintProjectAgentSession(workspaceId: string, agentId: string) {
+export async function mintProjectAgentSession(
+  workspaceId: string,
+  agentId: string,
+  requestingUserId: string,
+) {
   const { token } = await server.sessions.create({
     agent: { id: agentId },
+    onBehalfOf: { user: { id: requestingUserId } },
     can: { records: ['read', 'update'] }, // operation allowlist for this run
     syncGroups: [syncGroup('workspace', workspaceId)], // narrowed to just this workspace
   });
   return token;
 }
 ```
+
+If work crosses a queue, persist `requestingUserId` on the job before enqueueing
+it and read that stored value when minting the worker's agent session. Request
+context and in-memory enqueue arguments disappear across retries and process
+boundaries; a durable job without its delegator can only produce agent-only or
+system-only attribution.
+
+In a collaborative deployment, do not silently fall back to direct database
+writes when agent-session minting is unavailable. Those writes can still be
+observed through WAL, but they have no trusted correlation and are therefore
+recorded as `system`. Either fail the job for retry or make uncoordinated writes
+an explicit deployment mode.
 
 ```tsx
 // client — the browser client carries only the scoped token.

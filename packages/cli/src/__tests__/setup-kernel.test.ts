@@ -355,7 +355,6 @@ describe('read-only setup discovery', () => {
         env: {
           ...process.env,
           ABLO_API_KEY: '',
-          ABLO_MANAGEMENT_KEY: '',
           ABLO_CONFIG_DIR: join(root, '.external-config'),
           CI: '1',
         },
@@ -489,6 +488,7 @@ describe('read-only setup discovery', () => {
     }
     const skill = bundle.skill.files.find(({ path }) => path === 'SKILL.md')?.content ?? '';
     expect(skill).toContain('Independently explore');
+    expect(skill).toContain('npx ablo docs agent-integration-decision-guide');
     expect(skill).toContain('Do not run login, branch, connect, push, dev');
     expect(skill).toContain('createTransactionClient(...)');
     expect(skill).toContain('Preserve memory-backed test modes');
@@ -703,7 +703,6 @@ describe('read-only setup discovery', () => {
         env: {
           ...process.env,
           ABLO_API_KEY: '',
-          ABLO_MANAGEMENT_KEY: '',
           ABLO_CONFIG_DIR: configDir,
           CI: '1',
         },
@@ -733,7 +732,6 @@ describe('read-only setup discovery', () => {
         env: {
           ...process.env,
           ABLO_API_KEY: '',
-          ABLO_MANAGEMENT_KEY: '',
           ABLO_CONFIG_DIR: join(root, '.external-config'),
           CI: '1',
           // This is the one case that reads the rendered plan rather than JSON,
@@ -765,7 +763,6 @@ describe('read-only setup discovery', () => {
         env: {
           ...process.env,
           ABLO_API_KEY: '',
-          ABLO_MANAGEMENT_KEY: '',
           ABLO_CONFIG_DIR: join(root, '.external-config'),
           CI: '1',
         },

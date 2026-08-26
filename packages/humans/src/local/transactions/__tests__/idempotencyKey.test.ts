@@ -1,4 +1,4 @@
-import { idempotencyKeySchema } from '@abloatai/transaction/transactions/confirmation/idempotencyKey';
+import { idempotencyKeySchema } from '@abloatai/transaction/commit';
 
 describe('durable write idempotency key', () => {
   it('accepts stable non-empty keys up to the wire limit', () => {

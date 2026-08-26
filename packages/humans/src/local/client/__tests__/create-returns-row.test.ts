@@ -4,7 +4,7 @@
  * authoritative read-back (framework defaults included), and for an idempotent
  * re-create of an existing id it is the EXISTING row, not the caller's input.
  */
-import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { createHttpTransport } from '@abloatai/transaction/transport/http';
 import {
   COMMIT_FIXTURE_TIMES,
   EFFECTIVE_AUTHORITY_FIXTURE,

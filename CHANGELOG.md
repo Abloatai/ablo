@@ -1,23 +1,209 @@
 # Changelog
 
+## 0.58.0
+
+### Reads now distinguish observation from decision input
+
+`get({ id })` returns the current row for display or inspection. `read({ id })`
+returns the same row while privately retaining its model, id, and watermark so a
+later write can prove exactly which state it depended on:
+
+```ts
+const report = await ablo.reports.read({ id: reportId });
+
+await ablo.reports.update({
+  id: report.id,
+  data: { summary },
+  reads: [report],
+});
+```
+
+If `report` changed in between, the update does not land and rejects with
+`AbloStaleContextError`. `get()` and `list()` remain observational, while
+`onChange()` remains the live notification surface.
+
+This replaces the older `retrieve()` and durable `track()` model surfaces. It is
+a public-surface break with no compatibility aliases:
+
+- replace `retrieve({ id })` with `get({ id })` for observation, or `read({ id })`
+  when a later mutation depends on the row;
+- replace `track(...)`, `CommitContext.track`, and mutation `track` / `onStale`
+  options with captured rows passed through the mutation's `reads` option; and
+- replace AI SDK `ToolModel.get` with `ToolModel.read`.
+
+Schema conflict-policy configuration and the `agents*`, `humans*`, and
+`system*` policy constants are also removed, together with the supporting
+conflict, stale-notification, persisted-read-set, and internal read-set exports.
+Use an active claim when work must exclude another participant. Use `read()` and
+`reads` when work may run concurrently but must not commit from a stale premise.
+
+The removals announced by earlier releases now take effect too:
+`SourceRequestContext.requiredSyncGroups` is gone in favor of `syncGroups`, and
+`DeltaPosition`, `deltaPositionSchema`, `ReadSetWatermark`, and
+`readSetWatermarkSchema` are gone in favor of `LogPosition` and
+`logPositionSchema`.
+
+### Context follows exact reads and can stop stale work early
+
+`context()` now assembles ordinary application values and exact Ablo reads into
+one result with `data`, `reads`, and `onChange`. It no longer publishes a
+context-level cursor or source classification. `ContextResult.cursor`,
+`ContextResult.sources`, `ContextChange`, `ContextSource`, and
+`contextSourceSchema` leave with that older model.
+
+The reactive client's cache-based `snapshot()` operation and `Snapshot` type are
+removed. Call `read()` for every row an action depends on, assemble those values
+with `context()`, and pass `ctx.reads` to the final write:
+
+```ts
+const ctx = await context({
+  ablo,
+  data: {
+    report: ablo.reports.read({ id: reportId }),
+    documents: searchDocuments(reportId),
+  },
+});
+
+const stop = ctx.onChange((error) => controller.abort(error));
+
+try {
+  const summary = await generateSummary(ctx.data, controller.signal);
+  await ablo.reports.update({
+    id: reportId,
+    data: { summary },
+    reads: ctx.reads,
+  });
+} finally {
+  stop();
+}
+```
+
+`onChange` calls its listeners once when any captured row moves, which lets an
+expensive model call stop early. The final write must still receive
+`reads: ctx.reads`; that server-side check stays authoritative if notification
+races the write or the connection drops.
+
+Atomic `commits.create()` batches accept the same captured rows on both the
+stateless HTTP and reactive WebSocket clients. Typed model claim handles can be
+passed directly as a batch's `claim`, without losing their row type. Disposing a
+reactive client now also disposes its mutation queue and commit-lane timers.
+
+### Claims are available from the shell
+
+The CLI can now acquire, queue for, inspect, heartbeat, and release a row lease:
+
+```bash
+npx ablo claims acquire reports report_123 --queue -- npm run reconcile
+npx ablo claims list reports report_123
+npx ablo claims release reports report_123
+```
+
+The `-- <command>` form keeps the lease alive only while the child process runs
+and releases it on success, failure, or interruption. This lets an operator or
+coding agent participate in the same coordination boundary as SDK clients
+without first adding application code.
+
+### An agent run can carry the person who started it
+
+An agent session can now name the person it acts for. Pass `onBehalfOf` when you
+mint, and every write that agent makes records both principals: the agent as the
+actor, that user as the delegator.
+
+```ts
+const { token } = await server.sessions.create({
+  agent: { id: agentId },
+  onBehalfOf: { user: { id: requestingUserId } },
+  can: { records: ['read', 'update'] },
+  syncGroups: [syncGroup('workspace', workspaceId)],
+});
+```
+
+Until now the delegation chain root came from whoever called the mint. A browser
+session minting for its own user recorded that person; a backend minting with a
+secret key recorded nobody. Background work is the second case, so a queued
+job's writes arrived attributed to the agent alone, or to `system` where the
+worker wrote around Ablo entirely. Ablo never sees your user directory, so it
+cannot recover that identity afterwards.
+
+The rule is about who may attest, not who may ask. A secret key already carries
+organization authority, so it may name any user id, which is what lets a worker
+resume a job somebody else started. A human session may name only its own user,
+and naming another is refused. `onBehalfOf` on a capability that is not an agent
+is refused as well.
+
+Two habits make this hold in practice. Persist the user id on the job before you
+enqueue it, because request context and in-memory arguments do not survive a
+retry or a process boundary, and a durable job without its delegator can only
+produce agent-only attribution. And do not quietly fall back to writing straight
+to the database when minting is unavailable. Those writes are still observed,
+but they carry no trusted correlation and are recorded as `system`.
+
+Omit the field and sessions mint exactly as they did before.
+
+### The CLI has one credential input and a clearer project boundary
+
+`ABLO_API_KEY` is now the CLI's single explicit credential input. Management,
+branch-runtime, and restricted-agent authority follow from the credential kind
+and its server-side grant; `ABLO_MANAGEMENT_KEY` is no longer a separate input.
+Keep management credentials at the control-plane boundary and pass only a
+delegated, per-run `rk_` credential into a sandbox or agent runtime.
+
+After browser approval, `ablo login` now lets an organization with multiple
+projects choose the project in the terminal. `ablo login --project <slug>` skips
+the picker. Credentials remain fixed to the project that minted them, and the
+CLI refuses to silently use another project's stored key.
+
+Database connection setup now handles more provider-specific PostgreSQL role
+constraints, repairs required role inheritance, registers local connectors
+through the control-plane boundary, and reports a missing Data Source API key as
+an authentication problem with a concrete fix. A branch still needs a database
+connected before its schema can be pushed.
+
+### Hosted test branches are explicit and temporary
+
+Live integration fixtures can create an expiring `test` branch backed by Ablo's
+hosted log storage. Hosted storage must be requested explicitly and the branch
+must expire within 24 hours. Ordinary customer branches remain unbound until
+their own database is connected, so a test convenience cannot silently choose
+where customer data lives.
+
+The documentation now includes a coordination-conformance fixture, an
+existing-document evidence pipeline, an existing Python backend path, a
+GraphQL.js approach, and a sandbox-runtime integration guide. These examples
+separate the guarantees Ablo enforces from application, provider, database, and
+deployment responsibilities.
+
+### Pricing and plan limits moved
+
+The rate card, the included allowances, and the plan ceilings all changed in
+this release. The canonical page is published at
+https://docs.abloatai.com/pricing and needs no sign-in.
+
 ## 0.57.0
 
-### Before you upgrade: drain the endpoint outbox
+### The endpoint outbox upgrades without a drain
 
-This release adds a `sync_groups` column to the source outbox, and the migration
-refuses to run while legacy rows are still sitting in it. That refusal is
-deliberate. A legacy row has no routes recorded, and assigning it one would
-either invent an audience or give it none, so the migration stops and tells you
-rather than guessing.
+Endpoint events now have an explicit envelope version. Existing rows and writes
+from an older endpoint are version 1 and pass through the preserved pre-subject
+routing decoder. New adapters write version 2, capturing `sync_groups` in the
+same transaction as the row change. The database constraint requires every
+version-2 event to carry those immutable routes.
 
-If you run a `dataSource()` endpoint, do this on the previous release, in order:
+Old and new endpoint versions may run together during rollout without stalling
+the feed. A page served by an old reader necessarily uses version-1 semantics,
+even when a new writer created the row, because that reader does not select the
+new routing columns. Version-2 routing is therefore universal once every
+endpoint reader has upgraded. There is still no pre-upgrade drain, write pause,
+cursor inspection, or manual deletion.
 
-1. Let Ablo poll until every event already in `ablo_outbox` has been consumed.
-2. Confirm the polling cursor has advanced past the last of them.
-3. Delete those consumed rows.
+Ablo sends `cursor` as the read position and `acknowledgedThrough` separately
+after the event and consumer position are durable. Built-in adapters use that
+explicit acknowledgement for bounded cleanup; custom event handlers may do the
+same.
 
-Then upgrade and run the migration. If you connect your database over
-replication rather than an endpoint, there is no outbox and nothing to do.
+Version 1 remains a deliberately named compatibility decoder, not a
+NULL value silently interpreted as an empty audience. Replication connections
+have no endpoint outbox and require no action.
 
 ### A row is authorized by the subject its schema declares
 

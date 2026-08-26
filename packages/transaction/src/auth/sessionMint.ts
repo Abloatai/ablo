@@ -25,13 +25,13 @@
 import {
   exchangeApiKey,
   mintUserSessionKey,
-} from '../auth/index.js';
+} from './runtime.js';
 import {
   capabilityCanSchemaFor,
   grantedOperations,
 } from './capability.js';
 import type { SchemaRecord } from '../schema/schema.js';
-import type { AbloSession, CreateSessionParams } from '../resources/httpResources.js';
+import type { AbloSession, CreateSessionParams } from '../client/resources/httpResources.js';
 
 /**
  * The resolved control-plane details a mint needs: a secret key, a base URL,
@@ -112,6 +112,7 @@ export async function mintSession<S extends SchemaRecord>(
     baseUrl,
     participantKind: 'agent',
     participantId: params.agent.id,
+    ...(params.onBehalfOf ? { onBehalfOf: params.onBehalfOf } : {}),
     ...(params.syncGroups ? { syncGroups: [...params.syncGroups] } : {}),
     operations,
     ttlSeconds: params.ttlSeconds ?? 900,

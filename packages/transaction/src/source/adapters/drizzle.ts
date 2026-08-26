@@ -41,18 +41,18 @@ import type {
   AdapterReadRequest,
   DataSourceAdapter,
   Row,
-} from '../adapter.js';
-import { defineDatabaseAdapter } from '../adapterFactory.js';
-import { postgresAdapterProfile } from '../adapterProfile.js';
-import type { ChangeSet, EventsPage, Migration, Operation } from '../contract.js';
-import { outboxEventSchema } from '../contract.js';
-import { adapterTableMigrations } from '../migrations.js';
+} from './adapter.js';
+import { defineDatabaseAdapter } from './adapterFactory.js';
+import { postgresAdapterProfile } from './adapterProfile.js';
+import type { ChangeSet, Operation } from './contract.js';
+import type { Migration } from './migration.js';
+import { adapterTableMigrations } from './migrations.js';
 import {
   assertSourceIdempotencyIntent,
   assertSourceIdempotencyRetention,
   SOURCE_IDEMPOTENCY_RETENTION,
   sourceChangeIntentHash,
-} from '../idempotency.js';
+} from './idempotency.js';
 import type { Schema, SchemaRecord } from '../../schema/schema.js';
 import { toSchemaJSON } from '../../schema/serialize.js';
 import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
@@ -66,7 +66,12 @@ import {
   sourceSyncGroups,
   sourceSubjectRule,
   sourceSubjectValues,
-} from '../subjectAuthorization.js';
+} from './subjectAuthorization.js';
+import {
+  decodeDatabaseOutboxEvent,
+  ENDPOINT_OUTBOX_PRUNE_BATCH_SIZE,
+  type EventsPage,
+} from '../outbox/index.js';
 
 /** The subset of a Drizzle database/transaction handle the adapter calls. */
 export interface DrizzleLike {
@@ -287,12 +292,12 @@ export function drizzleDataSource<S extends SchemaRecord>(
           )}]::text[]`;
           await tx.execute(sql`
             INSERT INTO ablo_outbox (
-              id, model, entity_id, type, data, sync_groups,
+              id, model, entity_id, type, data, event_version, sync_groups,
               correlation_id, transaction_id, occurred_at
             )
             VALUES (
               ${`${change.correlationId}:${index}`}, ${op.model}, ${entityId}, ${op.type},
-              ${op.type === 'DELETE' ? null : JSON.stringify(row)}::jsonb,
+              ${op.type === 'DELETE' ? null : JSON.stringify(row)}::jsonb, 2,
               ${syncGroupsSql},
               ${change.correlationId}, ${op.transactionId ?? null}, ${Date.now()}
             )`);
@@ -313,30 +318,27 @@ export function drizzleDataSource<S extends SchemaRecord>(
       });
     },
 
+    async acknowledgeEvents(acknowledgedThrough: string): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          DELETE FROM ablo_outbox
+           WHERE cursor IN (
+             SELECT cursor FROM ablo_outbox
+              WHERE cursor <= ${acknowledgedThrough}
+              ORDER BY cursor ASC LIMIT ${ENDPOINT_OUTBOX_PRUNE_BATCH_SIZE}
+           )`);
+      });
+    },
+
     async events(cursor: string | null, limit: number): Promise<EventsPage> {
       const after = cursor ?? '0';
       const rows = rowsOf(
         await db.execute(sql`
-          SELECT cursor, id, model, entity_id, type, data, sync_groups, organization_id,
+          SELECT cursor, id, model, entity_id, type, data, event_version, sync_groups, organization_id,
                  client_tx_id, correlation_id, transaction_id, occurred_at
           FROM ablo_outbox WHERE cursor > ${after} ORDER BY cursor ASC LIMIT ${limit}`),
       );
-      const events = rows.map((r) =>
-        outboxEventSchema.parse({
-          id: r.id,
-          model: r.model,
-          entityId: r.entity_id,
-          type: r.type,
-          data: r.data ?? null,
-          syncGroups: r.sync_groups ?? [],
-          organizationId: r.organization_id ?? null,
-          clientTxId: r.client_tx_id ?? null,
-          correlationId: r.correlation_id ?? null,
-          transactionId: r.transaction_id ?? null,
-          occurredAt: r.occurred_at != null ? Number(r.occurred_at) : null,
-          cursor: String(r.cursor),
-        }),
-      );
+      const events = rows.map(decodeDatabaseOutboxEvent);
       return { events, nextCursor: events.at(-1)?.cursor ?? null };
     },
   });

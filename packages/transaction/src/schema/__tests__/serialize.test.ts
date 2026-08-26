@@ -182,39 +182,3 @@ describe('serializeSchema / parseSchema', () => {
     expect(schemaHash(different)).not.toBe(h1);
   });
 });
-
-describe('conflict axis (Axis 3) round-trip', () => {
-  // Guards the serialization split-brain: the declared `conflict` map must
-  // survive serialize → parse so a pushed multi-tenant schema enforces the
-  // same coordination as the single-tenant boot path. If any of the three
-  // serialize edits (ModelJSON / modelToJSON / modelFromJSON) is missing, the
-  // field is silently stripped here.
-  it('preserves a declared per-committer-kind conflict map', () => {
-    const s = defineSchema({
-      widgets: model(
-        { name: field.string() },
-        {
-          typename: 'Widget',
-          tableName: 'widgets',
-          mutable: true,
-          conflict: { user: 'overwrite', agent: 'reject', system: 'notify' },
-        }),
-    });
-    const back = parseSchema(serializeSchema(s));
-    expect(back.models.widgets?.conflict).toEqual({
-      user: 'overwrite',
-      agent: 'reject',
-      system: 'notify',
-    });
-  });
-
-  it('absent conflict → undefined after round-trip (back-compat, like plane)', () => {
-    const s = defineSchema({
-      widgets: model({ name: field.string() }, { typename: 'Widget', tableName: 'widgets', mutable: true }),
-    });
-    const back = parseSchema(serializeSchema(s));
-    const widgets = back.models.widgets;
-    if (!widgets) throw new Error('expected widgets model after round-trip');
-    expect(widgets.conflict).toBeUndefined();
-  });
-});

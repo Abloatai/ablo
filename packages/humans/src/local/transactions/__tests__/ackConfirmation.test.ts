@@ -23,7 +23,6 @@ import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
 import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
 import { createItemFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
-import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
 import {
   AbloConnectionError,
   AbloError,
@@ -33,7 +32,7 @@ import type {
   DurableWriteStore,
   PendingWrite,
 } from '../mutations/durableWriteStore.js';
-import { commitEnvelopeRecordId } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+import { commitEnvelopeRecordId } from '@abloatai/transaction/commit';
 
 class MemoryDurableWrites implements DurableWriteStore {
   readonly records = new Map<string, PendingWrite>();
@@ -69,18 +68,6 @@ class MemoryDurableWrites implements DurableWriteStore {
     this.records.delete(id);
     return Promise.resolve();
   }
-}
-
-function staleNotification(id: string): StaleNotification {
-  return {
-    object: 'stale_notification',
-    scope: 'row',
-    target: { model: 'item', id, fields: ['title'] },
-    readAt: 1,
-    observedSyncId: 2,
-    currentValues: { title: 'newer' },
-    writtenBy: { kind: 'user', id: 'user-2' },
-  };
 }
 
 describe('ack-based transaction confirmation', () => {
@@ -296,26 +283,6 @@ describe('ack-based transaction confirmation', () => {
     expect(queue.confirmationFor(item.getModelName(), item.id)).toBe(second.confirmation);
   });
 
-  it('completes held notify members while the forwarded members await their echo', async () => {
-    ctx.mocks.mutationExecutor.setStatus('queued');
-    ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-notify');
-    const heldItem = createItemFixture({ id: 'item-held' });
-    const forwardedItem = createItemFixture({ id: 'item-forwarded' });
-    ctx.mocks.mutationExecutor.setNotifications([
-      staleNotification(heldItem.id),
-    ]);
-
-    const heldPromise = queue.create(heldItem, userContext);
-    const forwardedPromise = queue.create(forwardedItem, userContext);
-    const [held, forwarded] = await Promise.all([heldPromise, forwardedPromise]);
-    await waitFor(
-      () => held.status === 'completed' && forwarded.status === 'awaiting_delta',
-    );
-
-    expect(held.status).toBe('completed');
-    expect(forwarded.status).toBe('awaiting_delta');
-  });
-
   it('fails missing members while the forwarded members await their echo', async () => {
     ctx.mocks.mutationExecutor.setStatus('queued');
     ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-missing');
@@ -390,7 +357,6 @@ describe('ack-based transaction confirmation', () => {
     queue.onDeltaReceived(20_002, undefined, correlationId);
     await expect(receipt).resolves.toEqual({
       lastSyncId: 20_002,
-      notifications: undefined,
       missingIds: ['item-missing'],
     });
   });
@@ -635,45 +601,6 @@ describe('ack-based transaction confirmation', () => {
     await waitFor(
       () => !outbox.records.has(commitEnvelopeRecordId(clientTxId)),
     );
-  });
-
-  it('does not confuse same-id notification targets from different models', async () => {
-    const clientTxId = 'same-id-different-models';
-    const notification = staleNotification('shared-id');
-    ctx.mocks.mutationExecutor.setStatus('queued');
-    const correlationId = 'source-correlation-same-id-models';
-    ctx.mocks.mutationExecutor.setCorrelationId(correlationId);
-    ctx.mocks.mutationExecutor.setNotifications([notification]);
-    await queue.enqueueCommit(clientTxId, [
-      {
-        type: 'UPDATE',
-        model: 'item',
-        id: 'shared-id',
-        input: { title: 'held' },
-      },
-      {
-        type: 'UPDATE',
-        model: 'comment',
-        id: 'shared-id',
-        input: { body: 'forwarded' },
-      },
-    ]);
-    const receipt = queue.waitForCommitReceipt(clientTxId);
-    let settled = false;
-    void receipt.then(() => {
-      settled = true;
-    });
-    await waitFor(
-      () => ctx.mocks.mutationExecutor.getCallsByMethod('commit').length === 1,
-    );
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    queue.onDeltaReceived(30_001, undefined, correlationId);
-    await expect(receipt).resolves.toEqual({
-      lastSyncId: 30_001,
-      notifications: [notification],
-    });
   });
 
 });

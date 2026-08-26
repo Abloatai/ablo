@@ -11,7 +11,7 @@
  * intentionally redacts them, so that path verifies every deterministic id
  * with a point read and refuses any incomplete answer.
  */
-import { Ablo } from '../../ablo.js';
+import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, z } from '../../schema/index.js';
 import {
   confirmedCommitReceiptResponse,

@@ -1,62 +1,62 @@
 ---
 title: "Concurrency Convention"
-description: "What Ablo checks when a guarded write depends on earlier state."
+description: "A write either declares what it read or deliberately does not."
 sidebar:
   icon: git-merge
 ---
 
-Ablo never infers whether a write depends on earlier state. You decide, in two
-places. The model's `conflict` setting in the schema says what each kind of
-participant does when it hits a conflict, and it is the policy for that model.
-A per-write `onStale` states the disposition for one write. Ablo enforces what
-you declared and nothing else.
+Ablo does not put a configurable stale mode between your code and a
+commit. The public choice is visible at the call site:
 
-## Unguarded writes
-
-A plain write has no stale premise:
-
-```ts
-await ablo.records.update({ id, data: { status: 'done' } });
-```
-
-If no active claim conflicts with it, the write is last-write-wins. That is a
-choice rather than a fallback: use it for independent assignments where the
-latest value should win. When a model's writes are never independent, say so
-once in its `conflict` setting instead of at every call site.
+- `get` and `list` observe state. They do not create a write premise.
+- `read` returns a row that can be passed to a mutation in `reads`.
+- a mutation with `reads` rejects with `AbloStaleContextError` if any declared
+  premise changed;
+- a mutation without `reads` is an unconditional, last-write-wins assignment
+  when no active claim applies.
 
 ## Guarded writes
 
-Pass the exact returned rows when a write is based on values previously read:
+Use `read` for every row that materially influenced a decision, then pass the
+exact returned objects to the mutation:
 
 ```ts
-const record = await ablo.records.get({ id });
-const policy = await ablo.policies.get({ id: policyId });
-if (!record || !policy) throw new Error('required input is missing');
+const record = await ablo.records.read({ id });
+const rules = await ablo.rules.read({ id: rulesId });
+if (!record || !rules) throw new Error('required input is missing');
 
 await ablo.records.update({
   id: record.id,
-  data: { status: 'done' },
-  reads: [record, policy],
+  data: decide(record, rules),
+  reads: [record, rules],
 });
 ```
 
-Ablo privately resolves each exact object to its model, id, and read watermark,
-then compares those premises with current state when the write is accepted.
-Clones, fabrications, and rows returned by another client are rejected locally.
+Ablo records only the evidence needed for the check: model, id, and the
+watermark at which the row was read. It does not retain the row's contents.
+The exact object identity matters, so clones, fabricated rows, and rows from a
+different client are rejected locally.
 
-| Disposition | If the premise is stale |
-|---|---|
-| `reject` | Reject the write with `AbloStaleContextError`. |
-| `notify` | Keep the current row, return a `StaleNotification`, and let the caller reconcile. |
-| `overwrite` | Apply the new value without enforcing the stale premise. |
+The server validates every declared premise inside the write transaction. If
+one is stale, the entire mutation rejects before any write applies. Re-read,
+recompute, and submit a new mutation when that is the behavior you want.
 
-`notify` is useful when an agent or human can merge the new information.
-`reject` is useful when the caller should restart from fresh state. Use
-`overwrite` only when the newer assignment should unconditionally win.
+## Unguarded writes
+
+Use `get` or `list` when you only need to observe, and omit `reads` when the
+new value should win regardless of what was previously observed:
+
+```ts
+const visible = await ablo.records.get({ id });
+await ablo.records.update({ id, data: { status: 'done' } });
+```
+
+This is deliberately unconditional, not an implicit fallback. It is suitable
+for independent assignments and inappropriate for read-modify-write decisions.
 
 ## Functional updates
 
-For a pure read-modify-write calculation, use the functional update form:
+For a pure calculation based on one current row, use the functional form:
 
 ```ts
 await ablo.counters.update(counterId, (current) => ({
@@ -64,59 +64,49 @@ await ablo.counters.update(counterId, (current) => ({
 }));
 ```
 
-It performs the read, guarded write, and bounded reconciliation loop for you.
-See [Coordination](/coordination#functional-updates).
+The SDK reads, attempts a guarded write, and retries from fresh state within a
+bounded budget. Because the updater may run more than once, do not perform
+side effects inside it.
 
 ## Claims
 
-A claim protects a target across a longer interval. By default, other
-participants cannot write the claimed target, while contenders that claim it
-wait their turn. Reads remain open. A model's explicit conflict policy can
-choose a different disposition for a participant kind.
+A claim protects a target across a slower read → decide → write interval.
+Foreign writers are rejected while the claim is active; contenders that ask
+to queue wait in order. Ordinary reads stay open.
 
-Claims and stale guards protect different things:
+Claims and stale reads answer different questions:
 
-- A claim excludes other participants while it is held.
-- A stale guard proves that the state a write depended on has not changed.
-- A write made under a claim is still rejected if its own claimed snapshot has
-  become stale.
+| Mechanism | Lifetime | Question |
+|---|---|---|
+| `reads` | One mutation | Is every input to this decision still current? |
+| claim | Slow work interval | Who may write this target while work is underway? |
+| database transaction | One apply | Can this physical change commit atomically? |
+| idempotency key | Retries | Has this same mutation already been applied? |
 
-See [Coordination](/coordination#claims) for the API.
+Claims do not hold a Postgres transaction open while an agent thinks. The
+database transaction remains short and owns only validation plus apply.
 
 ## Cross-row and batch premises
 
-Model writes and lower-level commits can declare rows they read even when the
-write targets somewhere else. This protects decisions such as “update the record
-only if the deal I inspected has not changed.” A stale batch premise applies to
-the whole batch so atomicity is preserved.
+A write may depend on rows other than its target. Put every influential row in
+`reads`; if any one changed, Ablo rejects the whole mutation so atomicity is
+preserved. Declare only material dependencies, because broader premises create
+more contention.
 
-Use the high-level model methods unless you are building a custom runtime. When
-you do use batch premises, declare only the rows or groups that materially
-influenced the decision; overly broad premises create unnecessary contention.
+Low-level runtimes can also declare row or group watermarks directly. They have
+the same fixed result: stale rejects, fresh applies.
 
-## Notifications
+## Live change delivery is separate
 
-A `StaleNotification` identifies the stale premise and provides the current
-state needed to reconcile. The original write has not been applied.
-
-A typical loop is:
-
-1. Inspect the current value in the notification.
-2. Recompute the intended change.
-3. Submit a new guarded write with a fresh premise.
-
-Give this loop a retry budget. Continuous contention should surface to the
-caller rather than retry forever.
+Model `onChange` is not a stale-write disposition. It streams committed changes
+to a stateful WebSocket client. `context().onChange` has the narrower job of
+calling once when one of that context's exact reads changes; HTTP delivers it
+through a response held open for that listener. Neither replaces passing those
+same `reads` to create, update, or delete.
 
 ## Boundaries
 
-Concurrency control does not replace:
-
-- database constraints and transactions for application invariants;
-- authorization for deciding who may read or write;
-- idempotency for safely replaying the same request;
-- claims for exclusivity across slow, side-effecting work.
-
-The rule is simple: the model's `conflict` setting is the policy, and each write
-declares what it read. Plain writes are last-write-wins because declaring
-nothing is itself a decision, so make it deliberately.
+Concurrency control does not replace authorization, database constraints,
+transactions, or idempotency. The rule at the SDK boundary is intentionally
+small: `read` declares a dependency, `reads` enforces it, and omission means an
+unconditional write.

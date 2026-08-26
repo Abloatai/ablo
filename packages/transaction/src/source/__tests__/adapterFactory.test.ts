@@ -1,11 +1,11 @@
-import type { AdapterCapabilities } from '../contract.js';
-import type { MutationAdapter } from '../adapter.js';
-import { defineDatabaseAdapter } from '../adapterFactory.js';
+import type { AdapterCapabilities } from '../adapters/contract.js';
+import type { MutationAdapter } from '../adapters/adapter.js';
+import { defineDatabaseAdapter } from '../adapters/adapterFactory.js';
 import {
   memoryAdapterProfile,
   postgresAdapterProfile,
   type DatabaseAdapterProfile,
-} from '../adapterProfile.js';
+} from '../adapters/adapterProfile.js';
 
 function adapter(
   profile: DatabaseAdapterProfile,

@@ -26,7 +26,6 @@ describe('wireCommitOperationSchema', () => {
           input: { title: 'y' },
           transactionId: 'mut_1',
           readAt: 42,
-          onStale: 'notify',
         },
         { type: 'DELETE', model: 'items', id: 't1' },
         { type: 'ARCHIVE', model: 'items', id: 't2' },
@@ -49,7 +48,6 @@ describe('wireCommitOperationSchema', () => {
         input: { status: 'done' },
         transactionId: null,
         readAt: null,
-        onStale: null,
       }).success,
     ).toBe(true);
   });
@@ -69,21 +67,6 @@ describe('wireCommitOperationSchema', () => {
       fenceToken: 7,
     });
     expect(commitMessageSchema.safeParse(frame).success).toBe(true);
-  });
-
-  it('declares the previously-undeclared `bypass` (boolean | null)', () => {
-    expect(
-      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'items', id: 't1', bypass: true })
-        .success,
-    ).toBe(true);
-    expect(
-      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'items', id: 't1', bypass: null })
-        .success,
-    ).toBe(true);
-    expect(
-      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'items', id: 't1', bypass: 'yes' })
-        .success,
-    ).toBe(false);
   });
 
   it('rejects a string readAt and names the field path', () => {
@@ -106,72 +89,46 @@ describe('wireCommitOperationSchema', () => {
     expect(wireCommitOperationSchema.safeParse({ type: 'CREATE' }).success).toBe(false);
   });
 
-  it('rejects an invalid onStale mode', () => {
-    expect(
-      wireCommitOperationSchema.safeParse({
-        type: 'UPDATE',
-        model: 'items',
-        id: 't1',
-        onStale: 'clobber',
-      }).success,
-    ).toBe(false);
-  });
 });
 
 describe('commitPayloadSchema', () => {
-  it('preserves the full ReadSet projections the SDK sends', () => {
+  it('preserves the compact reads the SDK sends', () => {
     const frame = buildCommitFrame(
       [{ type: 'UPDATE', model: 'items', id: 't1', input: { a: 1 }, readAt: 7 }],
       'tx_batch',
       [
-        { model: 'items', id: 't2', readAt: 5, onStale: 'reject' },
+        { model: 'items', id: 't2', readAt: 5 },
         { group: 'collection:abc', readAt: 5 },
-      ],
-      [
-        { model: 'reports', id: 'r1', readAt: 4, onStale: 'notify' },
-        { group: 'report:abc', readAt: 4, onStale: 'reject' },
       ],
     );
     expect(commitPayloadSchema.safeParse(frame.payload).success).toBe(true);
     expect(frame.payload.reads).toEqual([
-      { model: 'items', id: 't2', readAt: 5, onStale: 'reject' },
+      { model: 'items', id: 't2', readAt: 5 },
       { group: 'collection:abc', readAt: 5 },
     ]);
-    expect(frame.payload.track).toEqual([
-      { model: 'reports', id: 'r1', readAt: 4, onStale: 'notify' },
-      { group: 'report:abc', readAt: 4, onStale: 'reject' },
-    ]);
   });
 
-  it('does not collapse explicit empty or null projections into omission', () => {
-    const empty = buildCommitFrame([], 'tx-empty', [], []);
-    expect(empty.payload).toMatchObject({ reads: [], track: [] });
+  it('does not collapse explicit empty or null reads into omission', () => {
+    const empty = buildCommitFrame([], 'tx-empty', []);
+    expect(empty.payload).toMatchObject({ reads: [] });
 
-    const cleared = buildCommitFrame([], 'tx-null', null, null);
-    expect(cleared.payload).toMatchObject({ reads: null, track: null });
+    const cleared = buildCommitFrame([], 'tx-null', null);
+    expect(cleared.payload).toMatchObject({ reads: null });
   });
 
-  it('caps the combined ReadSet projection at one canonical limit', () => {
+  it('caps reads at the canonical limit', () => {
     const dependency = (index: number) => ({
       model: 'items',
       id: `item-${index}`,
       readAt: index,
     });
-    const reads = Array.from(
-      { length: MAX_READ_SET_ENTRIES / 2 },
-      (_, index) => dependency(index),
-    );
-    const track = Array.from(
-      { length: MAX_READ_SET_ENTRIES / 2 },
-      (_, index) => dependency(index + reads.length),
-    );
+    const reads = Array.from({ length: MAX_READ_SET_ENTRIES }, (_, index) => dependency(index));
     expect(commitPayloadSchema.safeParse({
-      operations: [], clientTxId: 'at-limit', reads, track,
+      operations: [], clientTxId: 'at-limit', reads,
     }).success).toBe(true);
     expect(commitPayloadSchema.safeParse({
       operations: [], clientTxId: 'over-limit',
       reads: [...reads, dependency(MAX_READ_SET_ENTRIES)],
-      track,
     }).success).toBe(false);
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/transaction",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "description": "The headless Ablo transaction client and canonical contracts for reads, commits, confirmation, claims, and durable observation.",
   "license": "Apache-2.0",
   "type": "module",
@@ -49,11 +49,47 @@
       "import": "./dist/branches.js",
       "default": "./dist/branches.js"
     },
+    "./client": {
+      "@ablo/source": "./src/client/index.ts",
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js",
+      "default": "./dist/client/index.js"
+    },
     "./coordination": {
       "@ablo/source": "./src/coordination/index.ts",
       "types": "./dist/coordination/index.d.ts",
       "import": "./dist/coordination/index.js",
       "default": "./dist/coordination/index.js"
+    },
+    "./coordination/*": {
+      "@ablo/source": "./src/coordination/*.ts",
+      "types": "./dist/coordination/*.d.ts",
+      "import": "./dist/coordination/*.js",
+      "default": "./dist/coordination/*.js"
+    },
+    "./claims": {
+      "@ablo/source": "./src/claims/index.ts",
+      "types": "./dist/claims/index.d.ts",
+      "import": "./dist/claims/index.js",
+      "default": "./dist/claims/index.js"
+    },
+    "./claims/*": {
+      "@ablo/source": "./src/claims/*.ts",
+      "types": "./dist/claims/*.d.ts",
+      "import": "./dist/claims/*.js",
+      "default": "./dist/claims/*.js"
+    },
+    "./commit": {
+      "@ablo/source": "./src/commit/index.ts",
+      "types": "./dist/commit/index.d.ts",
+      "import": "./dist/commit/index.js",
+      "default": "./dist/commit/index.js"
+    },
+    "./observation": {
+      "@ablo/source": "./src/observation/index.ts",
+      "types": "./dist/observation/index.d.ts",
+      "import": "./dist/observation/index.js",
+      "default": "./dist/observation/index.js"
     },
     "./wire": {
       "@ablo/source": "./src/wire/index.ts",
@@ -72,6 +108,12 @@
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js",
       "default": "./dist/auth/index.js"
+    },
+    "./auth/*": {
+      "@ablo/source": "./src/auth/*.ts",
+      "types": "./dist/auth/*.d.ts",
+      "import": "./dist/auth/*.js",
+      "default": "./dist/auth/*.js"
     },
     "./keys": {
       "@ablo/source": "./src/keys/index.ts",
@@ -97,11 +139,41 @@
       "import": "./dist/source/index.js",
       "default": "./dist/source/index.js"
     },
-    "./source/*": {
-      "@ablo/source": "./src/source/*.ts",
-      "types": "./dist/source/*.d.ts",
-      "import": "./dist/source/*.js",
-      "default": "./dist/source/*.js"
+    "./source/adapters": {
+      "@ablo/source": "./src/source/adapters/index.ts",
+      "types": "./dist/source/adapters/index.d.ts",
+      "import": "./dist/source/adapters/index.js",
+      "default": "./dist/source/adapters/index.js"
+    },
+    "./source/adapters/*": {
+      "@ablo/source": "./src/source/adapters/*.ts",
+      "types": "./dist/source/adapters/*.d.ts",
+      "import": "./dist/source/adapters/*.js",
+      "default": "./dist/source/adapters/*.js"
+    },
+    "./source/connector": {
+      "@ablo/source": "./src/source/connector/index.ts",
+      "types": "./dist/source/connector/index.d.ts",
+      "import": "./dist/source/connector/index.js",
+      "default": "./dist/source/connector/index.js"
+    },
+    "./source/delivery": {
+      "@ablo/source": "./src/source/delivery/index.ts",
+      "types": "./dist/source/delivery/index.d.ts",
+      "import": "./dist/source/delivery/index.js",
+      "default": "./dist/source/delivery/index.js"
+    },
+    "./source/endpoint": {
+      "@ablo/source": "./src/source/endpoint/index.ts",
+      "types": "./dist/source/endpoint/index.d.ts",
+      "import": "./dist/source/endpoint/index.js",
+      "default": "./dist/source/endpoint/index.js"
+    },
+    "./source/outbox": {
+      "@ablo/source": "./src/source/outbox/index.ts",
+      "types": "./dist/source/outbox/index.d.ts",
+      "import": "./dist/source/outbox/index.js",
+      "default": "./dist/source/outbox/index.js"
     },
     "./server": {
       "@ablo/source": "./src/server/index.ts",
@@ -114,6 +186,30 @@
       "types": "./dist/server/*.d.ts",
       "import": "./dist/server/*.js",
       "default": "./dist/server/*.js"
+    },
+    "./transport": {
+      "@ablo/source": "./src/transport/index.ts",
+      "types": "./dist/transport/index.d.ts",
+      "import": "./dist/transport/index.js",
+      "default": "./dist/transport/index.js"
+    },
+    "./transport/connection": {
+      "@ablo/source": "./src/transport/connection/index.ts",
+      "types": "./dist/transport/connection/index.d.ts",
+      "import": "./dist/transport/connection/index.js",
+      "default": "./dist/transport/connection/index.js"
+    },
+    "./transport/http": {
+      "@ablo/source": "./src/transport/http/index.ts",
+      "types": "./dist/transport/http/index.d.ts",
+      "import": "./dist/transport/http/index.js",
+      "default": "./dist/transport/http/index.js"
+    },
+    "./transport/websocket": {
+      "@ablo/source": "./src/transport/websocket/index.ts",
+      "types": "./dist/transport/websocket/index.d.ts",
+      "import": "./dist/transport/websocket/index.js",
+      "default": "./dist/transport/websocket/index.js"
     },
     "./batching": {
       "@ablo/source": "./src/batching/index.ts",
@@ -169,11 +265,59 @@
       "import": "./dist/docs/*.js",
       "default": "./dist/docs/*.js"
     },
-    "./*": {
-      "@ablo/source": "./src/*.ts",
-      "types": "./dist/*.d.ts",
-      "import": "./dist/*.js",
-      "default": "./dist/*.js"
+    "./client/resources/*": {
+      "@ablo/source": "./src/client/resources/*.ts",
+      "types": "./dist/client/resources/*.d.ts",
+      "import": "./dist/client/resources/*.js",
+      "default": "./dist/client/resources/*.js"
+    },
+    "./testing/fixtures/*": {
+      "@ablo/source": "./src/testing/fixtures/*.ts",
+      "types": "./dist/testing/fixtures/*.d.ts",
+      "import": "./dist/testing/fixtures/*.js",
+      "default": "./dist/testing/fixtures/*.js"
+    },
+    "./types/*": {
+      "@ablo/source": "./src/types/*.ts",
+      "types": "./dist/types/*.d.ts",
+      "import": "./dist/types/*.js",
+      "default": "./dist/types/*.js"
+    },
+    "./utils/*": {
+      "@ablo/source": "./src/utils/*.ts",
+      "types": "./dist/utils/*.d.ts",
+      "import": "./dist/utils/*.js",
+      "default": "./dist/utils/*.js"
+    },
+    "./wire/*": {
+      "@ablo/source": "./src/wire/*.ts",
+      "types": "./dist/wire/*.d.ts",
+      "import": "./dist/wire/*.js",
+      "default": "./dist/wire/*.js"
+    },
+    "./errors": {
+      "@ablo/source": "./src/errors.ts",
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js",
+      "default": "./dist/errors.js"
+    },
+    "./footprint": {
+      "@ablo/source": "./src/footprint.ts",
+      "types": "./dist/footprint.d.ts",
+      "import": "./dist/footprint.js",
+      "default": "./dist/footprint.js"
+    },
+    "./logger": {
+      "@ablo/source": "./src/logger.ts",
+      "types": "./dist/logger.d.ts",
+      "import": "./dist/logger.js",
+      "default": "./dist/logger.js"
+    },
+    "./observability": {
+      "@ablo/source": "./src/observability.ts",
+      "types": "./dist/observability.d.ts",
+      "import": "./dist/observability.js",
+      "default": "./dist/observability.js"
     }
   },
   "files": [
@@ -201,7 +345,7 @@
     "postpack": "node ../ablo/scripts/restore-source-condition.mjs",
     "pack:check": "node ../ablo/scripts/pack-check.mjs",
     "lint:pkg": "publint",
-    "test": "vitest run src/headlessClient.test.ts && jest",
+    "test": "vitest run src/client/headless.test.ts && jest",
     "typecheck": "tsc --noEmit && tsc -p typetests/tsconfig.json"
   },
   "dependencies": {

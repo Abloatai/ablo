@@ -5,19 +5,19 @@
  * client wires this up automatically unless you supply your own executor.
  */
 
-import type { ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
+import type { ReadDependency } from '@abloatai/transaction/coordination/schema';
 import type {
   MutationExecutor,
   MutationOperation,
   MutationOptions,
 } from '../interfaces/index.js';
 import type { CommitAck } from '../sync/commitFrames.js';
-import type { CommitReceiptWire } from '@abloatai/transaction/wire/commit';
+import type { CommitReceiptWire } from '@abloatai/transaction/commit';
 import {
   recordWebSocketCommitReceipt,
   type ReadSetContext,
 } from '@abloatai/transaction/internal/read-set';
-import { commitAckSchema } from '@abloatai/transaction/wire/commit';
+import { commitAckSchema } from '@abloatai/transaction/commit';
 import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 
 // ── Default mutation executor (wire: `commit` frame over WebSocket) ──────
@@ -44,14 +44,12 @@ import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 	      clientTxId: string,
 	      timeoutMs?: number,
 	      reads?: readonly ReadDependency[] | null,
-	      track?: readonly TrackDependency[] | null,
 	    ) => Promise<CommitReceiptWire>;
 	    sendCommit?: (
 	      operations: readonly MutationOperation[],
 	      clientTxId: string,
 	      timeoutMs?: number,
 	      reads?: readonly ReadDependency[] | null,
-	      track?: readonly TrackDependency[] | null,
 	    ) => Promise<CommitAck>;
 	  } | null,
 	  readSetContext?: ReadSetContext,
@@ -80,20 +78,17 @@ import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 	          clientTxId,
 	          undefined,
 	          options?.reads,
-	          options?.track,
 	        );
 	        recordWebSocketCommitReceipt(readSetContext, {
 	          receipt,
 	          operations,
 	          reads: options?.reads,
-	          track: options?.track,
 	        });
 	        return commitAckSchema.parse({
 	          status: receipt.status,
 	          statusAt: receipt.statusAt,
 	          lastSyncId: receipt.lastSyncId,
 	          ...(receipt.correlationId ? { correlationId: receipt.correlationId } : {}),
-	          ...(receipt.notifications ? { notifications: receipt.notifications } : {}),
 	          ...(receipt.missingIds ? { missingIds: receipt.missingIds } : {}),
 	          ...(receipt.operationResults ? { operationResults: receipt.operationResults } : {}),
 	        });
@@ -108,7 +103,6 @@ import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 	        clientTxId,
 	        undefined, // use sendCommit's built-in 15s default; no per-call override
 	        options?.reads,
-	        options?.track,
 	      );
     } catch (err) {
       // Wrap transport-level failures as connection errors so the transaction

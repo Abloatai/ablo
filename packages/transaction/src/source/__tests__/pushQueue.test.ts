@@ -10,7 +10,7 @@ import {
   createPushQueue,
   InMemoryPushQueueStorage,
   STANDARD_WEBHOOKS_RETRY_SCHEDULE,
-} from '../pushQueue.js';
+} from '../delivery/pushQueue.js';
 import type { SourceEvent } from '../index.js';
 
 class TestResponse {

@@ -13,7 +13,7 @@
  *     status: z.enum(['todo', 'doing', 'done']).default('todo'),
  *     projectId: z.string().optional(),
  *   }, {
- *     project: relation.belongsTo('projects', 'projectId'),
+ *     relations: { project: relation.belongsTo('projects', 'projectId') },
  *   }),
  * });
  *
@@ -80,7 +80,7 @@ export {
   type ParticipantKind,
   type ConfirmationState,
   type BackfillProvenance,
-} from '../log/syncDeltaRow.js';
+} from '../observation/persistence/syncDeltaRow.js';
 
 // The wire delta contract — the server-to-client projection of the stored row.
 // Both the client SDK and the server derive their `SyncDelta` type from these with
@@ -98,7 +98,7 @@ export {
   type SyncDeltaWireCore,
   type ClientSyncDelta,
   type ServerSyncDelta,
-} from '../wire/delta.js';
+} from '../observation/contract.js';
 
 // Model builder
 export {
@@ -115,24 +115,7 @@ export {
   type PersistOptions,
   type RelationRecord,
   type GrantsRef,
-  type ConflictAxis,
 } from './model.js';
-
-// Coordination authoring helpers for the `conflict` axis — composable disposition
-// functions plus a combinator that merges them.
-export {
-  coordination,
-  humansOverwrite,
-  humansReject,
-  humansNotify,
-  agentsOverwrite,
-  agentsReject,
-  agentsNotify,
-  systemOverwrite,
-  systemReject,
-  systemNotify,
-  type ConflictRule,
-} from './coordination.js';
 
 // Claim-first shorthand for common model options: `mutable.lazy({...})` and friends
 // encode a model's write-safety and load strategy in the verb, and fall back to
@@ -145,6 +128,7 @@ export {
   composeIdentitySyncGroups,
   type Schema,
   type SchemaRecord,
+  BASE_FIELDS,
   type Model,
   type Row,
   type InferCreate,

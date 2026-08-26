@@ -25,22 +25,22 @@ const ROOT = {
 };
 
 describe('ablo branch', () => {
-  const originalKey = process.env.ABLO_MANAGEMENT_KEY;
+  const originalKey = process.env.ABLO_API_KEY;
   const originalUrl = process.env.ABLO_API_URL;
   const originalFetch = global.fetch;
   let log: ReturnType<typeof jest.spyOn>;
 
   beforeEach(() => {
     log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
-    process.env.ABLO_MANAGEMENT_KEY = 'mk_branch_test';
+    process.env.ABLO_API_KEY = 'mk_branch_test';
     process.env.ABLO_API_URL = 'https://engine.example';
   });
 
   afterEach(() => {
     log.mockRestore();
     global.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.ABLO_MANAGEMENT_KEY;
-    else process.env.ABLO_MANAGEMENT_KEY = originalKey;
+    if (originalKey === undefined) delete process.env.ABLO_API_KEY;
+    else process.env.ABLO_API_KEY = originalKey;
     if (originalUrl === undefined) delete process.env.ABLO_API_URL;
     else process.env.ABLO_API_URL = originalUrl;
   });
@@ -97,6 +97,43 @@ describe('ablo branch', () => {
     expect(JSON.parse(String(request.body))).toMatchObject({
       slug: 'preview-pr-42',
       kind: 'preview',
+    });
+  });
+
+  it('requests explicit hosted storage for an expiring test branch', async () => {
+    const hosted = {
+      ...ROOT,
+      id: 'br_hosted',
+      parent_branch_id: ROOT.id,
+      slug: 'sandbox-live-test',
+      name: 'sandbox-live-test',
+      kind: 'test',
+      root: false,
+    };
+    global.fetch = jest
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(listEnvelope([ROOT])), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(hosted), { status: 201 }));
+
+    const expiresAt = '2026-07-26T12:00:00.000Z';
+    await branches([
+      'ensure',
+      'sandbox-live-test',
+      '--kind',
+      'test',
+      '--hosted',
+      '--expires-at',
+      expiresAt,
+    ]);
+
+    const request = (global.fetch as jest.Mock).mock.calls[1]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      slug: 'sandbox-live-test',
+      kind: 'test',
+      storage: 'hosted',
+      expires_at: expiresAt,
     });
   });
 

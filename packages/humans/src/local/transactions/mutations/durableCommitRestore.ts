@@ -1,9 +1,9 @@
 import { AbloIdempotencyError, AbloValidationError } from '@abloatai/transaction/errors';
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { CommitTransaction } from './commitLane.js';
-import type { DurableCommitEnvelope, CommitOutboxScope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+import type { DurableCommitEnvelope, CommitOutboxScope } from '@abloatai/transaction/commit';
 import type { DurableWriteStore } from './durableWriteStore.js';
-import { durableCommitEnvelopeSchema } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+import { durableCommitEnvelopeSchema } from '@abloatai/transaction/commit';
 
 export interface DurableCommitRestoreContext {
   readonly config: { enablePersistence: boolean };
@@ -94,9 +94,6 @@ export async function restoreDurableCommits(ctx: DurableCommitRestoreContext): P
           operations: envelope.operations.map((operation) => ({ ...operation })),
           ...(envelope.commitOptions.reads
             ? { reads: [...envelope.commitOptions.reads] }
-            : {}),
-          ...(envelope.commitOptions.track
-            ? { track: [...envelope.commitOptions.track] }
             : {}),
           status: 'pending',
           createdAt: envelope.createdAt,

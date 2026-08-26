@@ -54,13 +54,13 @@ async function execute<TInput, TResult>(
 }
 
 describe('Ablo model AI SDK tools', () => {
-  it('reads through the authoritative model get', async () => {
-    const get = jest.fn(async ({ id }: { id: string }) => ({
+  it('reads through the authoritative model operation', async () => {
+    const read = jest.fn(async ({ id }: { id: string }) => ({
       id,
       title: 'Current',
     }));
     const built = readTool(
-      { get },
+      { read },
       {
         description: 'Read a row',
         inputSchema: z.object({ id: z.string() }),
@@ -72,7 +72,7 @@ describe('Ablo model AI SDK tools', () => {
       status: 'found',
       row: { id: 'row-1', title: 'Current' },
     });
-    expect(get).toHaveBeenCalledWith({ id: 'row-1' });
+    expect(read).toHaveBeenCalledWith({ id: 'row-1' });
   });
 
   it('uses a caller-derived stable id for idempotent creation', async () => {

@@ -21,7 +21,7 @@ if (!recordId) throw new Error('RECORD_ID is required');
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 try {
   await ablo.ready();
-  const record = await ablo.records.get({ id: recordId });
+  const record = await ablo.records.read({ id: recordId });
   if (!record) throw new Error(`Record ${recordId} was not found`);
   const commitId = `record:${recordId}:cheap`;
   await ablo.records.update({

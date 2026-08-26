@@ -14,7 +14,7 @@
  * written by hand, since prose cannot be type-checked.
  */
 
-import type { ModelOperations, LocalReadOptions } from './local/client/createModelProxy.js';
+import type { ModelOperations, LocalReadOptions } from './local/client/createModelOperations.js';
 import type { AbloOptions } from './Ablo.js';
 
 // ── compile-time exact-equality (no runtime, no casts) ─────────────────────
@@ -33,7 +33,7 @@ type Expect<T extends true> = T;
  */
 export const PUBLIC_MODEL_VERBS = [
   'get',
-  'retrieve',
+  'read',
   'list',
   'listAll',
   'local',
@@ -41,7 +41,6 @@ export const PUBLIC_MODEL_VERBS = [
   'update',
   'delete',
   'claim',
-  'track',
   'join',
   'onChange',
 ] as const;

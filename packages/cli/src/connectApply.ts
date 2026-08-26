@@ -46,7 +46,12 @@ import {
   formatUnresolvedOwnership,
 } from './connectOwnership';
 import { probeDirectWriteReadiness, type ConnectArgs } from './connect';
-import { detectPooler, detectProvider, logicalReplicationGuidance } from './dbProvider';
+import {
+  detectPooler,
+  detectProvider,
+  logicalReplicationGuidance,
+  replicationGrantRole,
+} from './dbProvider';
 import { generateRolePassword, rewriteDatabaseUrl, readProjectAdminDatabaseUrl } from './dbRole';
 import { ambientEnvKeyNote, resolveMutationApiKey, resolveManagementKey } from './config';
 import { fetchDataSourceState } from './readiness';
@@ -554,6 +559,15 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
       provider,
       existingPublication,
       inheritGrants,
+      // Read off the connected admin rather than guessed from the hostname. A
+      // role can only hand out an attribute it holds, and on RDS and Aurora
+      // BYPASSRLS is reserved to `rdsadmin`, so the recipe substitutes explicit
+      // SELECT policies for the reader.
+      canGrantBypassRls: capability?.rolbypassrls === true,
+      // Same rule, second attribute: RDS and Aurora keep REPLICATION on
+      // rdsadmin and lend it as `rds_replication`, so the recipe grants that
+      // role rather than setting an attribute this admin cannot pass on.
+      canGrantReplication: capability?.rolreplication === true,
     });
   const steps = buildPlan('scram-verifier');
 
@@ -655,7 +669,14 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // the engine would then refuse, with the refusal arriving later from Ablo's
   // network as a permission error against a role apply had just created.
   const replicationProbe = await probeAsRole(replicationUrl, (sql) =>
-    probeReadiness(sql, { coordinatedTables, schema: args.schema, publication })
+    probeReadiness(sql, {
+      coordinatedTables,
+      schema: args.schema,
+      publication,
+      // The reader may hold REPLICATION through the provider's role rather than
+      // the attribute, which is the only shape available on RDS and Aurora.
+      replicationGrantRole: replicationGrantRole(provider),
+    })
   );
   const writeProbe = await probeAsRole(writeUrl, (sql) =>
     probeDirectWriteReadiness(sql, { schema: args.schema, publication })

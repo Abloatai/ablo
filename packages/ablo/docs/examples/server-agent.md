@@ -48,7 +48,7 @@ export async function completeTask(recordId: string, workerId: string) {
   const ablo = await clientForWorker(workerId);
   await ablo.ready();
 
-  const record = await ablo.records.get({ id: recordId });
+  const record = await ablo.records.read({ id: recordId });
   if (!record) return { status: 'not_found' };
 
   const acquired = await ablo.records.claim({
@@ -76,7 +76,7 @@ export async function completeTask(recordId: string, workerId: string) {
 }
 ```
 
-`get({ id })` is an async server read — it hits the server and returns the
+`read({ id })` is an async server read — it hits the server and returns the
 row (or `undefined`, which the early `not_found` guard handles). The update runs
 while the claim is held; awaiting it resolves only once your database has
 confirmed the row landed.

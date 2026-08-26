@@ -52,6 +52,31 @@ class FakePrisma implements PrismaLike {
 }
 
 describe('prismaDataSource', () => {
+  it('prunes acknowledged outbox rows before reading the next page', async () => {
+    const db = new FakePrisma();
+    db.$queryRawUnsafe = <T>(query: string, ...values: unknown[]) => {
+      db.executed.push({ query, values });
+      return Promise.resolve([{
+        cursor: 8,
+        id: 'tx2:0',
+        model: 'item',
+        entity_id: 't2',
+        type: 'CREATE',
+        data: { id: 't2' },
+        sync_groups: ['item:t2'],
+      }] as T);
+    };
+
+    const adapter = prismaDataSource(db, schema);
+    await adapter.acknowledgeEvents('7');
+    const page = await adapter.events('7', 100);
+    expect(db.executed[0]?.query).toContain('DELETE FROM ablo_outbox');
+    expect(db.executed[0]?.query).toContain('WHERE cursor <= $1');
+    expect(db.executed[0]?.values).toEqual(['7', 1_000]);
+    expect(db.executed[1]?.query).toContain('FROM ablo_outbox WHERE cursor > $1');
+    expect(page.nextCursor).toBe('8');
+  });
+
   it('applies the subject predicate before the database limit', async () => {
     const subjectSchema = defineSchema({
       item: model(

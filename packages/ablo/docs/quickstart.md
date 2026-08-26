@@ -10,10 +10,11 @@ confirms it by tailing your write-ahead log (WAL). Your rows live in your databa
 which stays the system of record. Ablo writes rows but **runs no DDL and owns no
 schema** — your migration tool stays in charge of the shape of your database.
 
-> No database yet? Pass an `apiKey` only and Ablo keeps your rows in its own log,
-> so you can build the whole app today. Point it at a
-> separate or local Postgres for a development branch, or at your production
-> database when you're ready.
+> **Which database?** A branch needs one connected before a schema will push, so
+> start on a throwaway rather than your production Postgres. `ablo dev` gives
+> each Git branch its own isolated plane: point a development branch at a local
+> or separate database, and connect your production one when you're ready for it
+> to be the system of record.
 
 ## 1. Install and initialize
 
@@ -26,14 +27,16 @@ npx ablo init
 by signing you in — one browser click, and a project-scoped `mk_` management
 credential is saved locally. Later, `npx ablo dev` (step 4) prepares an isolated branch and writes
 its temporary `ABLO_API_KEY` into `.env.local`, so the SDK follows your Git
-branch with no manual copy-paste. `npx ablo login` also exists standalone. In
-CI, set project management access explicitly:
+branch with no manual copy-paste. `npx ablo login` also exists standalone.
+Headless CI uses the same credential input as every other Ablo process; during branch
+preparation it contains an `mk_` credential:
 
 ```bash
-export ABLO_MANAGEMENT_KEY=mk_...
+export ABLO_API_KEY=mk_...
 ```
 
-Every runtime call needs a branch-bound API key. `ablo dev` exchanges the
+Do not pass that value to application code. Every runtime call needs a
+branch-bound API key. `ablo dev` exchanges the
 stored management credential for
 an expiring `sk_*` key bound to the current development branch.
 Production runtimes use `sk_*`. In production a key points at the database
@@ -67,9 +70,12 @@ export const schema = defineSchema({
 });
 ```
 
-**Reserved fields** — `id`, `createdAt`, `updatedAt`, `organizationId`, and
-`createdBy` are provided by the SDK automatically. Don't declare them in your
-`model(...)` fields; declare only your own.
+**`id` is the only automatic field.** Every row carries one, so leave it out of
+`model(...)`. Everything else is yours, audit fields included: declare
+`createdAt`, `updatedAt` or `createdBy` and `ablo migrate` gives each a column,
+which your write or a database default then fills. Ablo does not write them for
+you. A model that omits them still reads and writes, it just orders and
+attributes its history less precisely.
 
 The schema is registered once (init scaffolds `ablo/register.ts` for you), and
 every type is one parameter away — no `typeof schema` re-stating, anywhere:
@@ -229,12 +235,12 @@ const updated = await ablo.weatherReports.update({
 console.log({ id: updated.id, status: updated.status }); // { id: '...', status: 'ready' }
 ```
 
-Read a single row back with `get({ id })`. It resolves to the row, or to
+Read a single row back with `read({ id })`. It resolves to the row, or to
 `undefined` when no row has that id — so narrow it once, then the fields are
 fully typed:
 
 ```ts
-const report = await ablo.weatherReports.get({ id: created.id });
+const report = await ablo.weatherReports.read({ id: created.id });
 if (!report) throw new Error(`weatherReports ${created.id} not found`);
 
 console.log(report.status); // 'ready'

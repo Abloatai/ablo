@@ -225,11 +225,7 @@ describe('staged-batch drain liveness', () => {
       position: { x: 250, y: 300, width: 200, height: 200 },
     });
 
-    // `onStale: 'notify'` mirrors the layer mutators' NOTIFY_ON_STALE — the
-    // write option that separates layer moves from plain renames. It rides
-    // the journal record (zod-validated) and the wire op, so a schema gap
-    // for it silently drops exactly this class of write and no other.
-    syncClient.update(layer, { onStale: 'notify' });
+    syncClient.update(layer);
 
     expect(await eventually(() => calls.length >= 1, 3_000)).toBe(true);
     const op = calls[0]?.ops[0];

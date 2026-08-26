@@ -56,16 +56,16 @@ export {
   type SourceSignatureOptions,
   type SourceSignatureVerificationOptions,
   type SourceSignatureVerificationResult,
-} from './signing.js';
+} from './endpoint/signing.js';
 
 export {
   dataSource,
   type DataSourceOptions,
-} from './factory.js';
+} from './endpoint/factory.js';
 
 export {
   sourceSubjectCreateLockKey,
-} from './subjectAuthorization.js';
+} from './adapters/subjectAuthorization.js';
 
 export {
   createPushQueue,
@@ -75,7 +75,7 @@ export {
   type PushQueueItem,
   type PushQueueOptions,
   type PushQueueStorage,
-} from './pushQueue.js';
+} from './delivery/pushQueue.js';
 
 // The reverse-channel connector — an outbound transport for the load, list, and
 // commit leg, and the dial-out counterpart to `createPushQueue`. It lets you serve
@@ -84,14 +84,16 @@ export {
 export {
   createSourceConnector,
   DEFAULT_RECONNECT_SCHEDULE,
+  SourceConnectorSupersededError,
   type SourceConnector,
   type SourceConnectorOptions,
   type ConnectorWebSocket,
   type ConnectorWebSocketFactory,
   type ConnectorStatus,
-} from './connector.js';
+} from './connector/client.js';
 export {
   SOURCE_CONNECTOR_PROTOCOL_VERSION,
+  SOURCE_CONNECTOR_SUPERSEDED_CLOSE_CODE,
   SOURCE_CONNECTOR_WS_PATH,
   WS_SOURCE_SUBPROTOCOL,
   sourceConnectorSubprotocols,
@@ -105,7 +107,7 @@ export {
   type RequestFrame,
   type ResponseFrame,
   type ErrorFrame,
-} from './connectorProtocol.js';
+} from './connector/protocol.js';
 
 // The Data Source adapter interface and its Zod contract, with per-ORM implementations.
 export {
@@ -114,7 +116,7 @@ export {
   type AdapterReadRequest,
   type AdapterCommitResult,
   type Row as AdapterRow,
-} from './adapter.js';
+} from './adapters/adapter.js';
 export {
   adapterBindingSchema,
   databaseAdapterProfileSchema,
@@ -127,8 +129,8 @@ export {
   type DatabaseKind,
   type ObservationProfile,
   type PostgresBinding,
-} from './adapterProfile.js';
-export { defineDatabaseAdapter } from './adapterFactory.js';
+} from './adapters/adapterProfile.js';
+export { defineDatabaseAdapter } from './adapters/adapterFactory.js';
 export {
   operationSchema,
   operationTypeSchema,
@@ -137,25 +139,26 @@ export {
   sourceCommitEchoMarkerSchema,
   sourceCommitEchoIntentSchema,
   changeSetSchema,
-  outboxEventSchema,
-  eventsPageSchema,
-  migrationSchema,
   adapterCapabilitiesSchema,
   type Operation,
   type ChangeSet,
-  type OutboxEvent,
-  type EventsPage,
-  type Migration,
   type AdapterCapabilities,
   type SourceCommitEchoMarkerWire,
   type SourceCommitEchoIntent,
-} from './contract.js';
+} from './adapters/contract.js';
+export { migrationSchema, type Migration } from './adapters/migration.js';
+export {
+  endpointOutboxMigrations,
+  eventsPageSchema,
+  outboxEventSchema,
+  type EventsPage,
+  type OutboxEvent,
+} from './outbox/index.js';
 export { prismaDataSource, type PrismaLike, type PrismaDataSourceOptions } from './adapters/prisma.js';
 export {
   adapterTableMigrations,
-  endpointOutboxMigrations,
   idempotencyLedgerMigrations,
-} from './migrations.js';
+} from './adapters/migrations.js';
 export {
   createKyselyMutationAdapter,
   createKyselyMutationCore,
@@ -183,7 +186,7 @@ export {
   encodeSourceEchoTransactionId,
   decodeSourceEchoTransactionId,
   type SourceEchoTransactionId,
-} from './idempotency.js';
+} from './adapters/idempotency.js';
 // What Ablo leaves inside a customer's database, declared once — read by the
 // setup SQL, the replication runtime, and the audit that reports it back.
 export {

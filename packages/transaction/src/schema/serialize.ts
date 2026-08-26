@@ -41,7 +41,6 @@ import type {
   LoadStrategy,
   PersistOptions,
   AutoFillRule,
-  ConflictAxis,
 } from './model.js';
 import {
   relation,
@@ -90,9 +89,6 @@ export interface ModelJSON {
   readonly grants?: GrantsRef;
   readonly entityRoles?: readonly EntityRole[];
   readonly routingOnly?: true;
-  /** The declared write-conflict disposition per committer kind. When absent,
-   *  the engine falls back to its default. */
-  readonly conflict?: ConflictAxis;
   readonly bootstrapLimit?: number;
   readonly bootstrapOrderBy?: string;
   readonly mutable?: boolean;
@@ -145,7 +141,6 @@ function modelToJSON(def: ModelDef): ModelJSON {
     grants: def.grants,
     entityRoles: def.entityRoles,
     routingOnly: def.routingOnly,
-    conflict: def.conflict,
     bootstrapLimit: def.bootstrapLimit,
     bootstrapOrderBy: def.bootstrapOrderBy,
     mutable: def.mutable,
@@ -285,9 +280,6 @@ function modelFromJSON(json: ModelJSON): ModelDef {
     grants: json.grants,
     entityRoles: json.entityRoles,
     routingOnly: json.routingOnly,
-    // Absent in older artifacts → undefined, so the commit path falls through to
-    // the function registry or the engine default.
-    conflict: json.conflict,
     mutable: json.mutable,
     lazyObservable: json.lazyObservable,
     // computed getters are closures and intentionally not serialized; a

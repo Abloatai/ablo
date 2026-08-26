@@ -56,12 +56,13 @@ for changes.
 Read and write through one typed API:
 
 ```ts
-const order = await ablo.orders.get({ id: orderId });
+const order = await ablo.orders.read({ id: orderId });
 
 if (!order) throw new Error('Order not found');
 await ablo.orders.update({
   id: order.id,
   data: { status: 'approved' },
+  reads: [order],
 });
 ```
 

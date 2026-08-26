@@ -17,4 +17,4 @@ export {
   type WsInboundFrame,
   type WsSession,
   type WsFrameHandler,
-} from '@abloatai/transaction/transport/wsFrameHandlers';
+} from '@abloatai/transaction/transport/websocket';

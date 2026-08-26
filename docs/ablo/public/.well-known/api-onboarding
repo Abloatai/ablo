@@ -18,17 +18,17 @@
     "plans": [
       {
         "name": "Free",
-        "requiredFor": "Build against the real engine without a card. No card and no monthly minimum. Capped rather than metered: 100K operations a month and 10K a day, refused beyond that. Up to 25 concurrent connections.",
+        "requiredFor": "Free for early-stage teams building against the real engine. No card and no monthly minimum. 100K operations included each month. Without billing, requests stop at that allowance with a 10K daily burst guard; billing enables pay-as-you-go usage above it. Up to 25 concurrent connections.",
         "url": "https://docs.abloatai.com/pricing"
       },
       {
         "name": "Scale",
-        "requiredFor": "Production traffic, metered above a monthly floor. $20 monthly minimum, with usage metered against it. Up to 1,000 concurrent connections. Adds audit log export.",
+        "requiredFor": "Built for scaling teams with production traffic. $250 monthly minimum, with usage metered against it. Up to 1,000 concurrent connections. Adds audit log export.",
         "url": "https://docs.abloatai.com/pricing"
       },
       {
         "name": "Enterprise",
-        "requiredFor": "Committed volume, private networking, and an uptime guarantee. $2000 monthly minimum, with usage metered against it. Concurrency negotiated. Adds single sign-on, audit log export, customer-managed encryption keys, private networking, custom limits.",
+        "requiredFor": "Custom infrastructure, security, and support for critical workloads. $4000 monthly minimum, with usage metered against it. Concurrency negotiated. Adds single sign-on, audit log export, customer-managed encryption keys, private networking, custom limits.",
         "url": "https://docs.abloatai.com/pricing"
       }
     ],
@@ -67,17 +67,6 @@
   "authentication": {
     "methods": [
       {
-        "id": "management-key",
-        "type": "bearer-env",
-        "env": [
-          "ABLO_MANAGEMENT_KEY"
-        ],
-        "header": "Authorization",
-        "scheme": "Bearer",
-        "bootstrap": "A person runs `npx ablo login` once and approves the device grant in a browser. In CI there is no login: the value is set as an environment variable.",
-        "notes": "Control-plane commands only: projects, branches, and schema pushes."
-      },
-      {
         "id": "api-key",
         "type": "bearer-env",
         "env": [
@@ -85,8 +74,8 @@
         ],
         "header": "Authorization",
         "scheme": "Bearer",
-        "bootstrap": "`ablo dev --no-watch --branch <ref>` exchanges the management credential for a branch-bound secret key and writes it to a gitignored `.env.local`. No secret is copied by hand.",
-        "notes": "The runtime credential every read, commit, and claim authenticates with."
+        "bootstrap": "A person runs `npx ablo login` once; `ablo dev --no-watch --branch <ref>` then exchanges the stored grant for a branch-bound key and writes it to a gitignored `.env.local`. Headless automation supplies its credential through the same environment variable.",
+        "notes": "The credential prefix and server-side grant determine whether this input may manage a project, operate on a branch, or run with restricted agent authority."
       }
     ]
   },
@@ -151,7 +140,7 @@
   },
   "economics": {
     "pricingUrl": "https://docs.abloatai.com/pricing",
-    "freeTier": "Build against the real engine without a card. No card and no monthly minimum. Capped rather than metered: 100K operations a month and 10K a day, refused beyond that. Up to 25 concurrent connections.",
+    "freeTier": "Free for early-stage teams building against the real engine. No card and no monthly minimum. 100K operations included each month. Without billing, requests stop at that allowance with a 10K daily burst guard; billing enables pay-as-you-go usage above it. Up to 25 concurrent connections.",
     "rateLimitsUrl": "https://docs.abloatai.com/pricing"
   },
   "gaps": [

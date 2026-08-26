@@ -7,14 +7,7 @@
  */
 
 import {
-  onStaleModeSchema,
-  commitReadSetEntrySchema,
-  persistedReadSetEntrySchema,
-  readSetEntrySchema,
-  readSetSchema,
   readDependencySchema,
-  staleNotificationSchema,
-  trackDependencySchema,
   wireClaimStatusSchema,
   wireClaimSchema,
   claimErrorSchema,
@@ -29,178 +22,22 @@ import {
 
 describe('coordination wire schema', () => {
   describe('layer 3 — optimistic stale-context', () => {
-    it('onStale accepts the three modes and rejects unknown', () => {
-      for (const m of ['reject', 'overwrite', 'notify']) {
-        expect(onStaleModeSchema.safeParse(m).success).toBe(true);
-      }
-      expect(onStaleModeSchema.safeParse('clobber').success).toBe(false);
-      expect(onStaleModeSchema.safeParse('flag').success).toBe(false); // old name, renamed → notify
-      expect(onStaleModeSchema.safeParse('force').success).toBe(false); // old name, renamed → overwrite
-      expect(onStaleModeSchema.safeParse('merge').success).toBe(false); // removed
+    it('records compact row and group reads with a nonnegative integer readAt', () => {
+      expect(readDependencySchema.parse({
+        model: 'Item', id: 't1', fields: ['status'], readAt: 17,
+      })).toEqual({
+        model: 'Item', id: 't1', fields: ['status'], readAt: 17,
+      });
+      expect(readDependencySchema.safeParse({
+        group: 'report:abc', readAt: 18,
+      }).success).toBe(true);
+      expect(readDependencySchema.safeParse({ model: 'Item', id: 't1', readAt: -1 }).success)
+        .toBe(false);
+      expect(readDependencySchema.safeParse({ model: 'Item', id: 't1', readAt: 1.5 }).success)
+        .toBe(false);
     });
 
-    describe('ReadSet is the canonical decision-input structure', () => {
-      it('models an exact commit-lifetime row or group read', () => {
-        expect(commitReadSetEntrySchema.parse({
-          target: { scope: 'row', model: 'Item', id: 't1', fields: ['status'] },
-          watermark: 17,
-          lifetime: 'commit',
-          onStale: 'reject',
-        })).toEqual({
-          target: { scope: 'row', model: 'Item', id: 't1', fields: ['status'] },
-          watermark: 17,
-          lifetime: 'commit',
-          onStale: 'reject',
-        });
-        expect(commitReadSetEntrySchema.safeParse({
-          target: { scope: 'group', group: 'report:abc' },
-          watermark: 18,
-          lifetime: 'commit',
-          onStale: 'notify',
-        }).success).toBe(true);
-      });
-
-      it('makes persisted lifetime and narrowed disposition explicit', () => {
-        expect(persistedReadSetEntrySchema.safeParse({
-          target: { scope: 'row', model: 'Item', id: 't1' },
-          watermark: 17,
-          lifetime: 'persisted',
-          onStale: 'notify',
-        }).success).toBe(true);
-        expect(persistedReadSetEntrySchema.safeParse({
-          target: { scope: 'row', model: 'Item', id: 't1' },
-          watermark: 17,
-          lifetime: 'persisted',
-          onStale: 'overwrite',
-        }).success).toBe(false);
-      });
-
-      it('requires resolved watermarks internally while track keeps its wire default', () => {
-        expect(persistedReadSetEntrySchema.safeParse({
-          target: { scope: 'group', group: 'report:abc' },
-          lifetime: 'persisted',
-          onStale: 'notify',
-        }).success).toBe(false);
-        expect(trackDependencySchema.safeParse({ group: 'report:abc' }).success).toBe(true);
-      });
-
-      it('forms one lifetime-discriminated collection', () => {
-        const entries = [
-          {
-            target: { scope: 'row' as const, model: 'Item', id: 't1' },
-            watermark: 17,
-            lifetime: 'commit' as const,
-            onStale: 'reject' as const,
-          },
-          {
-            target: { scope: 'group' as const, group: 'report:abc' as const },
-            watermark: 17,
-            lifetime: 'persisted' as const,
-            onStale: 'notify' as const,
-          },
-        ];
-        expect(readSetSchema.parse(entries)).toEqual(entries);
-        expect(entries.every((entry) => readSetEntrySchema.safeParse(entry).success)).toBe(true);
-      });
-
-      it('uses one nonnegative integer watermark domain for every entry', () => {
-        const entry = {
-          target: { scope: 'row' as const, model: 'Item', id: 't1' },
-          lifetime: 'commit' as const,
-          onStale: 'reject' as const,
-        };
-        expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: 0 }).success).toBe(true);
-        expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: -1 }).success).toBe(false);
-        expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: 1.5 }).success).toBe(false);
-        expect(readDependencySchema.safeParse({ model: 'Item', id: 't1', readAt: -1 }).success)
-          .toBe(false);
-      });
-    });
-
-    it('staleNotificationSchema validates a notify-instead-of-abort signal', () => {
-      const parsed = staleNotificationSchema.safeParse({
-        object: 'stale_notification',
-        scope: 'row',
-        target: { model: 'item', id: 't1', fields: ['status'] },
-        readAt: 10,
-        observedSyncId: 12,
-        currentValues: { status: 'done' },
-        writtenBy: { kind: 'agent', id: 'agent-1' },
-      });
-      expect(parsed.success).toBe(true);
-    });
-
-    it('a group notification names the row that moved AND the premise it broke', () => {
-      const parsed = staleNotificationSchema.safeParse({
-        object: 'stale_notification',
-        scope: 'group',
-        // The moved row, two hops below the group's scope root — NOT the group
-        // key restated as a row, which is what this used to carry.
-        target: { model: 'EntryDetail', id: 'L-9', fields: ['fill'] },
-        group: 'collection:d-1',
-        propagation: { via: 'transitive', through: ['entries', 'collections'] },
-        readAt: 10,
-        observedSyncId: 12,
-        writtenBy: { kind: 'agent', id: 'agent-1' },
-      });
-      expect(parsed.success).toBe(true);
-      // Narrowing on `scope` is what makes the group-only fields reachable.
-      if (parsed.success && parsed.data.scope === 'group') {
-        expect(parsed.data.group).toBe('collection:d-1');
-        expect(parsed.data.propagation?.via).toBe('transitive');
-        expect(parsed.data.target.id).toBe('L-9');
-      }
-    });
-
-    it('a group notification can report how much of the group moved', () => {
-      const parsed = staleNotificationSchema.safeParse({
-        object: 'stale_notification',
-        scope: 'group',
-        target: { model: 'EntryDetail', id: 'L-9', fields: ['fill'] },
-        group: 'collection:d-1',
-        // The signal that lets an actor decline to re-read: 12k rows moved and
-        // the sample names only the newest few.
-        changed: {
-          count: 12_403,
-          sample: [{ model: 'EntryDetail', id: 'L-9' }],
-          truncated: true,
-        },
-        readAt: 10,
-        observedSyncId: 12,
-        writtenBy: { kind: 'agent', id: 'agent-1' },
-      });
-      expect(parsed.success).toBe(true);
-      if (parsed.success && parsed.data.scope === 'group') {
-        expect(parsed.data.changed?.count).toBe(12_403);
-        expect(parsed.data.changed?.truncated).toBe(true);
-      }
-    });
-
-    it('a group notification requires a well-formed group key', () => {
-      const parsed = staleNotificationSchema.safeParse({
-        object: 'stale_notification',
-        scope: 'group',
-        target: { model: 'EntryDetail', id: 'L-9', fields: [] },
-        group: 'not-a-group-key', // no `kind:id` — matches nothing, so it is rejected
-        readAt: 10,
-        observedSyncId: 12,
-        writtenBy: { kind: 'agent', id: 'agent-1' },
-      });
-      expect(parsed.success).toBe(false);
-    });
-
-    it('staleNotificationSchema rejects a bad participant kind', () => {
-      const parsed = staleNotificationSchema.safeParse({
-        object: 'stale_notification',
-        scope: 'row',
-        target: { model: 'item', id: 't1', fields: [] },
-        readAt: 10,
-        observedSyncId: 12,
-        currentValues: {},
-        writtenBy: { kind: 'robot', id: 'x' },
-      });
-      expect(parsed.success).toBe(false);
-    });
+    // Stale premises reject; there is no success-with-notification receipt.
 
     it('the write-guard fields live ON the commit operation', () => {
       const parsed = commitOperationSchema.safeParse({
@@ -209,8 +46,6 @@ describe('coordination wire schema', () => {
         id: 't1',
         input: { status: 'done' },
         readAt: 1748160000000,
-        onStale: 'reject',
-        bypass: false,
       });
       expect(parsed.success).toBe(true);
     });
@@ -221,66 +56,14 @@ describe('coordination wire schema', () => {
       ).toBe(true);
     });
 
-    // `track` is a projection of `reads`, and these are the three ways the
-    // projection says they differ. Pinned behaviorally rather than by comparing
-    // the two shapes, which would only prove the copy matches itself.
-    describe('track is the durable projection of reads', () => {
-      it('names its target the same way, at both grains', () => {
-        expect(trackDependencySchema.safeParse({ model: 'Item', id: 't1' }).success).toBe(true);
-        expect(trackDependencySchema.safeParse({ group: 'report:abc' }).success).toBe(true);
+    it('a read premise keeps its field grain', () => {
+      const parsed = readDependencySchema.parse({
+        model: 'Item',
+        id: 't1',
+        readAt: 7,
+        fields: ['status'],
       });
-
-      it('makes readAt optional, where a read premise requires it', () => {
-        expect(trackDependencySchema.safeParse({ group: 'report:abc' }).success).toBe(true);
-        expect(readDependencySchema.safeParse({ group: 'report:abc' }).success).toBe(false);
-      });
-
-      it('carries a NARROWED disposition and no field grain', () => {
-        const parsed = trackDependencySchema.parse({
-          model: 'Item',
-          id: 't1',
-          onStale: 'reject',
-          fields: ['status'],
-        });
-        // The disposition survives — it is what decides whether a moved belief
-        // merely reports or gates the tracker's next write.
-        expect(parsed).toMatchObject({ onStale: 'reject' });
-        // The field grain does not: `track_dependencies` has no column to store
-        // one in, so a track fires at row grain.
-        expect(parsed).not.toHaveProperty('fields');
-      });
-
-      it('defaults to notify, so an existing track is unchanged', () => {
-        const parsed = trackDependencySchema.parse({ model: 'Item', id: 't1' });
-        expect(parsed).not.toHaveProperty('onStale'); // server default: 'notify'
-      });
-
-      it('excludes overwrite — a track guards no write of its own to apply', () => {
-        expect(
-          trackDependencySchema.safeParse({ model: 'Item', id: 't1', onStale: 'overwrite' })
-            .success,
-        ).toBe(false);
-        // The read premise, which DOES guard a write, still accepts it.
-        expect(
-          readDependencySchema.safeParse({
-            model: 'Item',
-            id: 't1',
-            readAt: 7,
-            onStale: 'overwrite',
-          }).success,
-        ).toBe(true);
-      });
-
-      it('a read premise keeps both', () => {
-        const parsed = readDependencySchema.parse({
-          model: 'Item',
-          id: 't1',
-          readAt: 7,
-          onStale: 'reject',
-          fields: ['status'],
-        });
-        expect(parsed).toMatchObject({ onStale: 'reject', fields: ['status'] });
-      });
+      expect(parsed).toMatchObject({ fields: ['status'] });
     });
   });
 
@@ -393,7 +176,7 @@ describe('coordination wire schema', () => {
         heldBy: 'agent:pulse',
         heldByClaimId: 'claim-a',
         heldByExpiresAt: 1748160300000,
-        policyReason: 'same row is already being reformatted',
+        message: 'same row is already being reformatted',
         heldByClaim: {
           claimId: 'claim-a',
           entityType: 'Item',
@@ -406,7 +189,7 @@ describe('coordination wire schema', () => {
       expect(rich.success).toBe(true);
       if (!rich.success) return;
       expect(rich.data.heldByClaim?.description).toBe('reformatting the pricing table');
-      expect(rich.data.policyReason).toBe('same row is already being reformatted');
+      expect(rich.data.message).toBe('same row is already being reformatted');
     });
 
     // Two refusals, two decisions: `conflict` means someone holds the row and
@@ -414,7 +197,7 @@ describe('coordination wire schema', () => {
     // known about it. A free string made those one value, so a caller could
     // not branch. The wire spelling is frozen, so an unrecognised word from an
     // older server drops to absent rather than arriving as prose — prose has
-    // its own field in `policyReason`.
+    // its own field in `message`.
     it('types the refusal reason and drops a word it does not know', () => {
       const known = claimRejectionSchema.safeParse({
         claimId: 'claim-r',
@@ -426,13 +209,13 @@ describe('coordination wire schema', () => {
       const older = claimRejectionSchema.safeParse({
         claimId: 'claim-r',
         reason: 'some_word_a_newer_server_invented',
-        policyReason: 'the policy said no',
+        message: 'claim denied',
       });
       expect(older.success).toBe(true);
       if (older.success) {
         expect(older.data.reason).toBeUndefined();
         // The frame still parses, and the prose it carried is not lost.
-        expect(older.data.policyReason).toBe('the policy said no');
+        expect(older.data.message).toBe('claim denied');
       }
     });
 

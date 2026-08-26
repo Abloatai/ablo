@@ -58,9 +58,11 @@ export function parsePublishedOpenApi(json: string): PublishedOpenApi {
 /** Where each descriptor is served, relative to the documentation site root. */
 export const APIS_JSON_PATH = '.well-known/apis.json';
 export const ONBOARDING_PATH = '.well-known/api-onboarding';
+export const API_CATALOG_PATH = '.well-known/api-catalog';
 
 const apisJsonUrl = `${ABLO_DOCS_BASE_URL}/${APIS_JSON_PATH}`;
 const onboardingUrl = `${ABLO_DOCS_BASE_URL}/${ONBOARDING_PATH}`;
+const apiCatalogUrl = `${ABLO_DOCS_BASE_URL}/${API_CATALOG_PATH}`;
 
 /**
  * The date this index first existed. APIs.json carries `created`/`modified`
@@ -113,7 +115,7 @@ function planRequirement(plan: PlanDefinition): string {
 
   if (plan.hardCapOps !== null && plan.hardCapOpsPerDay !== null) {
     said.push(
-      `Capped rather than metered: ${formatOps(plan.hardCapOps)} operations a month and ${formatOps(plan.hardCapOpsPerDay)} a day, refused beyond that.`,
+      `${formatOps(plan.hardCapOps)} operations included each month. Without billing, requests stop at that allowance with a ${formatOps(plan.hardCapOpsPerDay)} daily burst guard; billing enables pay-as-you-go usage above it.`,
     );
   }
 
@@ -148,9 +150,18 @@ export function renderApisJson(openapi: PublishedOpenApi, promise: string): stri
     tags: [...TAGS],
     maintainers: [{ FN: 'Ablo', email: 'support@abloatai.com', url: ABLO_SITE_BASE_URL }],
     common: [
+      { type: 'DeveloperPortal', url: ABLO_DOCS_BASE_URL },
+      { type: 'Documentation', url: ABLO_DOCS_BASE_URL },
+      { type: 'APIReference', url: `${ABLO_DOCS_BASE_URL}/api-reference` },
+      { type: 'GettingStarted', url: `${ABLO_DOCS_BASE_URL}/quickstart` },
+      { type: 'Authentication', url: `${ABLO_DOCS_BASE_URL}/api-keys` },
+      { type: 'Examples', url: `${ABLO_DOCS_BASE_URL}/examples` },
+      { type: 'WellKnown', url: apiCatalogUrl },
+      { type: 'SecurityTxt', url: `${ABLO_DOCS_BASE_URL}/.well-known/security.txt` },
       { type: 'Terms of Service', url: `${ABLO_SITE_BASE_URL}/terms-conditions` },
       { type: 'Privacy Policy', url: `${ABLO_SITE_BASE_URL}/privacy-policy` },
       { type: 'ChangeLog', url: `${ABLO_DOCS_BASE_URL}/changelog` },
+      { type: 'Security', url: 'https://github.com/Abloatai/ablo/security/advisories/new' },
       { type: 'APIOnboarding', url: onboardingUrl },
     ],
     apis: [
@@ -185,6 +196,35 @@ export function renderApisJson(openapi: PublishedOpenApi, promise: string): stri
   };
 
   return `${JSON.stringify(index, null, 2)}\n`;
+}
+
+/**
+ * RFC 9727 API catalog in RFC 9264 JSON Linkset form.
+ *
+ * `/.well-known/apis.json` remains the richer inventory. This smaller document
+ * is the standards-defined first hop: it names the callable API and links its
+ * machine contract, human documentation, and provider metadata without making
+ * a crawler know the APIs.json convention first.
+ */
+export function renderApiCatalog(openapi: PublishedOpenApi): string {
+  const production = openapi.servers[0];
+  const catalog = {
+    linkset: [
+      {
+        anchor: production.url,
+        'service-desc': [
+          {
+            href: `${ABLO_DOCS_BASE_URL}/openapi.json`,
+            type: 'application/vnd.oai.openapi+json;version=3.1',
+          },
+        ],
+        'service-doc': [{ href: ABLO_DOCS_BASE_URL, type: 'text/html' }],
+        'service-meta': [{ href: apisJsonUrl, type: 'application/json' }],
+      },
+    ],
+  };
+
+  return `${JSON.stringify(catalog, null, 2)}\n`;
 }
 
 /**
@@ -272,22 +312,13 @@ export function renderOnboardingDescriptor(openapi: PublishedOpenApi): string {
     authentication: {
       methods: [
         {
-          id: 'management-key',
-          type: 'bearer-env',
-          env: ['ABLO_MANAGEMENT_KEY'],
-          header: 'Authorization',
-          scheme: 'Bearer',
-          bootstrap: 'A person runs `npx ablo login` once and approves the device grant in a browser. In CI there is no login: the value is set as an environment variable.',
-          notes: 'Control-plane commands only: projects, branches, and schema pushes.',
-        },
-        {
           id: 'api-key',
           type: 'bearer-env',
           env: ['ABLO_API_KEY'],
           header: 'Authorization',
           scheme: 'Bearer',
-          bootstrap: '`ablo dev --no-watch --branch <ref>` exchanges the management credential for a branch-bound secret key and writes it to a gitignored `.env.local`. No secret is copied by hand.',
-          notes: 'The runtime credential every read, commit, and claim authenticates with.',
+          bootstrap: 'A person runs `npx ablo login` once; `ablo dev --no-watch --branch <ref>` then exchanges the stored grant for a branch-bound key and writes it to a gitignored `.env.local`. Headless automation supplies its credential through the same environment variable.',
+          notes: 'The credential prefix and server-side grant determine whether this input may manage a project, operate on a branch, or run with restricted agent authority.',
         },
       ],
     },

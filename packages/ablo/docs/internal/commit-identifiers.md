@@ -30,13 +30,12 @@ and the [coordination reference](../coordination.md).
 
 | id | wire field | persisted to | what it asserts | rejects when |
 |---|---|---|---|---|
-| **read basis** | per-op `readAt` | `sync_deltas.read_at_sync_id` | "the state I reasoned **from**": a version watermark | the row moved since `readAt` (version-CAS), under `onStale: 'reject'` |
+| **read basis** | per-op `readAt` | `sync_deltas.read_at_sync_id` | "the state I reasoned **from**": a version watermark | the row moved since `readAt` (version-CAS), so the write rejects |
 | **fencing token** | per-op `fenceToken` | `sync_deltas.fence_token` **and** `claim_fence_watermark.fence_token` | "the lease generation I was authorized **at**": a monotonic per-entity high-water | the token is below the entity's persisted high-water: a lapsed holder writing after its successor already claimed, wrote, and released |
 | **claim / lease** | `claimId`, `heldBy` on the `WireClaim` | the coordination store (Redis), not `sync_deltas` | "I hold this row right now": live mutual exclusion | a non-holder writes a row another participant holds |
 
-`onStale` (`notify` / `reject` / `overwrite`) is **not** an id — it's the
-disposition that decides what a stale `readAt` *does*. It rides with the read
-basis but is policy, not evidence, so it isn't persisted.
+The read basis is evidence for one fixed precondition, not a subscription or a
+policy selector.
 
 Why the token is a distinct id from `readAt`, and not just reused `sync_id`:
 `readAt` advances on every **write** and asserts *from what data*; the token
@@ -79,8 +78,8 @@ write from the row alone, never from a live lease that has since vanished:
 
 `read_at_sync_id` and `fence_token` are companions: the first records the data
 version the write reasoned against, the second the lease generation it was
-authorized at. Both are `NULL` when the write carried none (an unclaimed write, a
-human `user` committer exempt under Law 7, or a legacy row) — **never fabricated
+authorized at. Both are `NULL` when the write carried none (an unclaimed write
+or a legacy row) — **never fabricated
 server-side**. The evidence derives only from what the write actually presented,
 so the audit row can't drift from what the fence enforced.
 

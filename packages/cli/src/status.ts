@@ -21,7 +21,6 @@ import { resolveTarget, describeMismatches, type ResolvedTarget } from './target
 import { credentialCapability } from './credentialCapability';
 import { brand } from './theme';
 import { apiBaseUrl } from './controlPlane';
-import { participantKindSchema } from '@abloatai/transaction/coordination/schema';
 import {
   fetchRoutingState,
   fetchPushedSchema,
@@ -54,15 +53,6 @@ async function ping(apiUrl: string): Promise<boolean> {
   } finally {
     clearTimeout(t);
   }
-}
-
-/** Compact `{user:overwrite,agent:reject}` (or '' when default). */
-function formatConflict(conflict: PushedModel['conflict']): string {
-  if (!conflict) return '';
-  const parts = participantKindSchema.options.flatMap((k) =>
-    conflict[k] ? [`${k}:${conflict[k]}`] : []
-  );
-  return parts.length ? `{${parts.join(',')}}` : '';
 }
 
 /**
@@ -409,9 +399,7 @@ export async function status(args: string[] = []): Promise<void> {
           m.typename === m.key
             ? pc.dim(`typename=${m.typename}`)
             : pc.yellow(`typename=${m.typename}`);
-        const conflict = formatConflict(m.conflict);
-        const conflictStr = conflict ? `  ${pc.dim(`conflict=${conflict}`)}` : '';
-        console.log(`          ${pc.dim('•')} ${m.key.padEnd(14)} ${tn}${conflictStr}`);
+        console.log(`          ${pc.dim('•')} ${m.key.padEnd(14)} ${tn}`);
       }
     } else if (pushed && !pushed.active) {
       console.log(

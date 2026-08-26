@@ -51,7 +51,7 @@ function requireKey(): string {
     console.error(
       pc.red('  No project management credential.') +
         pc.dim(
-          ` Run ${pc.bold('npx ablo login')} — or set ${pc.bold('ABLO_MANAGEMENT_KEY')} ` +
+          ` Run ${pc.bold('npx ablo login')} — or set ${pc.bold('ABLO_API_KEY')} ` +
             `to an ${pc.bold('mk_')} credential.`,
         ),
     );
@@ -89,6 +89,26 @@ export type ProjectListResult =
   | { readonly ok: false; readonly reason: string };
 
 /**
+ * Reads a listing out of a project-list response, or the reason there is
+ * none. The one place that response is checked: below here it is a typed
+ * value, never re-examined, and a body that does not match is a failure to
+ * degrade from, not a shape to cast over. Shared by the management-key listing
+ * below and the one `ablo login` makes with its device session before it
+ * mints, so both read the server's answer the same way.
+ */
+export function projectListResult(status: number, body: unknown): ProjectListResult {
+  if (status !== 200) {
+    const code =
+      typeof body === 'object' && body !== null && 'code' in body ? body.code : undefined;
+    return { ok: false, reason: typeof code === 'string' ? code : `HTTP ${status}` };
+  }
+  const parsed = projectListResponseSchema.safeParse(body);
+  return parsed.success
+    ? { ok: true, projects: parsed.data.data }
+    : { ok: false, reason: 'the response did not match the project list' };
+}
+
+/**
  * Lists the projects the key can see (`GET /api/v1/projects`). Every failure —
  * no key, an unreachable server, a denial, a body that doesn't match — answers
  * with the reason rather than an absence, so a caller degrades knowingly.
@@ -106,17 +126,7 @@ export async function listProjects(
 ): Promise<ProjectListResult> {
   try {
     const { status, body } = await request('/api/v1/projects', apiKey, {}, baseUrl);
-    if (status !== 200) {
-      const code = (body as { code?: unknown } | null)?.code;
-      return { ok: false, reason: typeof code === 'string' ? code : `HTTP ${status}` };
-    }
-    // The one place this response is checked. Below here it is a typed value,
-    // never re-examined — a body that does not match is a failure to degrade
-    // from, not a shape to cast over.
-    const parsed = projectListResponseSchema.safeParse(body);
-    return parsed.success
-      ? { ok: true, projects: parsed.data.data }
-      : { ok: false, reason: 'the response did not match the project list' };
+    return projectListResult(status, body);
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : 'the request failed' };
   }
@@ -194,6 +204,16 @@ export async function ensureProject(
   }
 }
 
+/**
+ * A display name worth showing beside the slug, or none: a name that only
+ * re-spells its slug ("Billing API" for `billing-api`) says nothing twice.
+ * The list table and the login picker both read names through this.
+ */
+export function projectDisplayName(p: ProjectObject): string | undefined {
+  const spelling = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return p.name && spelling(p.name) !== spelling(p.slug) ? p.name : undefined;
+}
+
 // Column widths are measured on the text a terminal actually shows, so a
 // colored cell pads the same as a plain one.
 // eslint-disable-next-line no-control-regex
@@ -242,12 +262,9 @@ function describeAge(createdAt: string): string {
 function printList(projects: readonly ProjectObject[]): void {
   const active = getActiveProject();
   const profiles = readConfig()?.profiles ?? {};
-  // A display name that only re-spells its slug ("Billing API" for `billing-api`)
-  // says nothing twice, so it earns no column — and where no project has a name
-  // that adds anything, the column itself goes.
-  const spelling = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const nameOf = (p: ProjectObject): string =>
-    p.name && spelling(p.name) !== spelling(p.slug) ? p.name : '';
+  // A name earns a column only where it adds something — and where no project
+  // has one that does, the column itself goes.
+  const nameOf = (p: ProjectObject): string => projectDisplayName(p) ?? '';
   const showNames = projects.some((p) => nameOf(p) !== '');
 
   const slugWidth = Math.max(...projects.map((p) => p.slug.length));

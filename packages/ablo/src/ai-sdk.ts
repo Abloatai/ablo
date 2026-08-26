@@ -1,7 +1,7 @@
 export * from '@abloatai/transaction/ai-sdk';
 
 import { z } from 'zod';
-import type { ContextResult } from './context.js';
+import type { ContextResult } from './context/index.js';
 
 const contextMessageOptionsSchema = z.object({
   include: z.array(z.string()).readonly().optional(),

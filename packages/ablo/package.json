@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -95,10 +95,10 @@
       "default": "./dist/ai-sdk.js"
     },
     "./context": {
-      "@ablo/source": "./src/context.ts",
-      "types": "./dist/context.d.ts",
-      "import": "./dist/context.js",
-      "default": "./dist/context.js"
+      "@ablo/source": "./src/context/index.ts",
+      "types": "./dist/context/index.d.ts",
+      "import": "./dist/context/index.js",
+      "default": "./dist/context/index.js"
     },
     "./wire": {
       "@ablo/source": "./src/wire.ts",
@@ -155,8 +155,8 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.57.0",
-    "@abloatai/transaction": "^0.57.0",
+    "@abloatai/humans": "^0.58.0",
+    "@abloatai/transaction": "^0.58.0",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

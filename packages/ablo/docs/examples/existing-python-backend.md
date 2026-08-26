@@ -65,7 +65,7 @@ secret key — then pass it to the provider via `client`.
 // web/app/providers.tsx
 'use client';
 
-import Ablo from '@abloatai/ablo';
+import { Ablo } from '@abloatai/ablo/react';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
@@ -248,21 +248,19 @@ Ablo -> realtime fanout and receipt
 The app does not need a flag-day rewrite. Move one model at a time.
 
 ```ts
-const snap = ablo.snapshot({ weatherReports: reportId });
+const report = await ablo.weatherReports.read({ id: reportId });
+if (!report) throw new Error('report not found');
 
 await ablo.weatherReports.update({
   id: reportId,
   data: { status: 'ready' },
-  readAt: snap.stamp,
-  onStale: 'reject',
+  reads: [report],
 });
 ```
 
-Use `readAt` and `onStale: 'reject'` for actions that depend on state the user
-or agent already saw. If two people both click "mark ready" on a report one of
-them already finished, `onStale: 'reject'` makes the second write fail instead
-of silently clobbering — `readAt: snap.stamp` is the version the user actually
-saw, and the write is rejected if the row changed underneath them.
+Use `read` and pass its exact result in `reads` for actions that depend on state
+the user or agent already saw. If the row changed underneath that decision, the
+write rejects instead of silently clobbering the newer value.
 
 ## 5. Report Direct Database Writes
 
@@ -285,14 +283,13 @@ and timestamp. If the change originated from an Ablo commit, include the same
 Agents use the same model API as the UI:
 
 ```ts
-const report = await ablo.weatherReports.get({ id: reportId });
-const snap = ablo.snapshot({ weatherReports: reportId });
+const report = await ablo.weatherReports.read({ id: reportId });
+if (!report) throw new Error('report not found');
 
 await ablo.weatherReports.update({
   id: reportId,
   data: { status: 'ready' },
-  readAt: snap.stamp,
-  onStale: 'reject',
+  reads: [report],
 });
 ```
 

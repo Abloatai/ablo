@@ -11,14 +11,14 @@
  */
 
 import { getContext } from '../context.js';
-import { clientSyncDeltaSchema, type ClientSyncDelta } from '@abloatai/transaction/wire/delta';
+import { clientSyncDeltaSchema, type ClientSyncDelta } from '@abloatai/transaction/observation';
 import { drainProfilingEnabled, observeDrainStage } from './drainProfile.js';
 import {
   WsTransport,
   type WsTransportOptions,
   type EventMap,
   type DefaultCollaborationEvents,
-} from '@abloatai/transaction/transport/wsTransport';
+} from '@abloatai/transaction/transport/websocket';
 import { isRecord } from './wsFrameHandlers.js';
 // Sync-position state (lastSyncId watermark, version vector, server cursor).
 import { SyncCursor } from './syncCursor.js';
@@ -41,7 +41,7 @@ export type {
   DefaultCollaborationEvents,
   EventMap,
   SyncWebSocketEventMap,
-} from '@abloatai/transaction/transport/wsTransport';
+} from '@abloatai/transaction/transport/websocket';
 
 /**
  * How often, while connected, the client polls for any deltas whose best-effort

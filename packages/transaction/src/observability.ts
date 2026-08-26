@@ -1,8 +1,8 @@
 /**
  * The observability the confirmation core reports on its own behalf.
  *
- * Coordination outcomes — a claim changing state, a stale-write collision that
- * notified instead of aborting — happen with no UI and no local store anywhere,
+ * Coordination outcomes — a claim changing state or a rejected write collision
+ * — happen with no UI and no local store anywhere,
  * so the core must be able to report them without depending on the consumer's
  * full provider (ADR 0016).
  *
@@ -11,13 +11,13 @@
  * this interface, so a single implementation still satisfies both.
  */
 
-import type { ClaimEvent, ConflictEvent } from './coordination/events.js';
+import type { ClaimEvent, ConflictEvent } from './claims/events.js';
 
 export interface CoordinationObservability {
   /** Capture a claim state change (acquired / queued / granted / lost / rejected / expired). */
   captureClaim(event: ClaimEvent): void;
 
-  /** Capture a notify-instead-of-abort stale-write collision. */
+  /** Capture a rejected stale-write or foreign-claim collision. */
   captureConflict(event: ConflictEvent): void;
 }
 

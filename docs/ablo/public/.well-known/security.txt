@@ -1,0 +1,4 @@
+Contact: https://github.com/Abloatai/ablo/security/advisories/new
+Expires: 2027-08-01T00:00:00Z
+Preferred-Languages: en
+Canonical: https://docs.abloatai.com/.well-known/security.txt

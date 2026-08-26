@@ -17,7 +17,7 @@ import { omittedModelError } from '@abloatai/transaction/schema/select';
 import {
   durableCommitOperationSchema,
   type DurableCommitOperation,
-} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+} from '@abloatai/transaction/commit';
 import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, claimedError } from '@abloatai/transaction/errors';
 import type { ModelTarget, ModelClaim } from '@abloatai/transaction/coordination/schema';
 import type { BatchFence } from '@abloatai/transaction/coordination';
@@ -41,11 +41,14 @@ import type { StoreCluster } from './storeCluster.js';
 import { startStoreLifecycle } from './storeLifecycle.js';
 import type { SyncWebSocket, CoreSyncEventMap } from '../sync/SyncWebSocket.js';
 import { createClaimStream } from '../sync/createClaimStream.js';
-import { awaitClaimGrant } from '@abloatai/transaction/coordination/awaitClaimGrant';
-import { createSnapshot } from '../sync/createSnapshot.js';
+import { awaitClaimGrant } from '@abloatai/transaction/claims';
+import {
+  bindClaimLifetime,
+  claimLifetimeOf,
+} from '@abloatai/transaction/claims/lifetime';
 import { createParticipantManager } from '../sync/participants.js';
 import type { AttachablePresenceStream } from '../../presenceStream.js';
-import type { ClaimWaitOptions, Snapshot } from '@abloatai/transaction/types/streams';
+import type { ClaimWaitOptions } from '@abloatai/transaction/types/streams';
 import type { Claim } from '@abloatai/transaction/types/streams';
 import type { CredentialProvider } from '@abloatai/transaction/auth/apiKey';
 import { resolveApiKeyValue, resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
@@ -66,9 +69,9 @@ import type {
 import {
   claimAttemptFailure,
   emitClaimStatus,
-} from '@abloatai/transaction/resources/modelOperations';
-import { createModelProxy, type ModelOperations } from './createModelProxy.js';
-import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
+} from '@abloatai/transaction/client/resources/modelOperations';
+import { createModelOperations, type ModelOperations } from './createModelOperations.js';
+import { assertWriteOptions } from '@abloatai/transaction/client/resources/writeOptionsSchema';
 import type { AbloClient as Ablo } from '../../client.js';
 import {
   modelReadResponseSchema,
@@ -76,8 +79,17 @@ import {
   commitRecordListSchema,
   commitRecordWhereSchema,
 } from '@abloatai/transaction/wire';
-import { translateHttpError } from '@abloatai/transaction/errors';
-import { kReadEvidence } from '@abloatai/transaction/internal/read-set';
+import {
+  translateHttpError,
+  type AbloStaleContextError,
+} from '@abloatai/transaction/errors';
+import {
+  kReadEvidence,
+  prepareReadSet,
+} from '@abloatai/transaction/internal/read-set';
+import { contextOnChange } from '../sync/contextOnChange.js';
+import type { ReadDependency } from '@abloatai/transaction/coordination';
+import type { CapturedRow } from '@abloatai/transaction/transport/http';
 
 /**
  * What the reactive build is fed: the factory's pass over the options bag
@@ -296,7 +308,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 
 	  function normalizeCommitOperation(
 	    op: CommitOperationInput,
-	    defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
+	    defaults: Pick<CommitCreateOptions, 'readAt'>,
 	    fence: BatchFence | null,
 	    claim: Claim | null,
 	  ): DurableCommitOperation {
@@ -311,14 +323,13 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      claimId:
 	        op.claimId ?? claimIdFor(claim?.target, claim?.id, op.model, op.id ?? null) ?? undefined,
 	      readAt: op.readAt ?? defaults.readAt ?? undefined,
-	      onStale: op.onStale ?? defaults.onStale ?? undefined,
 	      fenceToken:
 	        op.fenceToken ?? fenceTokenFor(fence, op.model, op.id ?? null) ?? undefined,
 	    });
 	  }
 
 	  function normalizeCommitOperations(
-	    commitOptions: CommitCreateOptions,
+	    commitOptions: Pick<CommitCreateOptions, 'operations' | 'readAt' | 'claim'>,
 	    fence: BatchFence | null,
 	  ): DurableCommitOperation[] {
 	    if (commitOptions.operations.length === 0) {
@@ -457,7 +468,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	    // the one `awaitClaimGrant` read there; retain the handle fallback for
 	    // wire-compatible transports that already stamped it locally.
 	    const resolvedFenceToken = fenceToken ?? claim.fenceToken;
-	    return {
+	    const wrapped = {
 	      object: 'claim',
 	      id: claim.id,
 	      description: claim.description,
@@ -472,7 +483,9 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      // silently dropped from the public claim.
 	      heartbeat: claim.heartbeat,
 	      [Symbol.asyncDispose]: release,
-	    };
+	    } satisfies Claim;
+	    const lifetime = claimLifetimeOf(claim);
+	    return lifetime ? bindClaimLifetime(wrapped, lifetime) : wrapped;
 	  }
 
 	  const publicClaims: ClaimResource = Object.assign(claimStream, {
@@ -580,7 +593,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
   const modelProxies: Record<string, ModelOperations<unknown, unknown>> = {};
   for (const [schemaKey, modelDef] of Object.entries(schema.models)) {
     const registeredModelName = modelDef.typename ?? schemaKey;
-    modelProxies[schemaKey] = createModelProxy(
+    modelProxies[schemaKey] = createModelOperations(
       schemaKey,
       registeredModelName,
       objectPool,
@@ -593,20 +606,11 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
         // only runs when someone actually writes a batch.
         commitBatch: (commitOptions) => commits.create(commitOptions),
         readPoint,
-        createSnapshot: (modelKey, id) =>
-          createSnapshot({
-            pool: objectPool,
-            transport,
-            // `position.readFloor` is the value claims and snapshots stamp as
-            // `readAt` (max of the pool-applied cursor and the acked
-            // watermark for our own writes — see logPosition.ts).
-            // Stamping a bare stream cursor made a claim taken right after
-            // an ack-confirmed write stale against that write's own delta.
-            // The socket/store cursors are persistence-gated and therefore
-            // never ahead of `applied` — no extra max() needed here.
-            getLastSyncId: () => syncClient.position.readFloor,
-            entities: { [modelKey]: id },
-          }),
+        // A claim needs the post-read watermark, not the legacy snapshot
+        // object. `readFloor` is max(applied, acked-own-write), so a claim
+        // taken immediately after its own confirmed mutation is not stale
+        // against an echo that has not materialised locally yet.
+        currentReadAt: () => syncClient.position.readFloor,
         queue: (target) =>
           publicClaims.queueFor(streamTarget(target)),
         reorder: (target, order) =>
@@ -656,31 +660,39 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     );
   }
 
-	  const commits: CommitResource = {
-	    async create(commitOptions: CommitCreateOptions): Promise<CommitReceipt> {
+	  const commits: CommitResource<ReadDependency | CapturedRow> = {
+	    async create(
+        commitOptions: CommitCreateOptions<ReadDependency | CapturedRow>,
+      ): Promise<CommitReceipt> {
 	      await ready();
+	      const prepared = prepareReadSet(
+          cluster.readSetContext,
+          syncClient as object,
+          commitOptions.readAt,
+          commitOptions.idempotencyKey,
+          commitOptions.reads,
+        );
 	      // Same runtime contract as the per-model writes — one schema.
 	      assertWriteOptions(
 	        {
-	          idempotencyKey: commitOptions.idempotencyKey,
-	          readAt: commitOptions.readAt,
-	          onStale: commitOptions.onStale,
+	          idempotencyKey: prepared.idempotencyKey,
+	          readAt: prepared.readAt,
 	          wait: commitOptions.wait,
 	          claim: commitOptions.claim,
+	          reads: prepared.reads,
 	        },
 	        'commits.create',
 	      );
-	      const clientTxId = createClientTxId(commitOptions.idempotencyKey);
+	      const clientTxId = createClientTxId(prepared.idempotencyKey);
 	      // A claim handle supplies the batch stale-guard defaults — same
 	      // semantics as `ablo.<model>.update({ id, data, claim })`, so the
 	      // two write doors speak one claim vocabulary. Explicit options win.
 	      const claim = commitOptions.claim ?? null;
 	      const operations = normalizeCommitOperations(
 	        {
-	          ...commitOptions,
-	          readAt: commitOptions.readAt ?? claim?.readAt ?? null,
-	          onStale:
-	            commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
+	          operations: commitOptions.operations,
+	          ...(commitOptions.claim !== undefined ? { claim: commitOptions.claim } : {}),
+	          readAt: prepared.readAt ?? claim?.readAt ?? null,
 	        },
 	        batchFence(claim?.target, claim?.fenceToken),
 	      );
@@ -696,21 +708,19 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      // no need to leak an accessor through BaseSyncedStore.
 	      const queue = syncClient.getMutationQueue();
 	      await queue.enqueueCommit(clientTxId, operations, {
-	        ...(commitOptions.reads ? { reads: [...commitOptions.reads] } : {}),
-	        ...(commitOptions.track ? { track: [...commitOptions.track] } : {}),
+	        ...(prepared.reads ? { reads: [...prepared.reads] } : {}),
 	      });
 
 	      if (wait === 'queued') {
 	        return { id: clientTxId, status: 'queued' };
 	      }
 
-	      const { lastSyncId, notifications, missingIds, operationResults } =
+	      const { lastSyncId, missingIds, operationResults } =
 	        await queue.waitForCommitReceipt(clientTxId);
 	      return {
 	        id: clientTxId,
 	        status: 'confirmed',
 	        lastSyncId,
-	        ...(notifications && notifications.length > 0 ? { notifications } : {}),
 	        ...(missingIds && missingIds.length > 0 ? { missingIds } : {}),
 	        ...(operationResults && operationResults.length > 0 ? { operationResults } : {}),
 	      };
@@ -905,6 +915,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
         const sessionParams = {
           agent: { id },
           can: params.can,
+          ...(params.onBehalfOf ? { onBehalfOf: params.onBehalfOf } : {}),
           ...(params.syncGroups ? { syncGroups: params.syncGroups } : {}),
           ...(params.ttlSeconds !== undefined ? { ttlSeconds: params.ttlSeconds } : {}),
           ...(userMeta ? { userMeta } : {}),
@@ -1018,21 +1029,18 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 
 	    commits,
 
-    /** Context-staleness snapshot — see `engine.snapshot(...)` JSDoc. */
-    snapshot<ModelName extends keyof S & string>(
-      entities: Readonly<Record<ModelName, string | readonly string[]>>,
-    ): Snapshot<Schema<S>, ModelName> {
-      return createSnapshot<Schema<S>, ModelName>({
-        pool: objectPool,
-        transport,
-        getLastSyncId: () => transport.getLastSyncId(),
-        entities,
-      });
-    },
   } as Ablo<S>;
 
   Object.defineProperty(engine, kReadEvidence, {
-    value: { context: cluster.readSetContext, client: syncClient as object },
+    value: {
+      context: cluster.readSetContext,
+      client: syncClient as object,
+      onChange: (
+        reads: readonly ReadDependency[],
+        listener: (error: AbloStaleContextError) => void,
+      ) =>
+        contextOnChange(syncClient, objectPool, reads, listener),
+    },
     enumerable: false,
   });
 

@@ -39,7 +39,7 @@ describe('local connector flags', () => {
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe('https://api.example/v1/datasources');
+    expect(url).toBe('https://api.example/api/v1/datasources');
     expect(JSON.parse(String(init?.body))).toMatchObject({
       endpoint: 'http://localhost/ablo-dev/reverse-channel',
       signingKey: KEY,

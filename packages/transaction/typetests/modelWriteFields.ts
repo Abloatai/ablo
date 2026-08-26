@@ -1,7 +1,7 @@
 import type {
   ModelDeleteParams,
   ModelUpdateParams,
-} from '../src/resources/modelOperations.js';
+} from '../src/client/resources/modelOperations.js';
 
 interface ItemRow {
   id: string;

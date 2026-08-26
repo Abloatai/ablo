@@ -22,8 +22,8 @@ export type {
   WhereOp,
   WhereClause,
   LoadWhere,
-} from '@abloatai/transaction/resources/where';
-import type { WhereClause } from '@abloatai/transaction/resources/where';
+} from '@abloatai/transaction/client/resources/where';
+import type { WhereClause } from '@abloatai/transaction/client/resources/where';
 import type { ModelListEvidence } from '@abloatai/transaction/wire';
 
 /** A single structured fetch request. */

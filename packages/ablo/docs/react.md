@@ -25,7 +25,7 @@ as props. Construct the client once, then pass that instance to the provider.
 
 ```ts
 // lib/ablo.ts
-import Ablo from '@abloatai/ablo';
+import { Ablo } from '@abloatai/ablo/react';
 import { createAbloReact } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
@@ -140,12 +140,12 @@ const reports = useAblo((ablo) =>
 ## Server Load
 
 ```tsx
-const report = await ablo.weatherReports.get({ id });
+const report = await ablo.weatherReports.read({ id });
 ```
 
 Use `get` in Server Components when the row may not be in the local pool
 yet — it hydrates from the local store and the server, and returns a Promise, so
-`await` it. (Server reads come in two shapes: `get({ id })` for one row and
+`await` it. (Server reads come in two shapes: `read({ id })` for one row and
 `list({ where })` for many; both are async. The synchronous local reads are
 the `local` reads, used in render below.)
 
@@ -156,12 +156,12 @@ For Server Actions and route handlers, call the SDK directly:
 ```ts
 import { ablo } from '@/lib/ablo';
 
-const snap = ablo.snapshot({ weatherReports: id });
+const report = await ablo.weatherReports.read({ id });
+if (!report) throw new Error('report not found');
 await ablo.weatherReports.update({
   id,
   data: patch,
-  readAt: snap.stamp,
-  onStale: 'reject',
+  reads: [report],
 });
 ```
 
@@ -173,12 +173,12 @@ const ablo = useAblo();
 
 async function markReady() {
   if (!ablo) return;
-  const snap = ablo.snapshot({ weatherReports: id });
+  const report = await ablo.weatherReports.read({ id });
+  if (!report) return;
   await ablo.weatherReports.update({
     id,
     data: { status: 'ready' },
-    readAt: snap.stamp,
-    onStale: 'reject',
+    reads: [report],
   });
 }
 ```

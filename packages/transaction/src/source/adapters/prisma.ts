@@ -20,18 +20,19 @@ import type {
   AdapterReadRequest,
   DataSourceAdapter,
   Row,
-} from '../adapter.js';
-import { defineDatabaseAdapter } from '../adapterFactory.js';
-import { postgresAdapterProfile } from '../adapterProfile.js';
-import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '../contract.js';
-import { outboxEventSchema } from '../contract.js';
-import { adapterTableMigrations } from '../migrations.js';
+} from './adapter.js';
+import { defineDatabaseAdapter } from './adapterFactory.js';
+import { postgresAdapterProfile } from './adapterProfile.js';
+import type { ChangeSet, Operation } from './contract.js';
+import type { Migration } from './migration.js';
+import type { EventsPage, OutboxEvent } from '../outbox/index.js';
+import { adapterTableMigrations } from './migrations.js';
 import {
   assertSourceIdempotencyIntent,
   assertSourceIdempotencyRetention,
   SOURCE_IDEMPOTENCY_RETENTION,
   sourceChangeIntentHash,
-} from '../idempotency.js';
+} from './idempotency.js';
 import type { SchemaRecord, Schema } from '../../schema/schema.js';
 import { toSchemaJSON } from '../../schema/serialize.js';
 import { camelToSnake } from '../../schema/ddl.js';
@@ -48,7 +49,11 @@ import {
   sourceSyncGroups,
   sourceSubjectRule,
   sourceSubjectValues,
-} from '../subjectAuthorization.js';
+} from './subjectAuthorization.js';
+import {
+  decodeDatabaseOutboxEvent,
+  ENDPOINT_OUTBOX_PRUNE_BATCH_SIZE,
+} from '../outbox/index.js';
 
 /** A Prisma model delegate — the subset of its methods the adapter calls. */
 export interface PrismaDelegate {
@@ -280,9 +285,9 @@ export function prismaDataSource<S extends SchemaRecord>(
           // Transactional outbox: one event per operation, written in this same transaction.
           await tx.$executeRawUnsafe(
             `INSERT INTO ablo_outbox (
-               id, model, entity_id, type, data, sync_groups,
+               id, model, entity_id, type, data, event_version, sync_groups,
                correlation_id, transaction_id, occurred_at
-             ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::text[], $7, $8, $9)`,
+             ) VALUES ($1, $2, $3, $4, $5::jsonb, 2, $6::text[], $7, $8, $9)`,
             `${change.correlationId}:${index}`,
             op.model,
             entityId,
@@ -319,35 +324,31 @@ export function prismaDataSource<S extends SchemaRecord>(
       });
     },
 
+    async acknowledgeEvents(acknowledgedThrough: string): Promise<void> {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          `DELETE FROM ablo_outbox
+            WHERE cursor IN (
+              SELECT cursor FROM ablo_outbox
+               WHERE cursor <= $1 ORDER BY cursor ASC LIMIT $2
+            )`,
+          acknowledgedThrough,
+          ENDPOINT_OUTBOX_PRUNE_BATCH_SIZE,
+        );
+      });
+    },
+
     async events(cursor: string | null, limit: number): Promise<EventsPage> {
-      const after = cursor ? cursor : '0';
+      const after = cursor ?? '0';
       const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
-        `SELECT cursor, id, model, entity_id, type, data, sync_groups, organization_id,
+        `SELECT cursor, id, model, entity_id, type, data, event_version, sync_groups, organization_id,
                 client_tx_id, correlation_id, transaction_id, occurred_at
          FROM ablo_outbox WHERE cursor > $1 ORDER BY cursor ASC LIMIT $2`,
         after,
         limit,
       );
-      const events: OutboxEvent[] = rows.map((r) =>
-        outboxEventSchema.parse({
-          id: r.id,
-          model: r.model,
-          entityId: r.entity_id,
-          type: r.type,
-          data: r.data ?? null,
-          syncGroups: r.sync_groups ?? [],
-          organizationId: r.organization_id ?? null,
-          clientTxId: r.client_tx_id ?? null,
-          correlationId: r.correlation_id ?? null,
-          transactionId: r.transaction_id ?? null,
-          occurredAt: r.occurred_at != null ? Number(r.occurred_at) : null,
-          cursor: String(r.cursor),
-        }),
-      );
-      return {
-        events,
-        nextCursor: events.at(-1)?.cursor ?? null,
-      };
+      const events: OutboxEvent[] = rows.map(decodeDatabaseOutboxEvent);
+      return { events, nextCursor: events.at(-1)?.cursor ?? null };
     },
   });
 }

@@ -12,7 +12,7 @@ import { InstanceCache } from '../../InstanceCache.js';
 import { Model } from '../../Model.js';
 import { ModelScope, LoadStrategy } from '@abloatai/transaction/types';
 import { Ablo, type InternalAbloOptions } from '../../../Ablo.js';
-import { createModelProxy } from '../createModelProxy.js';
+import { createModelOperations } from '../createModelOperations.js';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import { z } from 'zod';
@@ -156,7 +156,7 @@ describe('Ablo model proxy naming', () => {
       title: 'Archived',
     }), ModelScope.archived);
 
-    const items = createModelProxy<ItemRow, Omit<ItemRow, 'id'>>(
+    const items = createModelOperations<ItemRow, Omit<ItemRow, 'id'>>(
       'items',
       'Item',
       pool,

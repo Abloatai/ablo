@@ -29,11 +29,6 @@ import { getFieldMeta, inferFieldMetaFromZod, type FieldMeta } from './field.js'
 import { resolvePolicy, type Tenancy, type ScopedViaRef, type PolicyInput } from './tenancy.js';
 export type { ScopedViaRef, Tenancy, PolicyInput } from './tenancy.js';
 import { DEFAULT_RESIDENCY, type ModelResidency } from './residency.js';
-// The write-conflict disposition. It is plain data (the `onStale` vocabulary) so it
-// round-trips through schema serialization, and the engine interprets it when a
-// commit is applied.
-import type { ConflictAxis } from '../policy/types.js';
-export type { ConflictAxis } from '../policy/types.js';
 
 /** Normalize the `entityRoles` option (single | array | undefined) to an array. */
 function normalizeEntityRoles(
@@ -198,29 +193,6 @@ export interface ModelOptions {
   groups?: GroupsInput;
 
   /**
-   * Write-conflict disposition, set per committer kind — decides what happens when a
-   * commit collides with another participant's claim or with a stale snapshot of this
-   * model. This is independent of {@link policy} (read access) and {@link groups}
-   * (delta routing). It is a map keyed by the committer's kind (`user`, `agent`, or
-   * `system`), with these outcomes as values:
-   *
-   * - `'overwrite'` — the write wins; that committer is never blocked.
-   * - `'reject'`    — the write is refused; that committer yields.
-   * - `'notify'`    — hold the write and hand the current value back so the committer
-   *                   re-reads and re-applies (for stale writes only).
-   *
-   * A kind you omit falls back to the engine default: reject, while honoring
-   * `onStale: 'notify'`. The value is plain data that travels with the schema to the
-   * server, where the engine interprets it. For example:
-   *
-   * ```ts
-   * // "a human's edit always wins (never blocked); an agent yields"
-   * conflict: { user: 'overwrite', agent: 'reject' }
-   * ```
-   */
-  conflict?: ConflictAxis;
-
-  /**
    * Whether clients may create, update, and delete this model's rows through the
    * commit protocol. Defaults to true: declaring a model in your schema is the
    * opt-in, since a synced entity is almost always one you want to write. A model
@@ -377,9 +349,6 @@ export interface ModelDef<
   readonly entityRoles?: readonly EntityRole[];
   /** Explicit acknowledgement that sync groups are routing, not row access. */
   readonly routingOnly?: true;
-  /** The write-conflict disposition per committer kind, carried as plain data. See
-   *  {@link ModelOptions.conflict}. */
-  readonly conflict?: ConflictAxis;
   /** Whether wire-level CREATE/UPDATE/DELETE is allowed. See {@link ModelOptions.mutable}. */
   readonly mutable?: boolean;
   /** Defer MobX setup until first observer access. See {@link ModelOptions.lazyObservable}. */
@@ -467,8 +436,6 @@ export function model<
     grants: options?.groups?.grants,
     entityRoles: normalizeEntityRoles(options?.groups?.roles),
     routingOnly: options?.groups?.routingOnly,
-    // The conflict disposition is already plain data, so it passes through unchanged.
-    conflict: options?.conflict,
     mutable: options?.mutable ?? true,
     lazyObservable: options?.lazyObservable,
     computed: options?.computed,

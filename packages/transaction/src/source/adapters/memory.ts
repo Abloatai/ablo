@@ -6,8 +6,8 @@
  * mapper is complete when it passes the same suite this one passes.
  *
  * It models the semantics minimally but faithfully: one row store per model, an
- * idempotency ledger keyed by scoped correlation, and an append-only outbox with a
- * monotonic cursor.
+ * idempotency ledger keyed by scoped correlation, and an acknowledgement-pruned
+ * outbox with a monotonic cursor.
  */
 
 import { AbloValidationError } from '../../errors.js';
@@ -16,14 +16,16 @@ import type {
   AdapterReadRequest,
   DataSourceAdapter,
   Row,
-} from '../adapter.js';
-import { defineDatabaseAdapter } from '../adapterFactory.js';
-import { memoryAdapterProfile } from '../adapterProfile.js';
-import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '../contract.js';
+} from './adapter.js';
+import { defineDatabaseAdapter } from './adapterFactory.js';
+import { memoryAdapterProfile } from './adapterProfile.js';
+import type { ChangeSet, Operation } from './contract.js';
+import type { Migration } from './migration.js';
+import type { EventsPage, OutboxEvent } from '../outbox/index.js';
 import {
   assertSourceIdempotencyIntent,
   sourceChangeIntentHash,
-} from '../idempotency.js';
+} from './idempotency.js';
 
 function rowId(op: Operation): string {
   const id = op.id ?? (op.input?.id as string | undefined);
@@ -41,8 +43,9 @@ export function memoryDataSource(): DataSourceAdapter {
     string,
     { readonly requestHash: string; readonly rows: Row[] }
   >();
-  /** Append-only outbox; `cursor` is the 1-based index as a string. */
+  /** Acknowledgement-pruned outbox with a monotonic cursor. */
   const outbox: OutboxEvent[] = [];
+  let nextOutboxCursor = 1;
 
   const modelStore = (model: string): Map<string, Row> => {
     let m = store.get(model);
@@ -136,6 +139,7 @@ export function memoryDataSource(): DataSourceAdapter {
         rows.push(row);
         // Transactional outbox: one event per op, monotonic cursor.
         outbox.push({
+          version: 2,
           id: `${change.correlationId}:${index}`,
           model: op.model,
           entityId: String(row.id ?? rowId(op)),
@@ -144,11 +148,23 @@ export function memoryDataSource(): DataSourceAdapter {
           syncGroups: [],
           correlationId: change.correlationId,
           ...(op.transactionId ? { transactionId: op.transactionId } : {}),
-          cursor: String(outbox.length + 1),
+          cursor: String(nextOutboxCursor++),
         });
       }
       idempotency.set(change.correlationId, { requestHash, rows });
       return { rows };
+    },
+
+    async acknowledgeEvents(acknowledgedThrough: string): Promise<void> {
+      const after = Number(acknowledgedThrough);
+      let acknowledgedCount = 0;
+      while (
+        acknowledgedCount < outbox.length &&
+        Number(outbox[acknowledgedCount]?.cursor) <= after
+      ) {
+        acknowledgedCount += 1;
+      }
+      if (acknowledgedCount > 0) outbox.splice(0, acknowledgedCount);
     },
 
     async events(cursor: string | null, limit: number): Promise<EventsPage> {

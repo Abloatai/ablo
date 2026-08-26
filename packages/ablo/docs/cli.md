@@ -32,8 +32,8 @@ resume a branch and exchanges it for a temporary branch-bound runtime key.
 
 | Command                  | What it does                                                               |
 | ------------------------ | -------------------------------------------------------------------------- |
-| `ablo login`             | Authorize in the browser; store one project management credential.         |
-| `ablo login --project <slug>` | Same, scoped to a project, which becomes active.                     |
+| `ablo login`             | Authorize in the browser, pick a project; store its management credential.  |
+| `ablo login --project <slug>` | Same without the picker: scoped to the named project, which becomes active. |
 | `ablo logout`            | Remove the stored credentials.                                             |
 | `ablo whoami`            | Strictly confirm which project and branch a credential acts on.            |
 | `ablo status`            | Show the active org/project, resolved runtime credential, branch target, and server health. |
@@ -55,9 +55,10 @@ reports the server-confirmed branch before it writes. For one-time recovery,
 putting the secret in argv.
 
 Keys live in `~/.config/ablo/credentials.json` (mode `0600`), keyed by project.
-The non-secret `config.json` holds the active project. In **CI**, don't log in —
-set the project management credential as `ABLO_MANAGEMENT_KEY`; it overrides the
-stored credential during branch bootstrap.
+The non-secret `config.json` holds the active project. There is one explicit
+credential input: `ABLO_API_KEY`. In headless CI it may temporarily contain an
+`mk_` credential during branch bootstrap; the runtime receives the resulting
+branch-bound `sk_` or restricted `rk_` value through the same variable.
 
 ## Development branches and the production root
 
@@ -94,7 +95,8 @@ with `projects use`) selects which profile every command authenticates with.
 | `ablo projects list`          | List the org's projects (marks the active one and the org-default).                |
 | `ablo projects create <slug>` | Create a project (`--name "Display Name"`). Its keys/schema/data are isolated.     |
 | `ablo projects use <slug>`    | Switch the active project. `ablo projects use default` returns to the org-default. |
-| `ablo login --project <slug>` | Store management access for a project and make it active.                          |
+| `ablo login`                  | Pick a project in the terminal; store its management access and make it active.    |
+| `ablo login --project <slug>` | The same for a named project, with no picker.                                      |
 
 Because keys are fixed to a project, `projects use` only changes which profile
 is active — it never re-scopes an existing key. Switch to a project you haven't
@@ -108,12 +110,17 @@ npx ablo projects use war-room
 npx ablo login --project war-room   # stores its management credential, keeps it active
 ```
 
+A plain `npx ablo login` reaches the same place through a picker: once the
+browser has approved, the terminal lists the organization's projects, with the
+cursor on the active one, and the choice becomes the credential's project. An
+organization holding only its default project is not asked.
+
 If you run a project-scoped command (`push`, `dev`) while the active project has
 no key — but other projects do — the CLI **refuses** rather than silently
 deploying with the wrong project's credential, and names the fix
-(`ablo login --project <slug>`). In CI, an explicit `ABLO_MANAGEMENT_KEY`
-bypasses profiles for project/branch administration; the runtime key remains
-`ABLO_API_KEY`.
+(`ablo login --project <slug>`). In CI, an explicit `mk_` in `ABLO_API_KEY`
+bypasses profiles for project/branch administration. Replace it with the
+branch-bound runtime credential before starting application code.
 
 ## Commands
 

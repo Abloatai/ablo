@@ -56,6 +56,13 @@ describe('planFor — the shared schema-SQL engine (same as hosted)', () => {
   it('skips CREATE SCHEMA for the public schema', () => {
     expect(sql).not.toContain('CREATE SCHEMA');
   });
+
+  it('keeps adapter bookkeeping in public when application models use another schema', () => {
+    const customSql = planFor(schema, 'app_x').statements.join('\n');
+    expect(customSql).toContain('CREATE TABLE IF NOT EXISTS "public"."ablo_idempotency"');
+    expect(customSql).toContain('CREATE TABLE IF NOT EXISTS "public"."ablo_outbox"');
+    expect(customSql).not.toContain('"app_x"."ablo_outbox"');
+  });
 });
 
 describe('planFor — schema without an explicit tableName (the `ablo init` starter)', () => {

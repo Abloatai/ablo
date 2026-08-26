@@ -2,15 +2,24 @@
  * `ablo.<model>.claim({ id })` — the serialize-on-contention
  * primitive bound to the agent write boundary.
  *
- * Three behaviours, exercised through a real `createModelProxy` with a
- * fake `ModelCollaboration`. Acquisition goes through the server's fair FIFO
- * queue (`createClaim({ queue: true })`), which blocks until the lease is
- * ours — so there's no client-side `waitFor` dance. The proxy's only job is
- * to decide whether to RE-READ afterwards (a row can only have changed under
- * us if another participant held it while we waited):
- *   - free target        → acquire, no re-read.
- *   - held by another    → acquire via the queue, then re-read (rehydrate).
- *   - held by self        → acquire, no re-read (re-acquire is mine).
+ * Exercised through a real `createModelOperations` with a fake `ModelCollaboration`.
+ * Acquisition goes through the server's fair FIFO queue
+ * (`createClaim({ queue: true })`), which blocks until the lease is ours — so
+ * there's no client-side `waitFor` dance.
+ *
+ * The snapshot is re-read on GRANT, never on contention (ADR 0035). Whoever
+ * wins the lease re-reads, because that snapshot is the premise an expensive
+ * step is about to be spent against.
+ *
+ * This used to be conditional: the proxy peeked at local presence and skipped
+ * the re-read when nothing had held the row, reasoning that only a prior holder
+ * could have moved it. That reasoning covers a writer who passed Ablo's
+ * chokepoint, and every writer who did is either a holder or refused by the
+ * default conflict policy. It does not cover the third writer: a row Ablo reads
+ * through the WAL is written by the customer's own application, cron, or psql
+ * session, which took no claim and raised no presence. For those rows "nobody
+ * contended" was never evidence the row had not changed, and the claimant spent
+ * a model call against a stale premise with nothing to warn it.
  */
 
 import { ModelRegistry } from '../../ModelRegistry.js';
@@ -18,12 +27,12 @@ import { InstanceCache } from '../../InstanceCache.js';
 import { Model } from '../../Model.js';
 import { ModelScope, LoadStrategy } from '@abloatai/transaction/types';
 import {
-  createModelProxy,
+  createModelOperations,
   type ModelCollaboration,
-} from '../createModelProxy.js';
+} from '../createModelOperations.js';
 import type { SyncClient } from '../../SyncClient.js';
 import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';
-import type { Claim, Snapshot } from '@abloatai/transaction/types/streams';
+import type { Claim } from '@abloatai/transaction/types/streams';
 import { AbloClaimedError } from '@abloatai/transaction/errors';
 
 interface ItemRow { id: string; title: string }
@@ -51,7 +60,7 @@ function makeProxy(collaboration: ModelCollaboration, seedId?: string) {
   }
   const fetchSpy = jest.fn(async () => []);
   const hydration: Pick<OnDemandLoader, 'fetch'> = { fetch: fetchSpy };
-  const proxy = createModelProxy<ItemRow, Omit<ItemRow, 'id'>>(
+  const proxy = createModelOperations<ItemRow, Omit<ItemRow, 'id'>>(
     'items',
     'Item',
     pool,
@@ -66,7 +75,6 @@ function makeProxy(collaboration: ModelCollaboration, seedId?: string) {
 function fakeCollaboration(
   overrides?: Partial<ModelCollaboration>,
 ): ModelCollaboration {
-  const signal = new AbortController().signal;
   return {
     createClaim: jest.fn(async () => ({
       object: 'claim' as const,
@@ -77,12 +85,7 @@ function fakeCollaboration(
       revoke: jest.fn(),
       [Symbol.asyncDispose]: async () => undefined,
     })),
-    // The one cast here that cannot be typed away: `Snapshot` intersects
-    // `{ stamp: number }` with a string index signature over model rows, so
-    // `stamp` conflicts with the index and NO object literal satisfies the
-    // type. The proxy reads `snapshot.stamp` and nothing else.
-    createSnapshot: () =>
-      ({ stamp: 1, signal, onChange: () => () => undefined }) as unknown as Snapshot,
+    currentReadAt: () => 1,
     state: jest.fn(() => null),
     holders: jest.fn(() => []),
     queue: jest.fn(() => []),
@@ -121,7 +124,7 @@ function activeClaim(heldBy: string): Claim {
 }
 
 describe('ModelOperations.claim', () => {
-  it('acquires through the queue when the target is free (no rehydrate)', async () => {
+  it('re-reads after the grant even when the target was free', async () => {
     const collab = fakeCollaboration({ state: jest.fn(() => null) });
     const { proxy, fetchSpy } = makeProxy(collab, 't1');
 
@@ -132,8 +135,10 @@ describe('ModelOperations.claim', () => {
     expect(collab.createClaim).toHaveBeenCalledWith(
       expect.objectContaining({ queue: true }),
     );
-    // Free target can't have changed under us → no re-read (seeded row).
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // A free target says no other CLAIMANT moved the row. It says nothing about
+    // a write that landed straight in the customer's database, which took no
+    // claim — so the seeded row can still be behind. Re-read rather than trust.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(collab.waitFor).not.toHaveBeenCalled();
   });
 
@@ -164,7 +169,7 @@ describe('ModelOperations.claim', () => {
     expect(acquireOrder).toBeLessThan(rereadOrder);
   });
 
-  it('acquires without re-reading when already held by self', async () => {
+  it('re-reads after the grant even when the row was already held by self', async () => {
     const collab = fakeCollaboration({
       state: jest.fn(() => activeClaim('me')),
     });
@@ -173,8 +178,75 @@ describe('ModelOperations.claim', () => {
     await proxy.claim({ id: 't1' });
 
     expect(collab.createClaim).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).not.toHaveBeenCalled(); // mine → unchanged
+    // Holding the lease excludes other claimants; it does not stop a write
+    // landing directly in the customer's database. A re-acquire is a fresh
+    // premise for fresh work, so it reads.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(collab.waitFor).not.toHaveBeenCalled();
+  });
+
+  it('does not consult local presence to decide whether to re-read', async () => {
+    const state = jest.fn(() => null);
+    const collab = fakeCollaboration({ state });
+    const { proxy } = makeProxy(collab, 't1');
+
+    await proxy.claim({ id: 't1' });
+
+    // The presence peek existed ONLY to gate the re-read, and its own comment
+    // said so. With the read unconditional it has no caller left, and a
+    // restored peek would be a restored gate — which is how this regresses.
+    expect(state).not.toHaveBeenCalled();
+  });
+
+  it('keeps disjoint grants on one row distinct and releases by claim id', async () => {
+    const releaseTitle = jest.fn(async () => undefined);
+    const releaseStatus = jest.fn(async () => undefined);
+    let next = 0;
+    const createClaim = jest.fn(async () => {
+      const title = next++ === 0;
+      return {
+        object: 'claim' as const,
+        id: title ? 'lease-title' : 'lease-status',
+        description: title ? 'editing title' : 'editing status',
+        target: {
+          type: 'items',
+          id: 't1',
+          field: title ? 'title' : 'status',
+        },
+        release: title ? releaseTitle : releaseStatus,
+        revoke: jest.fn(),
+        [Symbol.asyncDispose]: async () => undefined,
+      };
+    });
+    const collab = fakeCollaboration({ createClaim });
+    const { proxy } = makeProxy(collab, 't1');
+
+    const title = await proxy.claim({
+      id: 't1',
+      field: 'title',
+      description: 'editing title',
+    });
+    const status = await proxy.claim({
+      id: 't1',
+      field: 'status',
+      description: 'editing status',
+    });
+
+    expect(proxy.claim.list({ id: 't1' }).data.map((claim) => claim.id)).toEqual([
+      'lease-title',
+      'lease-status',
+    ]);
+
+    await proxy.claim.release(title);
+    expect(releaseTitle).toHaveBeenCalledTimes(1);
+    expect(releaseStatus).not.toHaveBeenCalled();
+    expect(proxy.claim.list({ id: 't1' }).data.map((claim) => claim.id)).toEqual([
+      status.id,
+    ]);
+
+    await proxy.claim.release({ id: 't1' });
+    expect(releaseStatus).toHaveBeenCalledTimes(1);
+    expect(proxy.claim.list({ id: 't1' }).data).toEqual([]);
   });
 });
 

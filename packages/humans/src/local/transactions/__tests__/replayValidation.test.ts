@@ -342,7 +342,7 @@ describe('persistedMutationSchema', () => {
       modelData: { id: 'x' },
       modelName: 'Item',
       timestamp: new Date().toISOString(),
-      writeOptions: { readAt: 12, onStale: 'reject' },
+      writeOptions: { readAt: 12 },
     });
     expect(parsed.success).toBe(true);
   });

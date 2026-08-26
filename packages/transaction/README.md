@@ -26,11 +26,13 @@ const ablo = Ablo({
   apiKey: process.env.ABLO_API_KEY,
 });
 
-const order = await ablo.orders.get({ id: orderId });
+const order = await ablo.orders.read({ id: orderId });
+if (!order) throw new Error('Order not found');
 
 await ablo.orders.update({
   id: orderId,
   data: { status: 'approved' },
+  reads: [order],
 });
 ```
 

@@ -16,6 +16,7 @@
  * skip inside a shared suite.
  */
 
+import { BASE_FIELDS as ENGINE_BASE_FIELDS } from '@abloatai/transaction/schema';
 import { camelToSnake, emitSchemaSource, type IRField, type IRModel, type IRSchema } from '../../schemaIr';
 
 /** The physical column a field resolves to, whether stated or derived.
@@ -94,13 +95,33 @@ export const adoptSuite: ConformanceSuite = (ctx) => {
   });
 };
 
-/** The columns the engine owns are implicit and must never be declared. */
+/**
+ * The columns the engine owns are implicit and must never be declared — and,
+ * just as load-bearing, a column it does NOT own must be.
+ *
+ * The engine-owned set is read from the engine, not copied. The copy this
+ * replaces still named the pre-0.52.0 five, so adoption dropped `created_at`,
+ * `updated_at` and `created_by` out of a schema derived from a table that
+ * really had them, and this suite asserted that as correct — a test pinning a
+ * stale copy to itself.
+ */
 export const baseColumnsSuite: ConformanceSuite = (ctx) => {
   describe('base columns', () => {
+    // The tenancy column is server-owned by a different mechanism (a model's
+    // `policy`), so it is implicit here alongside the true base fields.
+    const engineOwned = [...ENGINE_BASE_FIELDS, 'organizationId'];
+
     it('never surfaces an engine-owned column as a declared field', () => {
       const declared = ctx.model('records').fields.map((f) => f.name);
-      for (const owned of ['id', 'organizationId', 'createdBy', 'createdAt', 'updatedAt']) {
+      for (const owned of engineOwned) {
         expect(declared).not.toContain(owned);
+      }
+    });
+
+    it('declares an audit column the source really has, since the engine supplies none', () => {
+      const declared = ctx.model('records').fields.map((f) => f.name);
+      for (const authored of ['createdAt', 'updatedAt', 'createdBy']) {
+        expect(declared).toContain(authored);
       }
     });
 

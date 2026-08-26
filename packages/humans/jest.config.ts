@@ -1,6 +1,7 @@
 import type { Config } from 'jest';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
+import { transactionSourceModuleMapper } from '../transaction/sourceModuleMapper.mjs';
 
 const require = createRequire(import.meta.url);
 const reactRoot = dirname(require.resolve('react'));
@@ -68,15 +69,10 @@ const config: Config = {
     '^react/(.*)$': `${reactRoot}/$1`,
     '^react-dom$': reactDomRoot,
     '^react-dom/(.*)$': `${reactDomRoot}/$1`,
-    // @abloatai/transaction (the extracted confirmation core, ADR 0013) resolves to
-    // its src — jest doesn't follow the package's `@ablo/source` export
-    // condition, so map it explicitly, mirroring tsc/dep-cruiser. Directory
-    // barrels need their own line: the generic pattern appends `.ts` and
-    // cannot land on an `index.ts`.
-    '^@abloatai/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks|docs)$':
-      '<rootDir>/../transaction/src/$1/index.ts',
-    '^@abloatai/transaction/(.*)$': '<rootDir>/../transaction/src/$1.ts',
-    '^@abloatai/transaction$': '<rootDir>/../transaction/src/index.ts',
+    // @abloatai/transaction (the extracted confirmation core, ADR 0013) resolves
+    // to its src — jest's resolver does not follow the `@ablo/source` export
+    // condition, so every subpath is derived from that package's own exports.
+    ...transactionSourceModuleMapper(),
     '^@abloatai/humans/react$': '<rootDir>/src/react.ts',
     '^@abloatai/humans/(.*)$': '<rootDir>/src/$1.ts',
     '^@abloatai/humans$': '<rootDir>/src/index.ts',

@@ -157,42 +157,6 @@ describe('WS transport observability wiring', () => {
     expect(log.collisions()).toHaveLength(0);
   });
 
-  it('records a notify-instead-of-abort collision on a successful commit carrying notifications', async () => {
-    const log = new ClaimLog();
-    const { ws, fake } = connectFake(log);
-    const txId = 'tx-notify-1';
-    const pending = ws.sendCommit([OP], txId);
-
-    receiveAck(fake, {
-      object: 'commit_receipt',
-      clientTxId: txId,
-      serverTxId: '42',
-      ...COMMIT_TIMES,
-      success: true,
-      status: 'confirmed',
-      lastSyncId: 42,
-      ops: 1,
-      notifications: [
-        {
-          object: 'stale_notification',
-          scope: 'row',
-          target: { model: 'documents', id: 'doc-main', fields: ['content'] },
-          readAt: 1,
-          observedSyncId: 42,
-          currentValues: { content: {} },
-          writtenBy: { kind: 'user', id: 'u1' },
-        },
-      ],
-    });
-
-    await expect(pending).resolves.toMatchObject({
-      status: 'confirmed',
-      statusAt: COMMIT_TIMES.statusAt,
-      lastSyncId: 42,
-    });
-    expect(log.collisions()).toHaveLength(1);
-  });
-
   it('preserves a queued success instead of normalizing it to confirmed', async () => {
     const log = new ClaimLog();
     const { ws, fake } = connectFake(log);
@@ -251,7 +215,6 @@ describe('WS transport observability wiring', () => {
       correlationId: 'corr-exact',
       lastSyncId: 43,
       ops: 1,
-      notifications: undefined,
       missingIds: undefined,
     });
   });

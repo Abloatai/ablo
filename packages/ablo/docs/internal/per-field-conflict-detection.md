@@ -1,4 +1,4 @@
-# Per-Field Conflict Detection (Track A)
+# Per-Field Conflict Detection (per-field path)
 
 Maintainer decision doc. Scopes the move from entity-level to field-level stale
 detection in `executeCommit`. Library-free; restores Linear parity for the
@@ -37,10 +37,10 @@ confirms every load-bearing choice here:
   only bites on the **same** property.
 - **CRDT is used only for issue descriptions.** Linear keeps LWW-per-property
   for structured fields and reserves a CRDT for the one rich-text body. That is
-  the same Track A / Track B line we draw: this doc is Track A; rich-text bodies
+  the same per-field path / CRDT path line we draw: this doc is per-field path; rich-text bodies
   (TipTap `content_json`) are out of scope and belong to a separate CRDT track.
 
-So Track A is not a new feature — it **restores Linear parity** at the property
+So per-field path is not a new feature — it **restores Linear parity** at the property
 level we had flattened to entity level.
 
 Sources: [reverse-linear-sync-engine (CTO-endorsed)](https://github.com/wzhudev/reverse-linear-sync-engine/blob/main/SUMMARY.md),
@@ -109,7 +109,7 @@ if (overlap) {
 Disjoint-field concurrent writes now produce **no conflict** — they both apply.
 That is LWW-per-field achieved by *not rejecting*; no merge code.
 
-### 3. Policy type: additive (`packages/transaction/src/policy/types.ts`)
+### 3. Policy type: additive (`packages/transaction/src/claims/policy.ts`)
 
 Extend `StaleContextConflict` with:
 
@@ -125,20 +125,20 @@ only conflicting field is cosmetic.
 
 Granularity is **column-level**, not JSON-path. Two writers editing different
 keys *inside* one `content_json` column still conflict — that is the rich-text
-case (Track B / CRDT), not this. JSON Merge Patch (RFC 7386) sub-column
+case (CRDT path / CRDT), not this. JSON Merge Patch (RFC 7386) sub-column
 granularity is a later refinement on the same column; v1 stops at columns.
 
 ## Relationship to the existing `readAt` reject
 
 Linear is pure LWW-per-property with no stale check. We keep `readAt` /
-`onStale: 'reject'` as an **opt-in** for the agent-reasoned-against-stale-state
+an explicit `readAt` as an **opt-in** for the agent-reasoned-against-stale-state
 case (an LLM that read a stale value and reasoned on it is a real failure mode
-humans rarely hit). After Track A:
+humans rarely hit). After per-field path:
 
 - **No `readAt`** → LWW-per-field, Linear parity: disjoint fields never conflict.
 - **`readAt` set** → reject only if a newer delta touched a field this op also
   writes. The `changed_fields` column makes that intersection computable.
-- **`onStale: 'overwrite'`** → unchanged; still skips detection entirely.
+- **No read premise** → skips stale detection; the assignment is unconditional.
 
 ## Index
 
@@ -153,7 +153,7 @@ readAt`, usually a small recent window) on the same index prefix.
 - Same field, both stale → still rejects (default policy unchanged).
 - DELETE after `readAt` → conflicts regardless of op fields (`null`).
 - Pre-migration delta (`null`) in the window → conflicts (back-compat).
-- `onStale: 'overwrite'` → still skips detection.
+- no read premise → still skips detection.
 
 ## Touch list
 
@@ -161,5 +161,5 @@ readAt`, usually a small recent window) on the same index prefix.
 - `commit.ts` — Step 0 detect rewrite + UPDATE write path populates
   `changed_fields` + `deltaInfos` shape.
 - `apps/sync-server/src/db/deltas.ts` — insert path carries `changed_fields`.
-- `packages/transaction/src/policy/types.ts` — additive `conflictingFields`.
+- `packages/transaction/src/claims/policy.ts` — additive `conflictingFields`.
 - vitest in sync-server.

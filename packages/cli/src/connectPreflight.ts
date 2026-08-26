@@ -53,12 +53,27 @@ export interface AdminCapabilityRow {
   readonly rolname: string;
   readonly rolsuper: boolean;
   readonly rolcreaterole: boolean;
+  /**
+   * Whether this admin can hand out BYPASSRLS, which Postgres permits only to a
+   * role that holds it. Managed providers withhold it: on Amazon RDS and Aurora
+   * it belongs to `rdsadmin` alone, so neither the master user nor
+   * `rds_superuser` can create the replication role the canonical recipe asks
+   * for. Read rather than inferred from the hostname, because the same is true
+   * of any locked-down cluster whose name says nothing.
+   */
+  readonly rolbypassrls: boolean;
+  /**
+   * Whether this admin can hand out REPLICATION, subject to the same rule as
+   * BYPASSRLS. Managed providers withhold it and expose the capability as a
+   * grantable role instead — `rds_replication` on Amazon RDS and Aurora.
+   */
+  readonly rolreplication: boolean;
 }
 
 /** Look up whether the connected admin role can create the scoped roles. */
 export async function adminCanCreateRoles(sql: postgres.Sql): Promise<AdminCapabilityRow | null> {
   const rows = await sql.unsafe<AdminCapabilityRow[]>(
-    `SELECT rolname, rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user`
+    `SELECT rolname, rolsuper, rolcreaterole, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = current_user`
   );
   return rows[0] ?? null;
 }

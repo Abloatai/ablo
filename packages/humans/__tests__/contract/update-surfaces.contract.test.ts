@@ -15,12 +15,12 @@ import { Ablo, type InternalAbloOptions } from '../../src/Ablo';
 import type {
   ModelOperations,
   ModelUpdateParams,
-} from '../../src/local/client/createModelProxy';
-import type { HttpModelClient } from '@abloatai/transaction/transport/httpClient';
+} from '../../src/local/client/createModelOperations';
+import type { HttpModelClient } from '@abloatai/transaction/transport/http';
 import type {
   ModelUpdater,
   FunctionalUpdateOptions,
-} from '@abloatai/transaction/resources/functionalUpdate';
+} from '@abloatai/transaction/client/resources/functionalUpdate';
 import type { CoordinatedModel } from '@abloatai/transaction/ai-sdk/coordinatedTool';
 import { defineSchema, model, z } from '@abloatai/transaction/schema';
 

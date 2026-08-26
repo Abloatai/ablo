@@ -11,7 +11,7 @@
  */
 
 import { AbloValidationError } from '../errors.js';
-import type { CommitOperationType, OnStaleMode } from '../coordination/schema.js';
+import type { CommitOperationType } from '../coordination/schema.js';
 import type { ParticipantKind } from '../types/participant.js';
 
 /** A scalar value that can appear in a source filter. */
@@ -93,21 +93,13 @@ export interface SourceRequestContext {
   /** Trusted project selected by the authenticating credential. */
   readonly projectId?: string;
   readonly syncGroups?: readonly string[];
-  /**
-   * @deprecated Renamed to {@link SourceRequestContext.syncGroups}. Removed in
-   * 0.58.0. Ablo populates both spellings with the same value for this release,
-   * so an adapter still reading this one gets the groups rather than
-   * `undefined`, which on a routing field would read as "no groups" rather than
-   * as a missing field.
-   */
-  readonly requiredSyncGroups?: readonly string[];
 }
 
 /**
  * A single change Ablo asks your source to apply — a create, update, delete,
  * archive, or unarchive of one row of `model`. Operations arrive in your
- * `commit` handler through {@link SourceCommitParams}. `onStale` says what to
- * do when the row changed since it was read at `readAt`.
+ * `commit` handler through {@link SourceCommitParams}. A `readAt` makes the
+ * operation conditional and a stale value rejects it.
  */
 export interface SourceOperation {
   readonly type: CommitOperationType;
@@ -117,7 +109,6 @@ export interface SourceOperation {
   readonly where?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
   readonly readAt?: number | null;
-  readonly onStale?: OnStaleMode | null;
 }
 
 /**
@@ -148,6 +139,8 @@ export interface SourceDelta {
  * the event is durably appended. External writes omit them.
  */
 export interface SourceEvent {
+  /** Event envelope version. When omitted, syncGroups implies v2; their absence implies v1. */
+  readonly version?: 1 | 2;
   /**
    * A globally unique event id from your outbox. Ablo uses it for replay
    * protection, so re-delivering the same id is a no-op.
@@ -173,8 +166,8 @@ export interface SourceEvent {
    * a tenant boundary.
    */
   readonly data?: Record<string, unknown> | null;
-  /** Exact record routes captured while the changed row was transactionally visible. */
-  readonly syncGroups: readonly string[];
+  /** Exact record routes captured while the changed row was transactionally visible. Required in version 2. */
+  readonly syncGroups?: readonly string[];
   /**
    * The tenant this event belongs to. Populate it from the row's organization
    * column for multi-tenant data; a single-tenant source may omit it and let
@@ -253,6 +246,7 @@ export function sourceEventForOperation(
   const occurredAt = normalizeEventOccurredAt(options.occurredAt);
   const transactionId = options.transactionId ?? options.operation.transactionId ?? undefined;
   return {
+    version: 2,
     id: options.eventId,
     model: options.operation.model,
     entityId,
@@ -381,11 +375,14 @@ export interface SourceEventsResult {
  */
 export type SourceEventsHandler<TAuth = unknown> = (params: {
   /**
-   * The cursor from a previous `events` call, or undefined on the first poll of
-   * a newly connected source. You decide what it encodes — a last event id, a
-   * timestamp, a log sequence number.
+   * The consumer position Ablo has durably committed, or undefined on the first
+   * poll of a newly connected source. It acknowledges every event through that
+   * position, so a handler may prune them before returning the next page. You
+   * decide what it encodes — a last event id, timestamp, or log sequence number.
    */
   readonly cursor?: string;
+  /** Explicit durable acknowledgement. Safe to use for bounded retention cleanup. */
+  readonly acknowledgedThrough?: string;
   /**
    * A suggested upper bound on how many events to return. You may return fewer;
    * returning many more risks tripping Ablo's per-poll cap.
@@ -539,7 +536,10 @@ export interface SourceCommitRequest {
 
 export interface SourceEventsRequest {
   readonly type: 'events';
+  /** Exclusive read position. */
   readonly cursor?: string;
+  /** Durable consumer acknowledgement, independent of the read position. */
+  readonly acknowledgedThrough?: string;
   readonly limit?: number;
   readonly scope?: SourceRequestContext;
 }

@@ -1,5 +1,3 @@
-import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
-
 type ModelData = Record<string, unknown>;
 
 /** One mutation retained in the durable local transaction journal. */
@@ -10,7 +8,6 @@ interface PersistedMutation {
   timestamp: string;
   writeOptions?: {
     readAt?: number | null;
-    onStale?: OnStaleMode | null;
   };
 }
 

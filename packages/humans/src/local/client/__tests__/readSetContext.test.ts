@@ -1,7 +1,6 @@
 import {
   capturePointRead,
   createReadSetContext,
-  consumeReadSet,
   prepareReadSet,
 } from '@abloatai/transaction/internal/read-set';
 import { LoadStrategy, ModelScope } from '@abloatai/transaction/types';
@@ -11,12 +10,11 @@ import { ModelRegistry } from '../../ModelRegistry.js';
 import type { SyncClient } from '../../SyncClient.js';
 import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';
 import {
-  createModelProxy,
+  createModelOperations,
   type ModelCollaboration,
-} from '../createModelProxy.js';
-import { createSnapshot } from '../../sync/createSnapshot.js';
+} from '../createModelOperations.js';
 import { createDefaultMutationExecutor } from '../wsMutationExecutor.js';
-import type { CommitRecord } from '@abloatai/transaction/wire/commit';
+import type { CommitRecord } from '@abloatai/transaction/commit';
 import { EFFECTIVE_AUTHORITY_FIXTURE } from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 interface ItemRow {
@@ -75,12 +73,11 @@ describe('reactive/WebSocket ReadSet context', () => {
     );
     await executor.commit([{
       type: 'UPDATE', model: 'items', id: 'item-1',
-      input: { status: 'done' }, readAt: 54, onStale: 'reject',
+      input: { status: 'done' }, readAt: 54,
     }], {
       idempotencyKey: 'attempt-ws-record',
       reads: [{ model: 'runs', id: 'run-1', readAt: 53 }],
     });
-    consumeReadSet(context, identity, prepared.consumed, prepared.automaticCommit);
 
     expect(records).toEqual([expect.objectContaining({
       id: 'attempt-ws-record',
@@ -95,10 +92,10 @@ describe('reactive/WebSocket ReadSet context', () => {
       operations: [expect.objectContaining({
         action: 'update', model: 'items', id: 'item-1', readAt: 54,
       }) as CommitRecord['operations'][number]],
-      readSet: expect.arrayContaining([
-        expect.objectContaining({ watermark: 53 }) as CommitRecord['readSet'][number],
-        expect.objectContaining({ watermark: 54 }) as CommitRecord['readSet'][number],
-      ]) as CommitRecord['readSet'],
+      reads: expect.arrayContaining([
+        expect.objectContaining({ model: 'runs', id: 'run-1', readAt: 53 }) as CommitRecord['reads'][number],
+        expect.objectContaining({ model: 'items', id: 'item-1', readAt: 54 }) as CommitRecord['reads'][number],
+      ]) as CommitRecord['reads'],
     })]);
   });
 
@@ -153,13 +150,7 @@ describe('reactive/WebSocket ReadSet context', () => {
             stamp: 44,
           })),
       createClaim: jest.fn(() => Promise.reject(new Error('not used'))),
-      createSnapshot: () =>
-        createSnapshot({
-          pool,
-          transport: null,
-          getLastSyncId: () => 0,
-          entities: {},
-        }),
+      currentReadAt: () => 0,
       state: jest.fn(() => null),
       holders: jest.fn(() => []),
       queue: jest.fn(() => []),
@@ -168,7 +159,7 @@ describe('reactive/WebSocket ReadSet context', () => {
       selfParticipantId: 'user-1',
     };
     const context = createReadSetContext();
-    const items = createModelProxy<ItemRow, Omit<ItemRow, 'id'>>(
+    const items = createModelOperations<ItemRow, Omit<ItemRow, 'id'>>(
       'items',
       'Item',
       pool,
@@ -182,18 +173,14 @@ describe('reactive/WebSocket ReadSet context', () => {
     const [item] = await items.list({ where: { status: 'todo' } });
     if (!item) throw new Error('expected listed item');
     expect(collaboration.readPoint).not.toHaveBeenCalled();
-    await items.update({
+    await expect(items.update({
       id: 'item-1', data: { status: 'done' },
-      reads: [item], idempotencyKey: 'turn:item-1',
-    });
-
-    expect(updateOptions).toMatchObject({
-      reads: [{ model: 'item', id: 'item-1', readAt: 42 }],
-      idempotencyKey: 'turn:item-1',
-    });
+      reads: [item as never], idempotencyKey: 'turn:item-1',
+    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
+    expect(updateOptions).toBeUndefined();
 
     updateOptions = undefined;
-    const dependency = await items.get({ id: 'item-2' });
+    const dependency = await items.read({ id: 'item-2' });
     if (!dependency) throw new Error('expected cross-target dependency');
     await items.update('item-1', (current) => ({
       ...current,
@@ -201,7 +188,6 @@ describe('reactive/WebSocket ReadSet context', () => {
     }), { reads: [dependency] });
     expect(updateOptions).toMatchObject({
       readAt: 44,
-      onStale: 'reject',
       reads: [{ model: 'item', id: 'item-2', readAt: 43 }],
     });
     updateOptions = undefined;

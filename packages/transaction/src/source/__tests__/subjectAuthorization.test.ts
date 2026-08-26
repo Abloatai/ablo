@@ -5,9 +5,9 @@ import {
   authorizeSourceRead,
   rethrowStrictCreateConflict,
   sourceSyncGroups,
-} from '../subjectAuthorization.js';
-import type { AdapterReadRequest, Row } from '../adapter.js';
-import type { ChangeSet, Operation } from '../contract.js';
+} from '../adapters/subjectAuthorization.js';
+import type { AdapterReadRequest, Row } from '../adapters/adapter.js';
+import type { ChangeSet, Operation } from '../adapters/contract.js';
 
 const schema = defineSchema({
   docs: model(

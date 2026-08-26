@@ -42,6 +42,7 @@ import {
   AbloValidationError,
 } from '@abloatai/transaction/errors';
 import pc from 'picocolors';
+import { detectProvider, replicationGrantRole } from './dbProvider';
 import postgres from 'postgres';
 import {
   ABLO_FOOTPRINT,
@@ -749,7 +750,12 @@ type LocalProbeOutcome =
 async function probeAndReport(
   dbUrl: string,
   kind: 'replication' | 'write',
-  opts: { readonly schema: string; readonly publication: string }
+  opts: {
+    readonly schema: string;
+    readonly publication: string;
+    /** The provider's replication role, when the attribute itself is withheld. */
+    readonly replicationGrantRole?: string | null;
+  }
 ): Promise<LocalProbeOutcome> {
   // Bounded dial, mirroring the engine's own preflight: a black-holed host
   // must surface as a dial failure, not pin the command forever.
@@ -927,6 +933,10 @@ async function runRegister(args: ConnectArgs): Promise<void> {
   const replication = await probeAndReport(dbUrl, 'replication', {
     schema: args.schema,
     publication,
+    // Derived from the host being dialled: where the provider lends REPLICATION
+    // as a role rather than granting the attribute, membership is what the
+    // reader actually holds.
+    replicationGrantRole: replicationGrantRole(detectProvider(dbUrl)),
   });
   console.log(`\n  ${pc.bold('Direct-write role')}\n`);
   const write = await probeAndReport(writeDbUrl, 'write', {

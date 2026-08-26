@@ -148,7 +148,7 @@ isn't torn down on every render.
 // app/providers.tsx
 'use client';
 
-import Ablo from '@abloatai/ablo';
+import { Ablo } from '@abloatai/ablo/react';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/lib/ablo.schema';
 
@@ -188,7 +188,7 @@ export default async function RecordPage({
 }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   await ablo.ready();
-  const record = await ablo.records.get({ id });
+  const record = await ablo.records.read({ id });
   if (!record) return null;
 
   return <RecordEditor record={record} />;

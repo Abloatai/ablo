@@ -1,7 +1,7 @@
 import {
   awaitClaimGrant,
   type GrantTransport,
-} from '@abloatai/transaction/coordination/awaitClaimGrant';
+} from '@abloatai/transaction/claims';
 import { AbloClaimedError } from '@abloatai/transaction/errors';
 
 /** Fake transport: records handlers, lets the test push frames. */
@@ -90,7 +90,7 @@ describe('awaitClaimGrant', () => {
         // message must resolve it from there.
         meta: { description: 'pricing table, about two minutes' },
       },
-      policyReason: 'single-writer policy on pricing rows',
+      message: 'row is already held',
     });
     const err = await p.then(
       () => {
@@ -104,7 +104,7 @@ describe('awaitClaimGrant', () => {
       claims: [{ claimId: 'i0' }],
     });
     expect(err.message).toMatch(
-      /agent:writer.*pricing table.*expires in \d+s.*single-writer policy/s,
+      /agent:writer.*pricing table.*expires in \d+s.*row is already held/s,
     );
   });
 

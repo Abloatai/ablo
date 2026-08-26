@@ -28,10 +28,9 @@
  * invoice, because raising one number does not fail anything that pins the
  * other.
  *
- * Storage is deliberately absent from {@link billableAxisSchema}. It is a real
- * recurring cost and it is quoted per tier as a ceiling, but no per-organization
- * bytes sampler emits it yet, and pricing a dimension nothing measures would be
- * a claim the invoice cannot support. Add the axis when the sampler ships.
+ * Audit-log storage is quoted as an included allowance plus Scale overage. It
+ * remains separate from the request meter because GiB-months come from a
+ * periodic storage sampler rather than an API event.
  */
 
 import { z } from 'zod';
@@ -47,7 +46,7 @@ export type { MeterEvent, PlanTier, RateBracket };
  * could observe the difference. It is emitted into the generated pricing
  * documentation so a stale copy is identifiable on sight.
  */
-export const PRICING_VERSION = '2026-07-31';
+export const PRICING_VERSION = '2026-08-24';
 
 /**
  * Resolve a stored plan string (`stripe_subscription.plan`) to a tier.
@@ -66,8 +65,8 @@ export function toPlanTier(plan: string | null | undefined): PlanTier {
 }
 
 /**
- * The axes a bill is actually computed from: `ops` is metered, `connections` is
- * capped. Storage is quoted but not billed, so it is not here.
+ * The request-time axes: `ops` is metered and `connections` is capped. Audit
+ * storage is sampled periodically, so it does not map from a request event.
  */
 export const billableAxisSchema = z.enum(['ops', 'connections']);
 export type BillableAxis = z.infer<typeof billableAxisSchema>;
@@ -184,10 +183,11 @@ const rateCardSchema = z
  * knob; the bracket structure is the contract.
  */
 export const OPS_RATE_CARD: readonly RateBracket[] = rateCardSchema.parse([
-  { throughOps: 50_000_000, usdPerMillionOps: 2.0 },
-  { throughOps: 500_000_000, usdPerMillionOps: 1.2 },
-  { throughOps: null, usdPerMillionOps: 0.6 },
+  { throughOps: null, usdPerMillionOps: 5 },
 ]);
+
+/** Scale audit-log storage above the included allowance, per GiB-month. */
+export const AUDIT_LOG_STORAGE_USD_PER_GIB_MONTH = 1;
 
 /**
  * A tier. `null` on a floor, a cap, or a quota means negotiated rather than
@@ -206,9 +206,9 @@ export const planDefinitionSchema = z.object({
    */
   monthlyMinimumUsd: z.number().nonnegative().nullable(),
   /**
-   * A hard monthly stop on operations. Set only where the tier is not billed at
-   * all: Free is capped rather than metered, so exceeding it is refused instead
-   * of invoiced. `null` on every metered tier.
+   * The no-billing monthly stop. On Free this is also the included allowance:
+   * organizations without billing enabled stop here, while organizations that
+   * enable billing pay only for operations above it. `null` on paid tiers.
    */
   hardCapOps: z.number().int().positive().nullable(),
   /**
@@ -220,7 +220,7 @@ export const planDefinitionSchema = z.object({
    * are billed rather than stopped.
    */
   hardCapOpsPerDay: z.number().int().positive().nullable(),
-  /** Quoted ceiling on stored data, in GiB. Not billed. `null` is negotiated. */
+  /** Included audit-log storage, in GiB. `null` means contract-priced capacity. */
   storageGib: z.number().positive().nullable(),
   /** Hard concurrent-connection cap, the real Free to Scale boundary. */
   maxConcurrentConnections: z.number().int().positive().nullable(),
@@ -240,7 +240,7 @@ export const PLANS = z
     free: {
       tier: 'free',
       label: 'Free',
-      summary: 'Build against the real engine without a card.',
+      summary: 'Free for early-stage teams building against the real engine.',
       monthlyMinimumUsd: 0,
       hardCapOps: 100_000,
       hardCapOpsPerDay: 10_000,
@@ -252,8 +252,8 @@ export const PLANS = z
     scale: {
       tier: 'scale',
       label: 'Scale',
-      summary: 'Production traffic, metered above a monthly floor.',
-      monthlyMinimumUsd: 20,
+      summary: 'Built for scaling teams with production traffic.',
+      monthlyMinimumUsd: 250,
       hardCapOps: null,
       hardCapOpsPerDay: null,
       storageGib: 50,
@@ -264,8 +264,8 @@ export const PLANS = z
     enterprise: {
       tier: 'enterprise',
       label: 'Enterprise',
-      summary: 'Committed volume, private networking, and an uptime guarantee.',
-      monthlyMinimumUsd: 2_000,
+      summary: 'Custom infrastructure, security, and support for critical workloads.',
+      monthlyMinimumUsd: 4_000,
       hardCapOps: null,
       hardCapOpsPerDay: null,
       storageGib: null,
@@ -336,8 +336,8 @@ export function opsForUsd(usd: number): number {
 }
 
 /**
- * The operations a tier includes, as shown on the pricing page. A capped tier
- * shows its cap; a metered tier shows what its floor covers, computed from the
+ * The operations a tier includes, as shown on the pricing page. Free shows its
+ * pay-as-you-go allowance; a tier with a floor shows what that floor covers, computed from the
  * floor rather than stored beside it. `null` where the terms are contractual.
  */
 export function monthlyOpsAllowance(tier: PlanTier): number | null {
@@ -348,15 +348,36 @@ export function monthlyOpsAllowance(tier: PlanTier): number | null {
 }
 
 /**
- * The invoice for a month: the floor, or the metered usage, whichever is
- * greater. A capped tier is never billed above its floor because the cap is
- * enforced before the usage exists. `null` where the terms are contractual.
+ * The invoice for a month. Free subtracts its included operations before
+ * applying the rate. Scale charges the floor or metered usage, whichever is
+ * greater. `null` where the terms are contractual.
  */
 export function monthlyBillUsd(tier: PlanTier, ops: number): number | null {
   const plan = PLANS[tier];
   if (plan.contractPriced || plan.monthlyMinimumUsd === null) return null;
-  if (plan.hardCapOps !== null) return plan.monthlyMinimumUsd;
+  if (plan.hardCapOps !== null) {
+    return roundUsd(usdForOps(Math.max(0, ops - plan.hardCapOps)));
+  }
   return roundUsd(Math.max(plan.monthlyMinimumUsd, usdForOps(ops)));
+}
+
+/**
+ * Audit-log storage overage for a month. Free and Scale meter only the GiB
+ * above their included amount, and Enterprise is priced in the contract.
+ */
+export function auditLogStorageBillUsd(tier: PlanTier, storageGib: number): number | null {
+  const plan = PLANS[tier];
+  if (plan.contractPriced || plan.storageGib === null) return null;
+  if (!Number.isFinite(storageGib)) return 0;
+  return roundUsd(Math.max(0, storageGib - plan.storageGib) * AUDIT_LOG_STORAGE_USD_PER_GIB_MONTH);
+}
+
+/** The complete published estimate across operation and audit-storage usage. */
+export function monthlyEstimateUsd(tier: PlanTier, ops: number, auditStorageGib: number): number | null {
+  const operationsBill = monthlyBillUsd(tier, ops);
+  const storageBill = auditLogStorageBillUsd(tier, auditStorageGib);
+  if (operationsBill === null || storageBill === null) return null;
+  return roundUsd(operationsBill + storageBill);
 }
 
 /**

@@ -10,6 +10,37 @@ module:
 Yes belongs here. IndexedDB, local stores, optimistic queues, bootstrap state,
 WebSocket lifecycle and reactive snapshots belong in `@abloatai/humans`.
 
+## Follow the operation tree
+
+The package is organized by the operation a reader is trying to understand,
+not by a horizontal implementation layer. Enter through one of these owners and
+follow its imports downward:
+
+```text
+src/
+  client/             public seam, headless runtime, typed model resources
+  commit/             lifecycle, confirmation, durable persistence, requests
+  claims/             contracts, locators, admission, leases, policy, events
+  observation/        deltas, feeds, cursors, delivery, persisted projections
+  auth/               credential and session authority
+  source/
+    endpoint/         signed endpoint serving
+    connector/        outbound connector runtime and protocol
+    delivery/         push delivery
+    adapters/         database adapter contract and implementations
+    outbox/           versioned endpoint outbox
+  transport/
+    http/             stateless HTTP mechanism
+    websocket/        stateful socket mechanism
+    connection/       shared connection and credential lifecycle
+```
+
+The former contract files in `wire/`, flat `transport/` files,
+`transactions/confirmation/`, root client/resource files, and flat files under
+`source/` were removed when their owners moved. Do not recreate those paths as
+compatibility façades. Other `wire/` modules remain authoritative protocol
+leaves.
+
 ## One definition for boundary data
 
 Any shape that crosses a network boundary or is written to durable storage has
@@ -27,20 +58,21 @@ equality assertion to justify two otherwise independent definitions.
 
 Handwritten interfaces remain appropriate for behavior contracts (methods) and
 in-process options that are neither parsed from the wire nor persisted. Those
-belong outside `src/wire/` and `src/transactions/confirmation/`, so the two
+belong outside `src/wire/` and `src/commit/confirmation/`, so the two
 enforced directories keep a zero baseline rather than an exception list. When a
 port and the records crossing it are discovered together, split them: the shape
 stays in `confirmation/`, the methods move out.
 
 Good definition sites include:
 
-- `src/wire/delta.ts` for the shared, client, and server delta projections.
-- `src/transactions/confirmation/commitEnvelope.ts` for durable commit identity.
-- `src/transactions/confirmation/pendingWrite.ts` for the persisted union a
+- `src/observation/contract.ts` for the shared, client, and server delta projections.
+- `src/commit/confirmation/commitEnvelope.ts` for durable commit identity.
+- `src/commit/confirmation/pendingWrite.ts` for the persisted union a
   durable-write adapter stores.
-- `src/durableWrites.ts` for the port that stores them — methods, so it lives
-  outside the enforced directories.
-- `src/transactionLayer.ts` for a behavior contract rather than serialized data.
+- `src/commit/durableWrites.ts` for the port that stores them — methods, so it
+  lives outside the enforced confirmation directory.
+- `src/client/contract.ts` for the client-facing behavior contract rather than
+  serialized data.
 
 ## File preambles state ownership
 
@@ -57,13 +89,13 @@ that the schema already makes visible.
 ## Enforcement
 
 CI rejects exported interfaces in `src/wire/` and
-`src/transactions/confirmation/`. Those directories have a zero baseline: add a
+`src/commit/confirmation/`. Those directories have a zero baseline: add a
 schema and infer the type instead of adding an exception. The import boundary is
 enforced separately by dependency-cruiser.
 
 A shape can also be duplicated without ever declaring a type, by writing a
 projection's output out member by member. CI rejects that for the claim locator,
-whose four projections live in `src/coordination/locator.ts`: a literal that
+whose four projections live in `src/claims/locator.ts`: a literal that
 assembles a target out of another target instead of spreading `wireTarget`,
 `modelTarget`, `streamTarget`, or `subTarget` fails
 `npm run check:locator-copies`. Its per-file baseline holds the two partial
@@ -75,43 +107,21 @@ Run the focused checks from the repository root:
 grep -RInE --include='*.ts' \
   '^[[:space:]]*export[[:space:]]+interface[[:space:]]' \
   packages/transaction/src/wire \
-  packages/transaction/src/transactions/confirmation
+  packages/transaction/src/commit/confirmation
 npm run check:locator-copies
 npm run graph:deps
 ```
 
 The grep should print nothing; CI turns any match into a failure.
 
-## The published surface is wider than the barrel
+## Publish owned boundaries, not filesystem accidents
 
-`package.json` declares twenty-seven explicit subpaths and then, at the end, `"./*"`.
-The wildcard publishes every internal module as a supported import path. It is not an
-oversight; it is the open door product code reached through for years, and it means a
-module can be public API without anything in its own file saying so.
+`package.json` exposes explicit subsystem entry points and narrowly scoped child
+patterns for stable leaf contracts. It must not contain a root `"./*"` or flat
+`"./source/*"` escape hatch: those turn every file placement into public API and
+allow consumers to bypass ownership.
 
-Measured on the current tree, **61 subpaths across 605 import sites inside this repo
-resolve only through the wildcard**. The largest are load-bearing:
-
-| Subpath | Sites | What it is |
-| --- | --- | --- |
-| `errors` | 112 | the error hierarchy, genuinely public API |
-| `coordination/schema` | 42 | claim and lease shapes |
-| `types/streams` | 38 | stream contracts |
-| `wire/delta` | 32 | the delta projections |
-| `logger` | 29 | the logging port |
-| `transactions/confirmation/commitEnvelope` | 26 | durable commit identity |
-| `auth/credentialSource` | 20 | credential resolution |
-
-Two consequences for anyone changing these files. Renaming or moving one is a breaking
-change for external consumers even though no barrel mentions it, so it needs the same
-care as an entry in the exports map. And narrowing the wildcard is its own project
-rather than a drive-by: declaring `./errors` explicitly is the obvious first move, and
-everything else needs the 605 sites moved to relative imports or to a declared subpath
-before the door can close.
-
-See it yourself:
-
-```sh
-node -e "const k=Object.keys(require('./packages/transaction/package.json').exports);console.log(k.includes('./*'),k.length)"
-grep -rhoE '@abloatai/transaction/[a-zA-Z0-9_/.-]+' --include='*.ts' --include='*.tsx' apps packages | sort | uniq -c | sort -rn | head -20
-```
+When a new public subpath is needed, add it deliberately under its owning
+subsystem. When a module moves, update all repository consumers in the same
+change and remove its old export. This keeps the published surface aligned with
+the downward tree rather than preserving a second, historical structure.

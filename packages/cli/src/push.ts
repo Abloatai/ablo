@@ -30,7 +30,6 @@ import { ambientEnvKeyNote, resolveMutationApiKey, type ResolvedKeySource } from
 import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 import { brand } from './theme';
 import { renderCliError } from './renderError';
-import { participantKindSchema } from '@abloatai/transaction/coordination/schema';
 import { flushProductAnalytics, trackCliSchemaPushAttempted } from './telemetry';
 
 export interface PushArgs {
@@ -335,10 +334,9 @@ function schemaGitState(schemaPath: string): { dirty: boolean; untracked: boolea
   }
 }
 
-/** A model in the deployed schema (`GET /api/schema`): its key and conflict policy. */
+/** A model in the deployed schema (`GET /api/schema`). */
 interface RemoteModel {
   key: string;
-  conflict: Record<string, string> | null;
 }
 interface RemoteSchema {
   active?: boolean;
@@ -366,51 +364,37 @@ async function fetchActiveSchema(url: string, apiKey: string): Promise<RemoteSch
   }
 }
 
-/** Compact conflict string for a diff line: `{user:overwrite,agent:reject}` or ''. */
-function conflictStr(c: Record<string, string> | null | undefined): string {
-  if (!c) return '';
-  const parts = participantKindSchema.options.flatMap((k) => (c[k] ? [`${k}:${c[k]}`] : []));
-  return parts.length ? `{${parts.join(',')}}` : '';
-}
-
-/** Local model summary from the serialized schema: key → conflict string. */
-function localModels(schema: Schema): Map<string, string> {
+/** Model keys from the serialized local schema. */
+function localModels(schema: Schema): Set<string> {
   const json = JSON.parse(serializeSchema(schema)) as {
-    models: Record<string, { conflict?: Record<string, string> | null }>;
+    models: Record<string, unknown>;
   };
-  const out = new Map<string, string>();
-  for (const [key, def] of Object.entries(json.models)) out.set(key, conflictStr(def.conflict));
-  return out;
+  return new Set(Object.keys(json.models));
 }
 
 /**
- * Prints the model-level plan — models added, removed, or with a changed
- * conflict policy — against the deployed schema, as an at-a-glance preview.
+ * Prints models added or removed against the deployed schema.
  * Field-level destructive changes are caught authoritatively by the server when
  * the schema is applied (it returns `warnings` and `unexecutable`); this is the
  * human-readable preview shown beforehand.
  */
-function printPlan(local: Map<string, string>, remote: RemoteSchema | null): void {
+function printPlan(local: Set<string>, remote: RemoteSchema | null): void {
   if (!remote?.models) {
     console.log(`  ${pc.dim('plan')}     ${pc.dim('(deployed schema unavailable — the server computes the diff on apply)')}\n`);
     return;
   }
-  const remoteMap = new Map<string, string>();
-  for (const m of remote.models) remoteMap.set(m.key, conflictStr(m.conflict));
+  const remoteKeys = new Set(remote.models.map((model) => model.key));
 
-  const added = [...local.keys()].filter((k) => !remoteMap.has(k));
-  const removed = [...remoteMap.keys()].filter((k) => !local.has(k));
-  const changed = [...local.keys()].filter((k) => remoteMap.has(k) && remoteMap.get(k) !== local.get(k));
+  const added = [...local].filter((key) => !remoteKeys.has(key));
+  const removed = [...remoteKeys].filter((key) => !local.has(key));
   const verLabel = remote.version != null ? `v${remote.version}` : 'active';
 
-  if (added.length === 0 && removed.length === 0 && changed.length === 0) {
+  if (added.length === 0 && removed.length === 0) {
     console.log(`  ${pc.dim('plan')}     ${pc.dim(`no model-level changes vs deployed ${verLabel} (any field changes apply on push)`)}\n`);
     return;
   }
   console.log(`  ${pc.dim('plan')}     ${pc.dim(`vs deployed ${verLabel}:`)}`);
   for (const k of added) console.log(`           ${pc.green(`+ ${k}`)} ${pc.dim('(new model)')}`);
-  for (const k of changed)
-    console.log(`           ${pc.yellow(`~ ${k}`)} ${pc.dim(`conflict ${remoteMap.get(k) || '(default)'} → ${local.get(k) || '(default)'}`)}`);
   for (const k of removed) console.log(`           ${pc.red(`- ${k}`)} ${pc.dim('(removed — destructive, needs --force)')}`);
   console.log('');
 }

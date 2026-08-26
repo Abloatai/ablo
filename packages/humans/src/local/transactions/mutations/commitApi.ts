@@ -1,7 +1,7 @@
 import { AbloIdempotencyError } from '@abloatai/transaction/errors';
-import type { ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
+import type { ReadDependency } from '@abloatai/transaction/coordination/schema';
 import { stableStringify } from '@abloatai/transaction/utils/json';
-import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+import type { DurableCommitEnvelope } from '@abloatai/transaction/commit';
 import type { CommitTransaction } from './commitLane.js';
 import type { SealDurableCommitInput } from './commitTransport.js';
 
@@ -21,7 +21,7 @@ export async function enqueueCommit(
   ctx: CommitApiContext,
   clientTxId: string,
   operations: CommitTransaction['operations'],
-  options: { reads?: ReadDependency[] | null; track?: TrackDependency[] | null } = {},
+  options: { reads?: ReadDependency[] | null } = {},
 ): Promise<void> {
   ctx.assertDurableReplayOpen();
   const existing = ctx.commitStore.get(clientTxId);
@@ -30,12 +30,10 @@ export async function enqueueCommit(
     const existingIntent = stableStringify({
       operations: existing.operations,
       reads: existing.reads ?? null,
-      track: existing.track ?? null,
     });
     const incomingIntent = stableStringify({
       operations,
       reads: options.reads ?? null,
-      track: options.track ?? null,
     });
     if (existingIntent !== incomingIntent) {
       throw new AbloIdempotencyError(
@@ -59,7 +57,6 @@ export async function enqueueCommit(
     kind: 'commit',
     operations: [...operations],
     ...(options.reads ? { reads: options.reads } : {}),
-    ...(options.track ? { track: options.track } : {}),
     status: 'pending',
     createdAt: now,
     attempts: 0,
@@ -73,7 +70,6 @@ export async function enqueueCommit(
     operations: tx.operations,
     commitOptions: {
       ...(tx.reads ? { reads: tx.reads } : {}),
-      ...(tx.track ? { track: tx.track } : {}),
     },
     createdAt: tx.createdAt,
     sealedAt: tx.sealedAt,

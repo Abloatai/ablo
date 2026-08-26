@@ -8,7 +8,7 @@
  * stop: before the registry, `ablo schema` was dispatched and printed nowhere.
  */
 
-import { COMMANDS, CORE_GROUPS, FULL_GROUPS, coreRows, fullRows, parseCommandName, suggestCommand, type Command } from '../commands';
+import { COMMANDS, CORE_GROUPS, FULL_GROUPS, coreRows, fullRows, parseCommandName, suggestCommand, usageFor, type Command } from '../commands';
 
 /** The registry at its declared type. `COMMANDS` keeps literal types, under
  *  which TypeScript can already prove some of these checks vacuous — reading it
@@ -16,6 +16,64 @@ import { COMMANDS, CORE_GROUPS, FULL_GROUPS, coreRows, fullRows, parseCommandNam
 const ALL: readonly Command[] = COMMANDS;
 
 describe('command registry', () => {
+  it('renders a command\'s usage from the rows it already declares', () => {
+    // The drift this closed: a module hand-wrote a usage block beside the rows
+    // here, restating the same invocations with nothing keeping them agreeing.
+    // Asserting containment pins the relationship rather than a copy of the
+    // rendered output, which would be the self-pinning version of this test.
+    let checked = 0;
+    for (const command of COMMANDS) {
+      if ('usage' in command) continue;
+      if (!('full' in command)) continue;
+      const usage = usageFor(command.name);
+      expect(usage).toBeDefined();
+      for (const row of command.full.rows) expect(usage).toContain(row.run);
+      checked += 1;
+    }
+    // A guard on the guard: a loop over nothing would pass vacuously.
+    expect(checked).toBeGreaterThan(3);
+  });
+
+  it('documents in its own help every flag the reference table lists', () => {
+    // The hole this closes. A command that publishes prose opts out of the
+    // derivation, so nothing had been checking the two against each other, and
+    // `ablo push --help` could have lost `--force` while `ablo help --all` kept
+    // advertising it.
+    //
+    // Coverage is the invariant, not spelling: the prose groups flags under
+    // headings (`Safety:`) while a row writes them inline (`push --force`), and
+    // both are right. So this matches the flag token exactly, which is a string
+    // either present or absent, rather than guessing at two presentations of
+    // the same line.
+    const FLAG = /--[a-z][a-z0-9-]*/g;
+    const undocumented: string[] = [];
+    let checked = 0;
+    for (const command of COMMANDS) {
+      if (!('usage' in command)) continue;
+      if (!('full' in command)) continue;
+      const flags = new Set(command.full.rows.flatMap((row) => row.run.match(FLAG) ?? []));
+      for (const flag of flags) {
+        if (!command.usage.includes(flag)) undocumented.push(`${command.name} ${flag}`);
+      }
+      checked += 1;
+    }
+    expect(undocumented).toEqual([]);
+    // A guard on the guard: a loop over nothing would pass vacuously.
+    expect(checked).toBeGreaterThan(5);
+  });
+
+  it('lets a command keep its own usage when it publishes one', () => {
+    // Some commands carry prose that rows cannot express; deriving over the top
+    // of those would flatten `ablo connect --help` into a flag list.
+    let checked = 0;
+    for (const command of COMMANDS) {
+      if (!('usage' in command)) continue;
+      expect(usageFor(command.name)).toBe(command.usage);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
   it('names each command once', () => {
     const names = ALL.map((c) => c.name);
     expect(new Set(names).size).toBe(names.length);

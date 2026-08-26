@@ -21,7 +21,7 @@ import {
 import type { BootstrapFetcher, BootstrapData } from './sync/BootstrapFetcher.js';
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
 import { logPositionSnapshotSchema } from './logPosition.js';
-import type { SyncDeltaAction } from '@abloatai/transaction/wire/delta';
+import type { SyncDeltaAction } from '@abloatai/transaction/observation';
 import type { BootstrapType } from '@abloatai/transaction/types';
 import { highestPersistedPrefixSyncId } from './sync/persistedPrefix.js';
 import {

@@ -162,6 +162,11 @@ default caller, not a special one.
 
 ## Build
 
+- [Agent Integration Decision Guide](./agent-integration-decision-guide.md) — choose identifier or row claims, captured reads, atomic boundaries, persistence ownership, transport, and the smallest proof before opening an example.
+- [TypeScript Library](./libraries/typescript.md) — construct the server client,
+  keep schema ownership beneath one boundary, and select an integration approach.
+- [GraphQL.js over an Existing Backend](./approaches/graphql/graphql-js.md) —
+  keep resolvers thin and call one named Ablo-backed domain operation.
 - [Quickstart](./quickstart.md) — make your first coordinated write.
 - [Integration Guide](./integration-guide.md) — the canonical end-to-end integration.
 - [Integrations](./integrations.md) — long-running records, ingestion, and other application-edge runtimes.

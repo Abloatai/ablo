@@ -1425,6 +1425,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "client",
     },
+    "source_api_key_missing": {
+      "category": "auth",
+      "httpStatus": 401,
+      "retryable": false,
+      "surface": "wire",
+    },
     "source_api_key_unresolved": {
       "category": "auth",
       "httpStatus": 401,
@@ -1521,6 +1527,18 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "source_forbidden": {
+      "category": "permission",
+      "httpStatus": 403,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_id_missing": {
+      "category": "auth",
+      "httpStatus": 401,
+      "retryable": false,
+      "surface": "wire",
+    },
     "source_network_error": {
       "category": "transport",
       "httpStatus": 503,
@@ -1539,9 +1557,39 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": true,
       "surface": "wire",
     },
+    "source_signature_invalid": {
+      "category": "auth",
+      "httpStatus": 401,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_signature_missing": {
+      "category": "auth",
+      "httpStatus": 401,
+      "retryable": false,
+      "surface": "wire",
+    },
     "source_tenancy_not_enforced": {
       "category": "tenant",
       "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_timestamp_expired": {
+      "category": "auth",
+      "httpStatus": 401,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_timestamp_invalid": {
+      "category": "auth",
+      "httpStatus": 401,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_timestamp_missing": {
+      "category": "auth",
+      "httpStatus": 401,
       "retryable": false,
       "surface": "wire",
     },

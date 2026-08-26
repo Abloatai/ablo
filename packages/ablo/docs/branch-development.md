@@ -66,7 +66,9 @@ Login stores one project-scoped `mk_` management credential. It has no
 production/test mode and no application-data authority. It can manage projects
 and branches and exchange for an expiring credential bound to one branch.
 
-If you switch projects, log in for the selected project before running `dev`:
+If you switch projects, log in for the selected project before running `dev`.
+A plain `npx ablo login` offers the organization's projects in the terminal;
+`--project` names one outright:
 
 ```bash
 npx ablo projects use orders
@@ -253,8 +255,8 @@ database's safe coordinates, and an exact readiness fix.
 For a one-shot CI schema check:
 
 ```bash
-# Store the project management credential as the masked secret.
-ABLO_MANAGEMENT_KEY="mk_..." \
+# The one credential input temporarily carries CI's masked management grant.
+ABLO_API_KEY="mk_..." \
 ABLO_BRANCH="preview-pr-${PR_NUMBER}" \
   npx ablo dev --no-watch
 ```
@@ -272,6 +274,22 @@ npx ablo branch ensure "preview-pr-${PR_NUMBER}" \
 `--credential` explicitly requests plaintext secret material. Treat the JSON
 result as a secret, mask it in logs, and pass it through the deployment
 provider's secret-variable mechanism.
+
+For live integration tests that should not require a customer database, request
+an explicitly hosted, expiring test branch:
+
+```bash
+npx ablo branch ensure "sandbox-live-${RUN_ID}" \
+  --kind test \
+  --hosted \
+  --expires-at "${EXPIRES_AT}" \
+  --credential \
+  --json
+```
+
+Hosted storage is never inferred. It is accepted only for `kind: test` branches
+that expire within 24 hours; ordinary branches stay unbound until connected to
+the customer's database.
 
 Closing a preview should call `branch delete`. Deletion immediately makes
 branch-bound credentials fail authentication even if their expiry is later.
@@ -338,7 +356,8 @@ Run:
 npx ablo login
 ```
 
-For a non-default project:
+The terminal then offers the organization's projects, cursor on the active
+one; a plain Enter keeps it. To name the project and skip the picker:
 
 ```bash
 npx ablo login --project <project>

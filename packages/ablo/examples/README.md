@@ -30,8 +30,8 @@ For read-reason-write work, pass the exact returned rows that informed the
 decision. Their watermarks stay opaque:
 
 ```ts
-const record = await ablo.records.get({ id: recordId });
-const policy = await ablo.policies.get({ id: policyId });
+const record = await ablo.records.read({ id: recordId });
+const policy = await ablo.policies.read({ id: policyId });
 const result = await model({ record, policy });
 await ablo.records.update({
   id: record.id,

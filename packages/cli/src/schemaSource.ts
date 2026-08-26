@@ -17,14 +17,28 @@
  * restating the adopt rule, and it never means writing a second emitter.
  */
 
+import { BASE_FIELDS as ENGINE_BASE_FIELDS } from '@abloatai/transaction/schema';
 import type { IRField, IRFieldKind, IRModel, IRRelation, IRSchema, IRSkip } from './schemaIr';
 import { camelToSnake } from './schemaIr';
 
 /** The tenancy column a table must carry to be reachable per-tenant. */
 const TENANCY_COLUMN = 'organization_id';
 
-/** Columns the engine manages itself, matched by the name a source declares… */
-const BASE_FIELDS = new Set(['id', 'organizationId', 'createdBy', 'createdAt', 'updatedAt']);
+/**
+ * Columns the engine manages itself, matched by the name a source declares…
+ *
+ * Derived, not restated. This set decides which columns adoption SKIPS, so a
+ * name that lingers here after the engine stops owning it does not fail
+ * anything — it silently drops a real column out of the schema `ablo pull`
+ * generates, and `ablo check` then never reports the field as missing. That is
+ * what a hand-written copy of the 0.52.0 list did to `created_at`,
+ * `updated_at` and `created_by`, which have been ordinary declarable fields
+ * since that release.
+ */
+const BASE_FIELDS: ReadonlySet<string> = new Set<string>([
+  ...ENGINE_BASE_FIELDS,
+  'organizationId',
+]);
 /**
  * …and by the physical column, for sources that only see columns.
  *
@@ -32,12 +46,9 @@ const BASE_FIELDS = new Set(['id', 'organizationId', 'createdBy', 'createdAt', '
  * should not expect a declaration for. It is one fact about the engine, so it
  * is stated once.
  */
-export const BASE_COLUMNS: ReadonlySet<string> = new Set([
-  'id',
-  'organization_id',
-  'created_by',
-  'created_at',
-  'updated_at',
+export const BASE_COLUMNS: ReadonlySet<string> = new Set<string>([
+  ...ENGINE_BASE_FIELDS.map(camelToSnake),
+  TENANCY_COLUMN,
 ]);
 
 /** One column, as a source found it. */

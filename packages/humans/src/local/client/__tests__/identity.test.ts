@@ -17,7 +17,15 @@ import { createAuthCredentialSource } from '@abloatai/transaction/auth/credentia
 import type { BootstrapFetcher } from '../../sync/BootstrapFetcher.js';
 import type { Logger } from '../../interfaces/index.js';
 
-jest.mock('@abloatai/transaction/auth', () => ({
+// `auth/index.ts` is a barrel over `auth/runtime.ts`, and the subject
+// (`auth/identity.ts`) imports the runtime directly — mocking the barrel would
+// leave the subject holding the real implementations. Mock the runtime, and
+// spread the real module so the members this factory does not name (notably
+// `mintUserSessionKey`) survive.
+jest.mock('@abloatai/transaction/auth/runtime', () => ({
+  ...jest.requireActual<typeof import('@abloatai/transaction/auth/runtime')>(
+    '@abloatai/transaction/auth/runtime',
+  ),
   exchangeApiKey: jest.fn(),
   resolveIdentity: jest.fn(),
   createRefreshScheduler: jest.fn(() => ({
@@ -26,9 +34,9 @@ jest.mock('@abloatai/transaction/auth', () => ({
   })),
 }));
 
-import { exchangeApiKey } from '@abloatai/transaction/auth';
-import { resolveIdentity } from '@abloatai/transaction/auth';
-import { createRefreshScheduler } from '@abloatai/transaction/auth';
+import { exchangeApiKey } from '@abloatai/transaction/auth/runtime';
+import { resolveIdentity } from '@abloatai/transaction/auth/runtime';
+import { createRefreshScheduler } from '@abloatai/transaction/auth/runtime';
 
 const mockExchangeApiKey = exchangeApiKey as jest.MockedFunction<typeof exchangeApiKey>;
 const mockResolveIdentity = resolveIdentity as jest.MockedFunction<typeof resolveIdentity>;

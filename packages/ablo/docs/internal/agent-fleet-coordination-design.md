@@ -154,7 +154,7 @@ built; one is genuinely still open. Both are called out so neither is misjudged.
    (behavior 6) depends on the awareness channel being coalesced and gated by
    relevance, and on hot data staying on the pull side. This is the sharp one,
    and it is the one not yet built: what exists is the write-time pull guard
-   (`onStale`) and operation-level batching, not a coalesced, relevance-gated
+   (fixed stale rejection) and operation-level batching, not a coalesced, relevance-gated
    *push* on the presence broadcast. Get it wrong and a millisecond-ticking field
    storms the fleet. The rule to hold: an agent is *rejected at write time* on
    hot data, never *subscribed-and-woken* by it.

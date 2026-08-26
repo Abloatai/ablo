@@ -33,7 +33,7 @@ import {
   streamTarget,
 } from '@abloatai/transaction/coordination';
 import { claimRequestSchema } from '@abloatai/transaction/wire';
-import { WsTransport } from '@abloatai/transaction/transport/wsTransport';
+import { WsTransport } from '@abloatai/transaction/transport/websocket';
 import {
   createClaimStream,
   type ClaimTransport,

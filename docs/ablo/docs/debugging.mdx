@@ -89,7 +89,7 @@ Read it as the lifecycle of one claim:
 - **`queued … position N of M`:** the row was held, so you're waiting in the FIFO line. This is the "an agent is waiting behind a claim" moment; it re-logs only when your position changes, so you can watch it advance.
 - **`granted … your turn`:** you reached the head of the line; the lease is now yours and the row may have changed while you waited.
 - **`rejected … held by <who>`:** your claim was refused because someone else holds it (and the model's policy didn't let you in).
-- **`lost`:** you held the lease and it was taken (preempted by a higher-priority writer, or it expired).
+- **`lost`:** you held the lease and it ended (the queue fairness ceiling advanced, or it expired).
 - **`released`:** you (or `await using`'s scope exit) gave the lease back.
 
 ## Where the logs run

@@ -16,7 +16,7 @@
  */
 
 import { AbloAuthenticationError } from '../errors.js';
-import type { exchangeApiKey, mintUserSessionKey, resolveIdentity } from './index.js';
+import type { exchangeApiKey, mintUserSessionKey, resolveIdentity } from './runtime.js';
 import {
   classifyCredentialKind,
   type CredentialKind,

@@ -4,7 +4,7 @@ import { Model } from '../../Model.js';
 import { ModelRegistry, setActiveRegistry } from '../../ModelRegistry.js';
 import type { SyncClient } from '../../SyncClient.js';
 import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';
-import { createModelProxy } from '../createModelProxy.js';
+import { createModelOperations } from '../createModelOperations.js';
 
 interface ItemRow {
   id: string;
@@ -80,7 +80,7 @@ describe('schema model write confirmation', () => {
     const hydration: Pick<OnDemandLoader, 'fetch'> = {
       fetch: () => Promise.resolve([]),
     };
-    const items = createModelProxy<ItemRow, Omit<ItemRow, 'id'>>(
+    const items = createModelOperations<ItemRow, Omit<ItemRow, 'id'>>(
       'items',
       'Item',
       pool,

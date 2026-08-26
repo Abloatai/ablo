@@ -18,7 +18,7 @@ import {
   readTool,
   updateTool,
 } from '../src/ai-sdk.js';
-import { context } from '../src/context.js';
+import { context } from '../src/context/index.js';
 
 describe('@abloatai/ablo public entry points', () => {
   it('publishes the intentional branded subpaths', () => {

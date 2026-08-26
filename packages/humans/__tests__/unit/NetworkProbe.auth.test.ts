@@ -3,7 +3,7 @@
  * same way bootstrap, identity resolve, and WebSocket reconnects do.
  */
 
-import { probeNetwork } from '@abloatai/transaction/transport/networkProbe';
+import { probeNetwork } from '@abloatai/transaction/transport/connection';
 
 describe('NetworkProbe — bearer auth', () => {
   let originalFetch: typeof globalThis.fetch;

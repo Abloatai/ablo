@@ -25,6 +25,7 @@ import type { FieldMeta } from './field.js';
 // Pulled from the endpoints module to keep this schema file free of the client's
 // error-handling and credential dependencies.
 import { ABLO_HOSTED_HTTP_BASE_URL } from '../auth/hostedEndpoints.js';
+import { docUrlForCode } from '../errors.js';
 // The commit body is DERIVED from the schema the server validates against —
 // one definition site, so the documented surface cannot drift from the
 // enforced one.
@@ -35,7 +36,7 @@ import {
   commitRecordSchema,
   commitRecordListSchema,
   commitRecordWhereSchema,
-} from '../wire/commit.js';
+} from '../commit/contract.js';
 import { CURSOR_PARAM, CURSOR_PARAM_ALIAS } from '../wire/listEnvelope.js';
 import {
   claimRequestSchema,
@@ -51,7 +52,7 @@ import {
   claimReorderRequestSchema,
   claimReorderReplySchema,
   claimReleaseReplySchema,
-} from '../wire/claims.js';
+} from '../claims/contract.js';
 import { errorEnvelopeSchema } from '../wire/errorEnvelope.js';
 // The lifecycle promise and the rate-limit fields are contract, not prose about
 // contract: the document renders the same constants the server emits, so the
@@ -69,8 +70,8 @@ import {
 } from '../wire/rateLimit.js';
 import { modelReadResponseSchema, modelListResponseSchema } from '../wire/modelResponses.js';
 import { modelMutationRequestSchema } from '../wire/modelMutations.js';
-import { logListResponseSchema, logQuerySchema } from '../wire/feedEvent.js';
-import { logDeliveryResponseSchema } from '../wire/deltaDelivery.js';
+import { logListResponseSchema, logQuerySchema } from '../observation/feedContract.js';
+import { logDeliveryResponseSchema } from '../observation/deliveryContract.js';
 import { schemaReadResponseSchema } from '../wire/accountResponses.js';
 import {
   ephemeralKeyRequestSchema,
@@ -530,6 +531,11 @@ function envelope(options: SchemaToOpenApiOptions, description: string, paths: J
         name: 'Apache License 2.0',
         identifier: 'Apache-2.0',
       },
+      contact: {
+        name: 'Ablo Support',
+        url: 'https://github.com/Abloatai/ablo/issues',
+        email: 'support@abloatai.com',
+      },
     },
     servers: [{ url: options.serverUrl ?? `${ABLO_HOSTED_HTTP_BASE_URL}/api` }],
     security: [{ bearerAuth: [] }],
@@ -556,6 +562,41 @@ const ERROR_RESPONSES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * One real instance of the error shape every operation shares.
+ *
+ * This lives beside the canonical error responses rather than on the schema:
+ * OpenAPI consumers select examples from an operation's media type, and an
+ * example buried on a component does not tell them which response carries it.
+ * Stamping the same representative validation failure on every operation also
+ * means a newly added route cannot regress the published example coverage.
+ */
+const ERROR_RESPONSE_EXAMPLE: Readonly<Json> = {
+  type: 'AbloValidationError',
+  code: 'invalid_request',
+  param: 'body',
+  message: 'The request did not satisfy the published contract.',
+  doc_url: docUrlForCode('invalid_request'),
+  request_id: 'req_52bb7f46-17bc-4f2d-9988-89d1398d2990',
+};
+
+function canonicalErrorResp(description: string): Json {
+  return {
+    description,
+    content: {
+      'application/json': {
+        schema: schemaRef('ErrorEnvelope'),
+        examples: {
+          validation: {
+            summary: 'Typed validation failure',
+            value: ERROR_RESPONSE_EXAMPLE,
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
  * Every route passes failures through the same server error funnel. Publish
  * that fact on every operation so generated transports decode all HTTP errors
  * through `ErrorEnvelope`, rather than falling back to a language-specific raw
@@ -569,11 +610,10 @@ function attachCanonicalErrors(paths: Json): void {
       const operation = rawOperation as Json;
       const responses = { ...(operation.responses as Json | undefined) };
       for (const [status, description] of Object.entries(ERROR_RESPONSES)) {
-        responses[status] = namedResp(description, 'ErrorEnvelope');
+        responses[status] = canonicalErrorResp(description);
       }
-      responses.default = namedResp(
+      responses.default = canonicalErrorResp(
         'An HTTP error not otherwise listed; decoded through the canonical envelope.',
-        'ErrorEnvelope',
       );
       operation.responses = responses;
     }

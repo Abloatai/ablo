@@ -21,7 +21,7 @@ import type {
   SourceOperation,
   SourceRequestContext,
 } from '../source/index.js';
-import type { ServerSyncDelta } from '../wire/delta.js';
+import type { ServerSyncDelta } from '../observation/contract.js';
 import type { BootstrapModel } from './readConfig.js';
 import type { CommitContext, CommitExecutionResult } from './commit.js';
 import type { StorageMode } from './storageMode.js';

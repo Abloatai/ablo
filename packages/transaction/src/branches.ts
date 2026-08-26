@@ -58,6 +58,9 @@ export const createBranchRequestSchema = z.object({
   kind: branchKindSchema.optional(),
   origin: branchOriginSchema.optional(),
   expires_at: z.iso.datetime().optional(),
+  /** Explicit Ablo-hosted ephemeral storage. Accepted only for expiring test
+   * branches; ordinary customer branches remain unbound until connected. */
+  storage: z.enum(['customer', 'hosted']).optional(),
 });
 export type CreateBranchRequest = z.infer<typeof createBranchRequestSchema>;
 

@@ -13,9 +13,9 @@ import type { Schema, SchemaRecord } from '../../schema/schema.js';
 import { toSchemaJSON } from '../../schema/serialize.js';
 import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
 import { tenancyColumn } from '../../schema/tenancy.js';
-import type { AdapterReadRequest, Row } from '../adapter.js';
-import type { Operation } from '../contract.js';
-import { sourceSubjectRule, sourceSubjectValues } from '../subjectAuthorization.js';
+import type { AdapterReadRequest, Row } from './adapter.js';
+import type { Operation } from './contract.js';
+import { sourceSubjectRule, sourceSubjectValues } from './subjectAuthorization.js';
 
 /** The subset of a Kysely instance, or transaction handle, used by the core. */
 export interface KyselyLike {

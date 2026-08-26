@@ -13,9 +13,8 @@ import { globalRuntime } from '../../context.js';
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import { MutationOperationType } from '@abloatai/transaction/types';
 import { snapshotJsonValue } from '@abloatai/transaction/utils/json';
-import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
 import type { MutationOptions, WriteOptions } from '../../interfaces/index.js';
-import type { CommitEnvelopeMember } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+import type { CommitEnvelopeMember } from '@abloatai/transaction/commit';
 
 export interface UserContext {
   userId: string;
@@ -198,10 +197,7 @@ export const TX_TYPE_TO_MUTATION_OP: Record<QueuedMutation['type'], MutationOper
 };
 
 export function hasStaleWriteOptions(options?: WriteOptions): boolean {
-  return (
-    options?.readAt !== undefined ||
-    options?.onStale !== undefined
-  );
+  return options?.readAt !== undefined;
 }
 
 /** Options whose identity/audit semantics forbid merging two caller writes. */
@@ -217,7 +213,6 @@ export function hasCommitCoalescingBarrier(options?: WriteOptions): boolean {
 
 export interface WriteOperationFields {
   readAt?: number | null;
-  onStale?: OnStaleMode | null;
   fenceToken?: number | null;
   claimId?: string;
   options?: Pick<MutationOptions, 'idempotencyKey' | 'label'>;
@@ -225,7 +220,7 @@ export interface WriteOperationFields {
 
 /**
  * Copies a transaction's `writeOptions` onto the wire operation. The
- * stale-context guards (`readAt` and `onStale`) sit at the operation's root,
+ * stale-context guard (`readAt`) sits at the operation's root,
  * while `idempotencyKey` and `label` go in its `options` slot — the
  * `mutation_log` cache key and audit tag. This is the one place caller-supplied
  * write options cross onto the wire.
@@ -239,9 +234,6 @@ export function applyWriteOptions<T extends object>(
   if (!writeOptions) return operation;
   if (writeOptions.readAt !== undefined) {
     operation.readAt = writeOptions.readAt;
-  }
-  if (writeOptions.onStale !== undefined) {
-    operation.onStale = writeOptions.onStale;
   }
   if (writeOptions.fenceToken !== undefined) {
     operation.fenceToken = writeOptions.fenceToken;

@@ -1489,6 +1489,11 @@ export class SyncClient extends EventEmitter {
   dispose(): void {
     this.isDisposed = true;
     this.disconnect();
+    // The queue owns commit retry, replication-lag, offline-grace, and
+    // per-mutation timers. A disposed client must release those resources too;
+    // otherwise an atomic commit can keep a worker process alive after the
+    // public client has been disposed.
+    this.mutationQueue.dispose();
     this.networkMonitor.dispose();
     this.observers.clear();
     this.pendingStages.clear();

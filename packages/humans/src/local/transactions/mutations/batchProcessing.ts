@@ -3,10 +3,9 @@ import type { MutationQueueConfig } from './MutationQueue.js';
 import type { MutationInput, QueuedMutation } from './commitPayload.js';
 import type { MutationStore } from './MutationStore.js';
 import type { OptimisticUpdateEntry } from './localMutation.js';
-import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
 import type { DeltaConfirmationTracker } from './deltaConfirmation.js';
-import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
-import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+import type { MutationCommitResult } from '@abloatai/transaction/commit';
+import type { DurableCommitEnvelope } from '@abloatai/transaction/commit';
 import { AbloError, AbloNotFoundError } from '@abloatai/transaction/errors';
 import { applyWriteOptions, normalizeModelKey, TX_TYPE_TO_MUTATION_OP, type WriteOperationFields } from './commitPayload.js';
 import type { MutationOperationType } from '@abloatai/transaction/types';
@@ -30,7 +29,6 @@ export interface BatchProcessingContext {
   readonly store: MutationStore;
   readonly enqueue: (transaction: QueuedMutation) => void;
   readonly optimisticUpdates: Map<string, OptimisticUpdateEntry>;
-  readonly commitNotifications: Map<string, StaleNotification[]>;
   readonly commitMissingIds: Map<string, string[]>;
   readonly sourceMutationIdsFor: (batch: readonly QueuedMutation[]) => string[];
   readonly dispatchCommitBounded: (...args: Parameters<import('../../interfaces/index.js').MutationExecutor['commit']>) => ReturnType<import('../../interfaces/index.js').MutationExecutor['commit']>;
@@ -40,11 +38,6 @@ export interface BatchProcessingContext {
   readonly assertEnvelopeInsideReplayWindow: (envelope: DurableCommitEnvelope) => void;
   readonly sealDurableCommit: (input: Parameters<typeof import('./commitTransport.js').sealDurableCommit>[1]) => Promise<DurableCommitEnvelope>;
   readonly noteAck: (syncId: number | undefined) => void;
-  readonly classifyReceiptNotifications: (
-    operations: readonly { model: string; id: string }[],
-    notifications: readonly StaleNotification[],
-  ) => { holdsEntireBatch: boolean; heldTargets: Set<string>; notificationsByTarget: Map<string, StaleNotification[]> };
-  readonly receiptTargetKey: (modelName: string, modelId: string) => string;
   readonly scheduleReplicationLagTimeout: (transactionId: string, clientTxId?: string, correlationId?: string) => void;
   readonly scheduleDeltaConfirmationTimeout: (transaction: QueuedMutation, timeoutMs: number) => void;
   readonly clearReplicationLagState: (transactionId: string) => void;
@@ -170,24 +163,6 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
               );
               const lastSyncId = result.lastSyncId;
 
-              const notifications = result.notifications;
-              const {
-                holdsEntireBatch,
-                heldTargets,
-                notificationsByTarget,
-              } = ctx.classifyReceiptNotifications(
-                batchOps.map(({ op }) => ({ model: op.model, id: op.id })),
-                notifications ?? [],
-              );
-              for (const { tx } of batchOps) {
-                const txTarget = ctx.receiptTargetKey(tx.modelKey, tx.modelId);
-                const txNotifs = holdsEntireBatch
-                  ? notifications
-                  : notificationsByTarget.get(txTarget);
-                if (txNotifs && txNotifs.length > 0) {
-                  ctx.commitNotifications.set(tx.id, txNotifs);
-                }
-              }
               const missingIds = new Set(result.missingIds ?? []);
               const settlingBatchOps: typeof batchOps = [];
               for (const entry of batchOps) {
@@ -200,17 +175,6 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                       [tx.modelId],
                     ),
                   );
-                  continue;
-                }
-                if (
-                  holdsEntireBatch ||
-                  heldTargets.has(ctx.receiptTargetKey(tx.modelKey, tx.modelId))
-                ) {
-                  await ctx.rollbackOptimistic(tx, 'conflict_server_wins');
-                  ctx.store.updateStatus(tx.id, 'completed');
-                  ctx.emit('transaction:completed', tx);
-                  ctx.emit(`transaction:completed:${tx.id}`, tx);
-                  ctx.optimisticUpdates.delete(tx.id);
                   continue;
                 }
                 settlingBatchOps.push(entry);

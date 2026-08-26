@@ -308,6 +308,11 @@ export type CapabilityMintResponse = z.infer<typeof capabilityMintResponseSchema
 export const capabilityRequestSchema = z.object({
   participantKind: participantKindSchema,
   participantId: z.string().min(1).optional(),
+  onBehalfOf: z
+    .object({
+      user: z.object({ id: z.string().min(1) }),
+    })
+    .optional(),
   /**
    * Mint into another organization. Reserved for a platform secret carrying
    * `organization:act-as`; ordinary tenant keys may omit only.

@@ -159,7 +159,7 @@ export async function runBranchDev(
     dependencies.resolveManagementKey?.() ?? resolveManagementKey();
   if (!managementKey) {
     throw new AbloValidationError(
-      'Creating a development branch needs a project management credential. Run `npx ablo login` or set ABLO_MANAGEMENT_KEY.',
+      'Creating a development branch needs a project management credential. Run `npx ablo login` or set ABLO_API_KEY to an mk_ credential.',
       { code: 'cli_invalid_arguments' },
     );
   }

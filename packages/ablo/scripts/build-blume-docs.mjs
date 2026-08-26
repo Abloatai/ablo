@@ -23,11 +23,13 @@
  *
  * `--check --staged` is the pre-commit form: it runs only when the commit touches
  * a source doc or a generated page, and it checks the prose pages only. The
- * changelog is deliberately left out -- its dates come from the npm registry (see
- * `npmPublishTimes`) and fall back to a git heuristic when that is unreachable, so
- * a hook running offline would report a staleness that is its own network and not
- * the tree's. `lint:docs-site` is the full check and covers the changelog; the
- * hook covers the projection a person can hand-edit.
+ * changelog is left out because dating a page it has never seen needs `npm view`
+ * (see `npmPublishTimes`), and a hook that shells out to the network is a hook
+ * that blocks a commit on someone's wifi. Dates do not churn offline -- a page
+ * that carries one keeps it (see `existingChangelogDates`) -- so this is a
+ * choice about what a hook should cost, not a correctness workaround.
+ * `lint:docs-site` is the full check and covers the changelog; the hook covers
+ * the projection a person can hand-edit.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
@@ -79,8 +81,11 @@ const TITLES = {
   debugging: 'Debugging & Logs',
   idempotency: 'Idempotency',
   integrations: 'Integrations',
+  'libraries/typescript': 'TypeScript library',
+  'approaches/graphql/graphql-js': 'GraphQL.js over an existing backend',
   'integrations/temporal': 'Temporal for long-running tasks',
   'integrations/inngest': 'Inngest for long-running tasks',
+  'integrations/sandbox-runtime': 'Anthropic Sandbox Runtime',
   // Examples. These were hand-written site pages that drifted from the package
   // docs into a second, divergent copy -- one teaching a `claim.state` field
   // (`actorKind`) that exists only as a database column, another declaring
@@ -88,6 +93,8 @@ const TITLES = {
   // there is one definition site and the drift cannot recur.
   'examples/agent-human': 'Agent + Human',
   'examples/ai-sdk-tool': 'AI SDK Tool',
+  'examples/coordination-conformance': 'Hosted Coordination Conformance',
+  'examples/existing-document-pipeline': 'Existing Document Pipeline',
   'examples/existing-python-backend': 'Existing Python Backend',
   'examples/nextjs': 'Next.js Example',
   'examples/scoped-agent': 'Scoped Agent',
@@ -132,8 +139,11 @@ const ICONS = {
   integrations: 'blocks',
   'integrations/temporal': 'clock-arrow-up',
   'integrations/inngest': 'workflow',
+  'integrations/sandbox-runtime': 'shield',
   'examples/agent-human': 'users',
   'examples/ai-sdk-tool': 'wrench',
+  'examples/coordination-conformance': 'badge-check',
+  'examples/existing-document-pipeline': 'file-check-2',
   'examples/existing-python-backend': 'server-cog',
   'examples/nextjs': 'triangle',
   'examples/scoped-agent': 'key-round',
@@ -287,20 +297,39 @@ function escapeMdxBody(md) {
   return body.replace(/ FENCE(\d+) /g, (_, i) => fences[Number(i)]);
 }
 
-/** When each version was actually published, straight from the registry.
- *
- *  This is the authoritative answer and the only churn-free one. A release is
- *  routinely prepared, reverted and re-prepared, so several
- *  `release(ablo): X.Y.Z` commits exist per version with different dates and no
- *  reliable way to tell which one shipped — 0.46.0 carried three across two
- *  days and the commit heuristic picked a date npm disagrees with.
+/** An ISO 8601 instant normalised to UTC, which is the shape the registry
+ *  already answers (`2026-08-22T07:54:44.867Z`). Applied to the git source so a
+ *  page stamped from a commit sorts against registry-stamped neighbours instead
+ *  of comparing as a different kind of value.
  *
  *  The FULL timestamp matters, not just the day. Blume's changelog index sorts
- *  on this value alone, so day-granularity dates make same-day releases
- *  compare equal; the sort is stable, the tie keeps collection order
- *  (ascending), and four entries render oldest-first inside an otherwise
- *  newest-first list. 0.42.0 through 0.45.0 all shipped on 2026-07-29, which is
- *  exactly that case. Seconds break the tie and the rendered date is unchanged.
+ *  on this value alone, so day-granularity dates make same-day releases compare
+ *  equal; the sort is stable, the tie keeps collection order (ascending), and
+ *  four entries render oldest-first inside an otherwise newest-first list.
+ *  0.42.0 through 0.45.0 all shipped on 2026-07-29, which is exactly that case.
+ *  Seconds break the tie, and the rendered date is unchanged either way.
+ *
+ *  Null for a value that is not a date, which drops the caller to the next
+ *  source rather than writing `Invalid Date` into frontmatter. */
+function toUtcInstant(value) {
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+}
+
+/** When each version was actually published, straight from the registry.
+ *
+ *  The best answer for a page that does not carry a date yet. A release is
+ *  routinely prepared, reverted and re-prepared, so several
+ *  `release(ablo): X.Y.Z` commits exist per version with different dates and no
+ *  reliable way to tell which one shipped: 0.46.0 carried three across two days
+ *  and the commit heuristic picked a date npm disagrees with.
+ *
+ *  It cannot be the last word, because it is the one input that does not exist
+ *  when the page is written. The registry learns a version minutes AFTER
+ *  `release.sh prepare` has generated its page and committed it, so ranking the
+ *  registry above the stamped date meant every release pushed a commit that a
+ *  fresh `check:docs-site` called stale on a tree nobody had edited. See
+ *  {@link existingChangelogDates}.
  *
  *  `version -> ISO 8601`; empty when the registry is unreachable, which drops
  *  us to the git heuristic below rather than failing an offline docs build. */
@@ -321,14 +350,22 @@ function npmPublishTimes() {
   return map;
 }
 
-/** Release dates from the `release(ablo): X.Y.Z` commits (CHANGELOG.md
- *  carries no dates). `version -> "YYYY-MM-DD"`; absent when no such commit.
- *  A fallback only: see {@link npmPublishTimes} for why it is not trusted. */
+/** Release dates from the `release(ablo): X.Y.Z` commits (CHANGELOG.md carries
+ *  no dates). `version -> ISO 8601`; absent when no such commit.
+ *
+ *  Last in precedence, but it is what STAMPS a page the first time: at
+ *  `release.sh prepare` the release commit is the only source that exists, the
+ *  page having no date and the registry having never heard of the version. The
+ *  ambiguity {@link npmPublishTimes} describes does not reach that case, since
+ *  the commit was written seconds earlier by the run now reading it. The AUTHOR
+ *  date is what we read, because it survives the `--amend` that folds the
+ *  regenerated page into the release commit; a committer date would shift under
+ *  the fold and answer differently on the next build. */
 function releaseDates() {
   const map = {};
   let log;
   try {
-    log = execFileSync('git', ['log', '--all', '--date=short', '--pretty=%ad%x09%s'], {
+    log = execFileSync('git', ['log', '--all', '--pretty=%aI%x09%s'], {
       cwd: repoRoot,
       encoding: 'utf8',
       maxBuffer: 32 * 1024 * 1024,
@@ -340,7 +377,9 @@ function releaseDates() {
     const tab = line.indexOf('\t');
     if (tab < 0) continue;
     const m = line.slice(tab + 1).match(/release\(ablo\):\s*(\d+\.\d+\.\d+)/);
-    if (m && !map[m[1]]) map[m[1]] = line.slice(0, tab);
+    if (!m || map[m[1]]) continue;
+    const at = toUtcInstant(line.slice(0, tab));
+    if (at) map[m[1]] = at;
   }
   return map;
 }
@@ -384,13 +423,22 @@ const CHANGELOG_AGENT_WINDOW = 12;
 
 /** The `date:` a changelog page already carries, `version -> value`.
  *
- *  A release date does not change, so once a page has one it is the answer. It
- *  is consulted BEFORE the commit heuristic because the two sources disagree
- *  about format — the registry answers a full ISO instant, the commit log a
- *  bare `YYYY-MM-DD` — so a build on a machine that cannot reach npm used to
- *  rewrite the date on every page it had not written itself. That churn had to
- *  be discarded by hand before committing, which is how a `build:docs` came to
- *  be something you thought twice about running. */
+ *  The HIGHEST-precedence source, and the whole reason this generator is
+ *  stable: a release date does not change, so once a page carries one, that IS
+ *  the date. No later source may revise it, and the value is passed through
+ *  unnormalised because normalising it would be a revision.
+ *
+ *  Ranking it top is what makes a page a function of inputs that all exist at
+ *  the moment it is written. The two sources below answer at moments the page
+ *  cannot wait for: the registry only after the publish, the commit log only
+ *  once `release(ablo): x.y.z` has landed. While either outranked the stamped
+ *  value, the page committed by `prepare` was GUARANTEED to disagree with the
+ *  same page regenerated an hour later. That is not drift worth catching; it is
+ *  the generator disagreeing with itself.
+ *
+ *  Sitting above the commit log, this already kept a build that cannot reach
+ *  npm from rewriting dates it did not author. Sitting above the registry too,
+ *  it extends the same guarantee to the machine that CAN. */
 function existingChangelogDates() {
   const map = {};
   let files;
@@ -412,13 +460,14 @@ function existingChangelogDates() {
  *  `type: changelog`, and Blume assembles them into the `/changelog` timeline. */
 function buildChangelogPages() {
   const raw = readFileSync(resolve(packageRoot, 'CHANGELOG.md'), 'utf8');
-  // The registry is the authority. What a page already carries comes next,
-  // because a date it was stamped with is a date the registry gave it. The
-  // commit heuristic is last: it answers a different SHAPE, so reaching for it
-  // over an answer already on disk trades one true date for another and
-  // rewrites the file for nothing.
-  const published = npmPublishTimes();
-  const dates = { ...releaseDates(), ...existingChangelogDates(), ...published };
+  // Stamp once, never revise. A date already on the page wins outright; a page
+  // without one takes the registry's instant, and failing that the release
+  // commit's. Later keys win, so this reads bottom-of-precedence first.
+  const dates = {
+    ...releaseDates(),
+    ...npmPublishTimes(),
+    ...existingChangelogDates(),
+  };
   return raw
     .split(/^## (?=\d+\.\d+\.\d+)/m)
     .slice(1)

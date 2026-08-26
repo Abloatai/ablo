@@ -27,11 +27,11 @@ import {
   type LogPositionPort,
 } from '../../logPosition.js';
 import type { WriteOptions } from '../../interfaces/index.js';
-import type { OnStaleMode, StaleNotification, ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
+import type { ReadDependency } from '@abloatai/transaction/coordination/schema';
 import {
   type CommitOperationResult,
   type MutationCommitResult,
-} from '@abloatai/transaction/wire/commit';
+} from '@abloatai/transaction/commit';
 import {
   computePriorityScore,
   normalizeModelKey,
@@ -74,9 +74,8 @@ import {
   createCommitEnvelopeMember,
   type DurableCommitEnvelope,
   type CommitOutboxScope,
-} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+} from '@abloatai/transaction/commit';
 import type { DurableWriteStore } from './durableWriteStore.js';
-import { stableStringify } from '@abloatai/transaction/utils/json';
 import {
   createLocalMutationPort,
   type LocalMutationPort,
@@ -108,7 +107,7 @@ import {
 import { enqueueTransaction, type QueueCoalescingContext } from './queueCoalescing.js';
 import { processBatch, type BatchProcessingContext } from './batchProcessing.js';
 import { handleFailure, type FailureHandlingContext } from './failureHandling.js';
-import { handleConflict as resolveConflict, isPermanentError as classifyPermanentError, isDefinitiveRejection as classifyDefinitiveRejection, type ConflictPolicyContext } from './failurePolicy.js';
+import { handleConflict as resolveConflict, isPermanentError as classifyPermanentError, isDefinitiveRejection as classifyDefinitiveRejection, type ConflictResolutionContext } from './failurePolicy.js';
 import { takeNextExecutionBatch as selectExecutionBatch, takePendingDrainBatch as selectPendingDrainBatch } from './executionSelection.js';
 import { scheduleProcessing as scheduleProcessingExternal, type ProcessingSchedulerContext } from './processingScheduler.js';
 import {
@@ -314,7 +313,6 @@ export class MutationQueue extends EventEmitter {
         retryBackoff: this.config.retryBackoff,
       },
       commitLane: this.commitLane,
-      commitNotifications: this.commitNotifications,
       commitMissingIds: this.commitMissingIds,
       commitProcessing: this.commitProcessing,
       setCommitProcessing: (value) => { this.commitProcessing = value; },
@@ -325,7 +323,6 @@ export class MutationQueue extends EventEmitter {
         await this.dispatchCommitBounded(envelope.operations, {
           idempotencyKey: envelope.idempotencyKey,
           ...(envelope.commitOptions.reads ? { reads: envelope.commitOptions.reads } : {}),
-          ...(envelope.commitOptions.track ? { track: envelope.commitOptions.track } : {}),
         }),
       ),
       persistDurableCommitAcceptance: (envelope, result) => this.persistDurableCommitAcceptance(envelope, result),
@@ -350,7 +347,6 @@ export class MutationQueue extends EventEmitter {
   private get commitReceiptContext(): CommitReceiptContext {
     return {
       commitStore: this.commitStore,
-      commitNotifications: this.commitNotifications,
       commitMissingIds: this.commitMissingIds,
       replicationLagErrors: this.replicationLagErrors,
       on: (event, listener) => this.on(event, listener),
@@ -437,7 +433,6 @@ export class MutationQueue extends EventEmitter {
       store: this.store,
       enqueue: (transaction) => { this.enqueue(transaction); },
       optimisticUpdates: this.localMutationPort.updates,
-      commitNotifications: this.commitNotifications,
       commitMissingIds: this.commitMissingIds,
       sourceMutationIdsFor: (batch) => this.sourceMutationIdsFor(batch),
       dispatchCommitBounded: (...args) => this.dispatchCommitBounded(...args),
@@ -447,8 +442,6 @@ export class MutationQueue extends EventEmitter {
       assertEnvelopeInsideReplayWindow: (envelope) => { this.assertEnvelopeInsideReplayWindow(envelope); },
       sealDurableCommit: (input) => this.sealDurableCommit(input),
       noteAck: (syncId) => { this.noteAck(syncId); },
-      classifyReceiptNotifications: (operations, notifications) => this.classifyReceiptNotifications(operations, notifications),
-      receiptTargetKey: (modelName, modelId) => this.receiptTargetKey(modelName, modelId),
       scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => { this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId); },
       scheduleDeltaConfirmationTimeout: (transaction, timeoutMs) => { this.scheduleDeltaConfirmationTimeout(transaction, timeoutMs); },
       clearReplicationLagState: (transactionId) => { this.clearReplicationLagState(transactionId); },
@@ -479,7 +472,7 @@ export class MutationQueue extends EventEmitter {
     };
   }
 
-  private get conflictPolicyContext(): ConflictPolicyContext {
+  private get conflictResolutionContext(): ConflictResolutionContext {
     return {
       config: this.config,
       store: this.store,
@@ -623,80 +616,7 @@ export class MutationQueue extends EventEmitter {
     return entityKey(modelName, modelId);
   }
 
-  /** Collision-safe receipt target identity across models sharing a row id. */
-  private receiptTargetKey(modelName: string, modelId: string): string {
-    return stableStringify([normalizeModelKey(modelName), modelId]);
-  }
-
-  /**
-   * Relates stale notifications back to write targets without assuming the
-   * server's canonical model name uses the same spelling as the public schema
-   * key (`Item` versus `items`). Exact `(model,id)` wins; a globally unique id
-   * is the compatibility fallback. An ambiguous same-id cross-model mismatch
-   * is deliberately left unclassified, so it cannot falsely settle a queued
-   * write. A notification with no write-target id (or an explicit group) is a
-   * declared-read conflict and holds the whole batch.
-   */
-  private classifyReceiptNotifications(
-    operations: readonly { model: string; id: string }[],
-    notifications: readonly StaleNotification[],
-  ): {
-    holdsEntireBatch: boolean;
-    heldTargets: Set<string>;
-    notificationsByTarget: Map<string, StaleNotification[]>;
-  } {
-    const targets = operations.map((operation) => ({
-      id: operation.id,
-      key: this.receiptTargetKey(operation.model, operation.id),
-    }));
-    const heldTargets = new Set<string>();
-    const notificationsByTarget = new Map<string, StaleNotification[]>();
-    let holdsEntireBatch = false;
-
-    for (const notification of notifications) {
-      // Scope is decided before any target matching. A group premise fires over
-      // the WHOLE batch by convention, and its `target` now names the row that
-      // actually moved — which may well be a row this batch is writing, so
-      // matching first would misread a batch-wide hold as a per-row one.
-      if (notification.scope === 'group') {
-        holdsEntireBatch = true;
-        continue;
-      }
-      const candidates = targets.filter(
-        (target) => target.id === notification.target.id,
-      );
-      const notificationKey = this.receiptTargetKey(
-        notification.target.model,
-        notification.target.id,
-      );
-      const exactTargets = candidates.filter(
-        (target) => target.key === notificationKey,
-      );
-      const candidateKeys = new Set(
-        (exactTargets.length > 0 ? exactTargets : candidates).map(
-          (target) => target.key,
-        ),
-      );
-
-      if (candidates.length === 0) {
-        holdsEntireBatch = true;
-        continue;
-      }
-      if (candidateKeys.size !== 1) {
-        // Same id across multiple differently named models with no exact match:
-        // the id-only compatibility fallback is ambiguous. Await the echo.
-        continue;
-      }
-      const [targetKey] = candidateKeys;
-      if (!targetKey) continue;
-      heldTargets.add(targetKey);
-      const targetNotifications = notificationsByTarget.get(targetKey) ?? [];
-      targetNotifications.push(notification);
-      notificationsByTarget.set(targetKey, targetNotifications);
-    }
-
-    return { holdsEntireBatch, heldTargets, notificationsByTarget };
-  }
+  /* Stale receipt classification was removed; stale premises now reject. */
 
   private resolveConfirmation(transaction: QueuedMutation): void {
     const resolver = this.confirmationResolvers.get(transaction.id);
@@ -807,11 +727,6 @@ export class MutationQueue extends EventEmitter {
 
   private readonly localMutationPort: LocalMutationPort;
 
-  // Stale-context notifications, keyed by transaction id. When the server
-  // accepts a commit but reports that an operation's premise had moved,
-  // the notification lands here from the commit acknowledgement and is drained
-  // by `waitForCommitReceipt`, so the receipt can carry it back to the caller.
-  private commitNotifications = new Map<string, StaleNotification[]>();
   /** Zero-row targets returned on a successful atomic commit receipt. */
   private commitMissingIds = new Map<string, string[]>();
 
@@ -1674,7 +1589,7 @@ export class MutationQueue extends EventEmitter {
   async enqueueCommit(
     clientTxId: string,
     operations: CommitTransaction['operations'],
-    options: { reads?: ReadDependency[] | null; track?: TrackDependency[] | null } = {},
+    options: { reads?: ReadDependency[] | null } = {},
   ): Promise<void> {
     return enqueueCommit(this.commitApiContext, clientTxId, operations, options);
   }
@@ -1687,7 +1602,6 @@ export class MutationQueue extends EventEmitter {
     clientTxId: string,
   ): Promise<{
     lastSyncId: number;
-    notifications?: StaleNotification[];
     missingIds?: string[];
     operationResults?: CommitOperationResult[];
   }> {
@@ -1712,7 +1626,7 @@ export class MutationQueue extends EventEmitter {
   }
 
   async handleConflict(transaction: QueuedMutation, serverData: MutationInput): Promise<void> {
-    await resolveConflict(this.conflictPolicyContext, transaction, serverData);
+    await resolveConflict(this.conflictResolutionContext, transaction, serverData);
   }
 
   private applyOptimisticCreate(model: LocalModel, transaction: QueuedMutation): void {
@@ -2013,7 +1927,6 @@ export class MutationQueue extends EventEmitter {
     this.recentDeltaCorrelations.clear();
     this.commitLane = [];
     this.commitStore.clear();
-    this.commitNotifications.clear();
     this.commitMissingIds.clear();
 
     // Clear event listeners

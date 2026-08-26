@@ -1,28 +1,35 @@
 ---
 title: "v0.57.0"
 type: changelog
-date: 2026-08-22
+date: 2026-08-22T07:54:44.867Z
 changelog:
   version: "0.57.0"
   category: "Features"
 ---
 
-### Before you upgrade: drain the endpoint outbox
+### The endpoint outbox upgrades without a drain
 
-This release adds a `sync_groups` column to the source outbox, and the migration
-refuses to run while legacy rows are still sitting in it. That refusal is
-deliberate. A legacy row has no routes recorded, and assigning it one would
-either invent an audience or give it none, so the migration stops and tells you
-rather than guessing.
+Endpoint events now have an explicit envelope version. Existing rows and writes
+from an older endpoint are version 1 and pass through the preserved pre-subject
+routing decoder. New adapters write version 2, capturing `sync_groups` in the
+same transaction as the row change. The database constraint requires every
+version-2 event to carry those immutable routes.
 
-If you run a `dataSource()` endpoint, do this on the previous release, in order:
+Old and new endpoint versions may run together during rollout without stalling
+the feed. A page served by an old reader necessarily uses version-1 semantics,
+even when a new writer created the row, because that reader does not select the
+new routing columns. Version-2 routing is therefore universal once every
+endpoint reader has upgraded. There is still no pre-upgrade drain, write pause,
+cursor inspection, or manual deletion.
 
-1. Let Ablo poll until every event already in `ablo_outbox` has been consumed.
-2. Confirm the polling cursor has advanced past the last of them.
-3. Delete those consumed rows.
+Ablo sends `cursor` as the read position and `acknowledgedThrough` separately
+after the event and consumer position are durable. Built-in adapters use that
+explicit acknowledgement for bounded cleanup; custom event handlers may do the
+same.
 
-Then upgrade and run the migration. If you connect your database over
-replication rather than an endpoint, there is no outbox and nothing to do.
+Version 1 remains a deliberately named compatibility decoder, not a
+NULL value silently interpreted as an empty audience. Replication connections
+have no endpoint outbox and require no action.
 
 ### A row is authorized by the subject its schema declares
 

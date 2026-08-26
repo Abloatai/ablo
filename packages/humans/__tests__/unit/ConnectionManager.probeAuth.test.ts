@@ -5,19 +5,12 @@
 
 import { ConnectionManager } from '../../src/local/sync/ConnectionManager';
 import type { ConnectionCallbacks } from '../../src/local/sync/ConnectionManager';
-import { probeNetwork } from '@abloatai/transaction/transport/networkProbe';
+import type { probeNetwork } from '@abloatai/transaction/transport/connection';
 
-// The probe moved into the confirmation core with the transport (ADR 0016);
-// mock the core module — the sync-engine path re-exports it, so both the
-// manager's internal import and this test's import resolve to this mock.
-jest.mock('@abloatai/transaction/transport/networkProbe', () => ({
-  probeNetwork: jest.fn(async () => ({
-    outcome: 'reachable',
-    latencyMs: 1,
-  })),
-}));
-
-const mockedProbeNetwork = probeNetwork as jest.MockedFunction<typeof probeNetwork>;
+// The probe is a sibling of ConnectionManager inside the core's
+// `transport/connection` module (ADR 0016), so it cannot be substituted through
+// the package boundary. Drive it through the declared `probe` option instead.
+const mockedProbeNetwork: jest.MockedFunction<typeof probeNetwork> = jest.fn();
 
 function makeCallbacks(): ConnectionCallbacks {
   return {
@@ -42,6 +35,7 @@ describe('ConnectionManager — authenticated probes', () => {
     const cm = new ConnectionManager({
       baseUrl: 'https://mesh.example.com',
       getAuthToken: () => token,
+      probe: mockedProbeNetwork,
     });
     cm.start(makeCallbacks());
 

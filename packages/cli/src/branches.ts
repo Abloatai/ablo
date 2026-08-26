@@ -22,8 +22,8 @@ import { resolveManagementKey } from './config';
 
 export const BRANCH_USAGE = `Usage:
   ablo branch list [--json]
-  ablo branch create <slug> [--from <id|slug>] [--kind dev|preview|test|long_lived] [--credential]
-  ablo branch ensure <slug> [--from <id|slug>] [--kind dev|preview|test|long_lived] [--credential]
+  ablo branch create <slug> [--from <id|slug>] [--kind dev|preview|test|long_lived] [--hosted] [--credential]
+  ablo branch ensure <slug> [--from <id|slug>] [--kind dev|preview|test|long_lived] [--hosted] [--credential]
   ablo branch credential <id|slug> [--ttl-hours <1-168>] [--json]
   ablo branch status <branch-id|slug> [--json]
   ablo branch check <branch-id|slug> [--json]
@@ -45,7 +45,7 @@ function requireKey(explicit?: string): string {
   const key = explicit ?? resolveManagementKey();
   if (!key) {
     throw new Error(
-      'No project management credential. Run `npx ablo login` or set ABLO_MANAGEMENT_KEY.',
+      'No project management credential. Run `npx ablo login` or set ABLO_API_KEY to an mk_ credential.',
     );
   }
   return key;
@@ -235,6 +235,7 @@ async function create(
       ...(valueAfter(argv, '--expires-at')
         ? { expires_at: valueAfter(argv, '--expires-at') }
         : {}),
+      ...(argv.includes('--hosted') ? { storage: 'hosted' } : {}),
     },
   }, context);
   if (response.status !== 201) {

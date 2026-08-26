@@ -410,7 +410,7 @@ it to the provider:
 
 ```ts
 // lib/ablo.ts
-import Ablo from '@abloatai/ablo';
+import { Ablo } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
 // Build the client from the identity your server already resolved.
@@ -505,6 +505,7 @@ subset of what its user could see:
 // (the floor). Build each group from the model's scope with `syncGroup(kind, id)`.
 const session = await server.sessions.create({
   agent: { id: agentId },
+  onBehalfOf: { user: { id: triggeringUser.id } },
   can: { Document: ['read', 'update'], Workspace: ['read', 'update'] },
   syncGroups: [syncGroup('document', recordId), syncGroup('workspace', workspaceId)],
 });

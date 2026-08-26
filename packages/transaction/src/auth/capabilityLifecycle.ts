@@ -9,7 +9,7 @@ import type {
   RotateSessionParams,
   SessionRevocation,
   SessionRotation,
-} from '../resources/httpResources.js';
+} from '../client/resources/httpResources.js';
 
 export const sessionRevocationResponseSchema = z.object({
   id: z.string().min(1),

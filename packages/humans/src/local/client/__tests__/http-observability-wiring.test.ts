@@ -10,7 +10,7 @@
  * only thing stubbed — no fabricated domain logic), asserting the two seams the
  * WS transport already had: claim acquired + coordination-conflict rejection.
  */
-import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { createHttpTransport } from '@abloatai/transaction/transport/http';
 import { ClaimLog } from '../../coordination/ClaimLog.js';
 import {
   claimAcquiredResponse,
@@ -96,7 +96,7 @@ describe('HTTP transport observability wiring', () => {
     }).model('documents');
 
     await expect(
-      docs.update({ id: 'doc-main', data: { content: {} }, readAt: 1, onStale: 'reject' }),
+      docs.update({ id: 'doc-main', data: { content: {} }, readAt: 1 }),
     ).rejects.toMatchObject({ code: 'stale_context' });
 
     const collisions = log.collisions();

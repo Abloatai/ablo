@@ -38,7 +38,7 @@ import type { RuntimeContext } from '../RuntimeContext.js';
 import { postQuery } from '../query/client.js';
 import type { RecoveryClass } from '@abloatai/transaction/errorCodes';
 import type { LoadWhere, Query, WhereClause, WhereOp } from '../query/types.js';
-import { normalizeWhere } from '@abloatai/transaction/resources/where';
+import { normalizeWhere } from '@abloatai/transaction/client/resources/where';
 import type { Schema } from '@abloatai/transaction/schema/schema';
 import type { LogPositionPort } from '../logPosition.js';
 

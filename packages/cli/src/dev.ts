@@ -31,12 +31,14 @@ import {
   DEFAULT_SCHEMA_PATH,
   DEFAULT_EXPORT,
 } from './push';
-import { apiBaseUrl } from './controlPlane';
+import { apiBaseUrl, requestControlPlane } from './controlPlane';
+import { datasourceSummarySchema } from '@abloatai/transaction/wire';
 import { resolveRuntimeApiKey } from './config';
 import { looksLikeCredentialRefusal, poolerExplanation } from './readiness';
 import { brand } from './theme';
 import { readProjectEnvVariable } from './dbRole';
 import { createSourceConnector, type ConnectorStatus } from '@abloatai/transaction/source';
+import { acquireLocalConnectorLease, type LocalConnectorLease } from './localConnectorLease';
 
 export interface DevArgs {
   schemaPath: string;
@@ -140,29 +142,29 @@ export async function loadLocalSourceHandler(
   return handler as (request: Request) => Promise<Response>;
 }
 
-/** Register a connector-only endpoint for this exact branch. */
+/**
+ * Register a connector-only endpoint for this exact branch.
+ *
+ * Goes through the control-plane boundary like every other command: the
+ * server mounts its routes under `/api`, and a bare `/v1/…` assembled here
+ * matched nothing and came back as the global "Not found", which read as the
+ * branch being missing rather than the URL being wrong.
+ */
 export async function registerLocalSource(args: Pick<DevArgs, 'url' | 'apiKey'>): Promise<void> {
-  const response = await fetch(`${args.url}/v1/datasources`, {
+  await requestControlPlane({
+    path: '/v1/datasources',
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${args.apiKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
+    ...(args.apiKey ? { apiKey: args.apiKey } : {}),
+    baseUrl: args.url,
+    body: {
       connection: 'endpoint',
       endpoint: 'http://localhost/ablo-dev/reverse-channel',
       signingKey: args.apiKey,
       reverseChannel: true,
       metadata: { managed_by: 'ablo dev --local' },
-    }),
+    },
+    responseSchema: datasourceSummarySchema,
   });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new AbloValidationError(
-      `Could not register the local Data Source (${response.status}): ${body}`,
-      { code: 'cli_invalid_arguments' },
-    );
-  }
 }
 
 /**
@@ -416,6 +418,7 @@ export async function dev(
   }
 
   let localAbort: AbortController | null = null;
+  let localLease: LocalConnectorLease | null = null;
   if (args.local) {
     // The generated handler reads these at module evaluation time. The branch
     // key must win over an exported parent/root key, while DATABASE_URL follows
@@ -426,7 +429,20 @@ export async function dev(
       if (databaseUrl) process.env.DATABASE_URL = databaseUrl.value;
     }
     const handler = await loadLocalSourceHandler(args.sourcePath);
-    await registerLocalSource(args);
+    // Acquire before registration: registration rotates the source signing key,
+    // so discovering a duplicate afterwards is already too late.
+    localLease = acquireLocalConnectorLease({
+      cwd: process.cwd(),
+      baseUrl: args.url,
+      branch: args.planeLabel,
+    });
+    try {
+      await registerLocalSource(args);
+    } catch (error) {
+      localLease.release();
+      localLease = null;
+      throw error;
+    }
     localAbort = new AbortController();
     const connector = createSourceConnector({
       apiKey: args.apiKey!,
@@ -442,9 +458,14 @@ export async function dev(
         console.error(pc.yellow(`  local connector: ${error instanceof Error ? error.message : String(error)}`));
       },
     });
-    void connector.run(localAbort.signal).catch((error) => {
-      console.error(pc.red(`  local connector stopped: ${error instanceof Error ? error.message : String(error)}`));
-    });
+    void connector.run(localAbort.signal)
+      .catch((error) => {
+        console.error(pc.red(`  local connector stopped: ${error instanceof Error ? error.message : String(error)}`));
+      })
+      .finally(() => {
+        localLease?.release();
+        localLease = null;
+      });
     console.log(`  ${pc.dim('source')}  ${args.sourcePath} ${pc.dim('(outbound connector; no public URL)')}`);
   }
 
@@ -469,6 +490,7 @@ export async function dev(
   s.stop(first.message, first.ok ? 0 : 1);
   if (!first.ok) {
     localAbort?.abort();
+    localLease?.release();
     process.exit(1);
   }
 
@@ -534,6 +556,7 @@ export async function dev(
   const stop = (): void => {
     watcher.close();
     localAbort?.abort();
+    localLease?.release();
     console.log(`\n  ${pc.dim('stopped.')}`);
     process.exit(0);
   };

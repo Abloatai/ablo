@@ -25,7 +25,7 @@
 import type {
   WsTransport,
   PresenceUpdate,
-} from '@abloatai/transaction/transport/wsTransport';
+} from '@abloatai/transaction/transport/websocket';
 import type {
   ClaimOptions,
   ClaimTarget,
@@ -52,10 +52,15 @@ import {
   streamTarget,
   wireTarget,
   type ClaimTargetDetails,
-} from '@abloatai/transaction/coordination/locator';
-import { declaredMeta } from '@abloatai/transaction/coordination/claimMeta';
+} from '@abloatai/transaction/claims';
+import {
+  bindClaimLifetime,
+  createClaimLifetime,
+  type ClaimLifetime,
+} from '@abloatai/transaction/claims/lifetime';
+import { declaredMeta } from '@abloatai/transaction/claims';
 import { AbloClaimedError, AbloConnectionError } from '@abloatai/transaction/errors';
-import { resolveHeartbeatOptions } from '@abloatai/transaction/coordination/claimHeartbeatLoop';
+import { resolveHeartbeatOptions } from '@abloatai/transaction/claims';
 import { noopLogger, type Logger } from '@abloatai/transaction/logger';
 
 /**
@@ -114,13 +119,11 @@ export interface AttachableClaimStream extends ClaimStream {
 }
 
 /**
- * What this participant needs to remember about a claim it holds, so it can
- * re-announce it after a reconnect.
+ * What this participant needs to remember about one open grant.
  *
  * The sub-entity locator is taken from {@link ClaimTargetDetails} rather than
- * listed again: a member this record forgot would be a member the re-announced
- * claim silently lost, which is a narrower claim than the one the holder
- * believes it has.
+ * listed again: a member this record forgot would be a member release or loss
+ * bookkeeping silently narrowed relative to the handle the caller holds.
  */
 type OwnClaim = ClaimTargetDetails & {
   readonly entityType: string;
@@ -132,6 +135,11 @@ type OwnClaim = ClaimTargetDetails & {
    *  entity is already claimed, instead of being rejected. */
   readonly queue?: boolean;
 };
+
+interface OwnGrant {
+  readonly claim: OwnClaim;
+  readonly lifetime: ClaimLifetime;
+}
 
 export function createClaimStream(
   config: ClaimStreamConfig,
@@ -146,8 +154,8 @@ export function createClaimStream(
   const activeByClaimId = new Map<string, Claim>();
   let claimsSnapshot: readonly Claim[] = Object.freeze([]);
 
-  // ── State: our own open claims (for re-announce on reconnect) ───
-  const ownClaims = new Map<string, OwnClaim>();
+  // ── State: our own open grants, keyed by the exact claim id ─────
+  const ownClaims = new Map<string, OwnGrant>();
 
   // ── State: per-entity wait queues, from `claim_queue` frames ────
   // Keyed `type:id`; the value is the FIFO line of queued claims. Powers
@@ -290,7 +298,8 @@ export function createClaimStream(
     unsubs.push(
       t.subscribe('claim_rejected', (rejection) => {
         if (!rejection.claimId) return;
-        if (ownClaims.has(rejection.claimId)) {
+        const own = ownClaims.get(rejection.claimId);
+        if (own) {
           const tgt = rejection.target
             ? claimLabel(rejection.target.entityType, rejection.target.entityId, rejection.target.field)
             : rejection.claimId;
@@ -299,9 +308,17 @@ export function createClaimStream(
             { claimId: rejection.claimId, reason: rejection.reason },
           );
         }
-        // Drop the rejected own-claim so reconnect doesn't re-announce
-        // a claim the server already rejected (would just spam both
-        // sides with conflicts).
+        own?.lifetime.end(
+          new AbloClaimedError(
+            rejection.message ?? `Claim ${rejection.claimId} was rejected.`,
+            {
+              code:
+                rejection.reason === 'conflict'
+                  ? 'claim_conflict'
+                  : 'claim_lease_unavailable',
+            },
+          ),
+        );
         ownClaims.delete(rejection.claimId);
         // A holder on another server may have claimed before this client joined
         // the row group, so its one-shot presence frame was missed. A conflict
@@ -336,15 +353,20 @@ export function createClaimStream(
       // The frame is validated by the transport's dispatcher against the same
       // schema this parameter's type comes from, so it arrives proven.
       t.subscribe('claim_lost', (lost) => {
-        if (ownClaims.has(lost.claimId)) {
-          const c = ownClaims.get(lost.claimId);
+        const own = ownClaims.get(lost.claimId);
+        if (own) {
+          const c = own.claim;
           logger.info(
-            `claim: lost ${c ? claimLabel(c.entityType, c.entityId, c.field) : lost.claimId} (preempted or expired)`,
+            `claim: lost ${claimLabel(c.entityType, c.entityId, c.field)} (preempted or expired)`,
             { claimId: lost.claimId },
           );
         }
-        // Drop the lost own-claim so reconnect doesn't re-announce a lease we
-        // no longer hold.
+        own?.lifetime.end(
+          new AbloClaimedError(
+            `Claim ${lost.claimId} was lost because it ${lost.reason === 'expired' ? 'expired' : 'was preempted'}. Re-acquire it before continuing.`,
+            { code: 'claim_lost' },
+          ),
+        );
         ownClaims.delete(lost.claimId);
         for (const l of lostListeners) {
           try {
@@ -418,25 +440,35 @@ export function createClaimStream(
             });
             return;
           }
-          const c = ownClaims.get(ack.claimId);
-          reject(
-            new AbloClaimedError(
-              `The lease behind ${c ? claimLabel(c.entityType, c.entityId, c.field) : `claim ${ack.claimId}`} is no longer held — it expired or was granted onward while this participant was working. Re-acquire the claim and retry; a write attempted under the old lease is rejected by its \`readAt\` guard.`,
-              { code: 'claim_lost' },
-            ),
+          const own = ownClaims.get(ack.claimId);
+          const c = own?.claim;
+          const error = new AbloClaimedError(
+            `The lease behind ${c ? claimLabel(c.entityType, c.entityId, c.field) : `claim ${ack.claimId}`} is no longer held — it expired or was granted onward while this participant was working. Re-acquire the claim and retry; a write attempted under the old lease is rejected by its \`readAt\` guard.`,
+            { code: 'claim_lost' },
           );
+          own?.lifetime.end(error);
+          ownClaims.delete(ack.claimId);
+          reject(error);
         });
       }),
     );
 
-    // (3) On reconnect, re-announce every open self-claim — the
-    //     server's claim state is in-memory and is lost across
-    //     restarts. Without this, peers would see our claims vanish
-    //     whenever the connection blipped.
+    // (3) A granted handle belongs to this connection's exact grant. The server
+    //     releases the participant's claims when its last socket leaves; trying
+    //     to recreate them on `connected` silently swapped the lease beneath an
+    //     old `data` / `readAt` / fenceToken tuple. End them instead. A caller
+    //     reconnects, re-reads, and takes a fresh handle.
     unsubs.push(
-      t.subscribe('connected', () => {
-        for (const [claimId, claim] of ownClaims) {
-          sendBegin(claimId, claim);
+      t.subscribe('disconnected', () => {
+        const error = new AbloConnectionError(
+          'The connection holding this claim ended. Reconnect and acquire a fresh claim before continuing.',
+        );
+        for (const { lifetime } of ownClaims.values()) {
+          lifetime.end(error);
+        }
+        ownClaims.clear();
+        for (const claimId of [...pendingHeartbeats.keys()]) {
+          settleHeartbeat(claimId, ({ reject }) => reject(error));
         }
       }),
     );
@@ -480,8 +512,8 @@ export function createClaimStream(
 
   /**
    * Send one heartbeat and await its ack. Rejects with
-   * {@link AbloConnectionError} (transient — the auto-heartbeat loop retries
-   * on its next tick) when the socket is down or the ack times out, and with
+   * {@link AbloConnectionError} when the socket is down or the ack times out,
+   * and with
    * {@link AbloClaimedError} (definitive) when the server answers that the
    * lease is no longer ours.
    */
@@ -493,7 +525,7 @@ export function createClaimStream(
     if (!attached?.isConnected()) {
       return Promise.reject(
         new AbloConnectionError(
-          `The heartbeat for ${claimLabel(claim.entityType, claim.entityId, claim.field)} was skipped because the connection is down. The keepalive renews held leases automatically on reconnect; the next beat retries.`,
+          `The heartbeat for ${claimLabel(claim.entityType, claim.entityId, claim.field)} was skipped because the connection is down. This connection's grant has ended; reconnect and acquire a fresh claim.`,
         ),
       );
     }
@@ -567,7 +599,8 @@ export function createClaimStream(
       estimatedMs,
       queue: args.queue,
     };
-    ownClaims.set(claimId, claim);
+    const lifetime = createClaimLifetime();
+    ownClaims.set(claimId, { claim, lifetime });
     sendBegin(claimId, claim);
     // Coordination trace (info): the creator can see their human/agent claims.
     logger.info(
@@ -580,6 +613,7 @@ export function createClaimStream(
     const revoke = () => {
       if (revoked) return;
       revoked = true;
+      lifetime.end();
       ownClaims.delete(claimId);
       sendAbandon(claimId, claim);
       logger.info(
@@ -588,7 +622,7 @@ export function createClaimStream(
       );
     };
 
-    return {
+    return bindClaimLifetime({
       object: 'claim',
       id: claimId,
       status: 'active',
@@ -607,7 +641,7 @@ export function createClaimStream(
       [Symbol.asyncDispose]: async () => {
         revoke();
       },
-    };
+    }, lifetime);
   }
 
   function resolveTarget(target: PresenceTarget): ClaimTarget {
@@ -686,6 +720,10 @@ export function createClaimStream(
           );
         });
       }
+      const error = new AbloConnectionError(
+        'The claim stream was disposed. Acquire a fresh claim before continuing.',
+      );
+      for (const { lifetime } of ownClaims.values()) lifetime.end(error);
       listeners.clear();
       rejectionListeners.clear();
       lostListeners.clear();

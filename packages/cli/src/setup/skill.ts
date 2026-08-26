@@ -34,8 +34,8 @@ Follow the supplied record contract. Its discovery hints are optional starting p
 ## Workflow
 
 1. Read the record and inspect repository conventions, package scripts, framework layout, ORM/schema, auth, and existing Ablo code.
-2. Run "npx ablo docs integration-guide", "npx ablo docs api", and any other installed-version page needed for the detected stack. Do not rely on memory or latest-web documentation.
-3. For every selected model, map all meaningful reads and writes. Follow wrappers and call chains; do not stop at discovery hints or grep results.
+2. Run "npx ablo docs agent-integration-decision-guide" first, then "npx ablo docs integration-guide", "npx ablo docs api", and any other installed-version page needed for the detected stack. Do not rely on memory or latest-web documentation.
+3. Name the existing operation being adapted and record its claim identity, participant credential, decision premises, atomic boundary, persistence owner, failure behavior, and proof. Then map every selected model's meaningful reads and writes. Follow wrappers and call chains; do not stop at discovery hints or grep results.
 4. Reconcile or create the Ablo schema and clients without overwriting application-owned wiring. Declare application fields and their real column names normally. Existing-table ownership, database defaults, and identity generation belong to the reviewed database connection, not the model definition; Ablo does not own customer rows or application migrations.
 5. Adapt independent writes through "ablo.<model>" methods. Use one "ablo.commits.create(...)" call for conditional updates and dependent writes that must remain atomic, and correlate returned rows with the operation "transactionId".
 6. Preserve the caller's trust boundary: browser code uses the existing session/auth flow; trusted server and worker code may use a server client. Never expose a secret key to browser code.
@@ -47,13 +47,14 @@ Follow the supplied record contract. Its discovery hints are optional starting p
 const API_REFERENCE = `# Ablo application API contract
 
 This is a compact orientation for the CLI release that emitted the bundle. The
-installed package's output from "npx ablo docs api" and "npx ablo docs
-integration-guide" is authoritative if any example differs.
+installed package's output from "npx ablo docs agent-integration-decision-guide",
+"npx ablo docs api", and "npx ablo docs integration-guide" is authoritative if
+any example differs.
 
 - Construct a schema-backed client with "Ablo({ schema, apiKey })" in trusted runtimes or the installed-version browser/session pattern from "npx ablo docs integration-guide".
 - For a trusted Node service, use one "createTransactionClient({ schema, apiKey })" owned by the existing application lifecycle. Await "ready()" at startup and "dispose()" only after the service has stopped accepting work and active work has settled. Pass the client as a dependency; do not hide it in module-global state.
 - Treat "ABLO_API_KEY" as secret configuration: validate presence through the application's configuration boundary and never print its value. A worker's credential supplies its participant identity; do not invent a second identity option.
-- Read with "ablo.<model>.get({ id })" and "ablo.<model>.list({ where })".
+- Observe with "ablo.<model>.get({ id })" and "ablo.<model>.list({ where })". When a mutation depends on one row, use "const row = await ablo.<model>.read({ id })" and pass "reads: [row]" to that mutation.
 - Create with "ablo.<model>.create({ data })".
 - Update with "ablo.<model>.update({ id, data, ...options })".
 - Delete with "ablo.<model>.delete({ id, ...options })".
@@ -62,7 +63,7 @@ integration-guide" is authoritative if any example differs.
 - A database-generated identity is omitted from create input and returned by the same customer database transaction. Correlate it with the operation "transactionId"; do not invent another operation identifier.
 - Use "ablo.commits.create({ operations, wait: 'confirmed' })" when multiple rows/models must remain one atomic write. Put an equality predicate in the update operation's "where" object. A predicate miss rejects the entire commit before dependent writes execute.
 - Read exact response-time rows from "operationResults" by matching each result's existing "transactionId". Treat those rows as transient response data, not a durable commit-record field.
-- When a write depends on earlier state, preserve concurrency intent with a claim, functional update, or "readAt" / "onStale: 'reject'" as appropriate.
+- When a write depends on earlier state, preserve concurrency intent with a claim, functional update, or a row returned by "read({ id })" in the mutation's "reads" array.
 - The customer ORM remains authoritative for tables, columns, constraints, and migrations. Do not introduce a parallel write path for a selected Ablo model.
 `;
 

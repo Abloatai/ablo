@@ -1,7 +1,7 @@
 /** @jest-environment node */
 
-import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
-import { idempotencyKeySchema } from '@abloatai/transaction/transactions/confirmation/idempotencyKey';
+import { createHttpTransport } from '@abloatai/transaction/transport/http';
+import { idempotencyKeySchema } from '@abloatai/transaction/commit';
 import type {
   DurableWriteStore,
   PendingWrite,
@@ -11,7 +11,7 @@ import {
   HTTP_COMMIT_REPLAY_WINDOW_MS,
   httpCommitEnvelopeRecordId,
   type DurableHttpCommitEnvelope,
-} from '@abloatai/transaction/transactions/confirmation/httpCommitEnvelope';
+} from '@abloatai/transaction/commit';
 import {
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
@@ -1045,45 +1045,4 @@ describe('stateless HTTP commit outbox', () => {
     ]);
   });
 
-  it('returns stale notifications from an HTTP commit receipt', async () => {
-    const notification = {
-      object: 'stale_notification' as const,
-      scope: 'row' as const,
-      target: { model: 'items', id: 'a', fields: ['title'] },
-      readAt: 41,
-      observedSyncId: 42,
-      currentValues: { title: 'newer' },
-      writtenBy: { kind: 'user' as const, id: 'user-2' },
-    };
-    const client = createHttpTransport({
-      apiKey: 'sk_test_outbox',
-      baseURL: 'https://api.example.test',
-      fetch: (_input, init) => {
-        const clientTxId =
-          new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
-        return Promise.resolve(response({
-          object: 'commit_receipt',
-          clientTxId,
-          serverTxId: `server-${clientTxId}`,
-          success: true,
-          status: 'confirmed',
-          lastSyncId: 42,
-          ops: 1,
-          notifications: [notification],
-        }));
-      },
-    });
-
-    await expect(client.commits.create({
-      idempotencyKey: 'notify-on-http',
-      operations: [{
-        action: 'update',
-        model: 'items',
-        id: 'a',
-        data: { title: 'mine' },
-        readAt: 41,
-        onStale: 'notify',
-      }],
-    })).resolves.toMatchObject({ notifications: [notification] });
-  });
 });

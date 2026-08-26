@@ -1,1 +1,1 @@
-export * from '@abloatai/transaction/source/next';
+export * from '@abloatai/transaction/source/endpoint';

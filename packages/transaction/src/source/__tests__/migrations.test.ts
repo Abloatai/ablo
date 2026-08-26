@@ -9,7 +9,11 @@
  * pin the catalog-guarded form that avoids that.
  */
 
-import { idempotencyLedgerMigrations, adapterTableMigrations } from '../migrations.js';
+import {
+  idempotencyLedgerMigrations,
+  adapterTableMigrations,
+} from '../adapters/migrations.js';
+import { endpointOutboxMigrations } from '../outbox/index.js';
 
 describe('idempotencyLedgerMigrations', () => {
   const ledger = idempotencyLedgerMigrations();
@@ -64,5 +68,30 @@ describe('idempotencyLedgerMigrations', () => {
 
   it('is the prefix of the full endpoint adapter migration set', () => {
     expect(adapterTableMigrations().slice(0, 3)).toEqual(ledger);
+  });
+});
+
+describe('endpointOutboxMigrations', () => {
+  it('creates a versioned envelope that permits v1 compatibility and requires v2 routes', () => {
+    const create = endpointOutboxMigrations()[0]?.up ?? '';
+    expect(create).toContain('event_version    SMALLINT NOT NULL DEFAULT 1');
+    expect(create).toContain('(event_version = 1 AND sync_groups IS NULL)');
+    expect(create).toContain('(event_version = 2 AND sync_groups IS NOT NULL)');
+  });
+
+  it('uses the requested schema consistently', () => {
+    for (const migration of endpointOutboxMigrations('customer')) {
+      expect(migration.up).toContain('"customer"."ablo_outbox"');
+    }
+  });
+
+  it('expands sync_groups without guessing routes or prematurely enforcing NOT NULL', () => {
+    const migration = endpointOutboxMigrations().find((entry) =>
+      entry.name === 'ablo_outbox_add_event_version_and_sync_groups');
+    expect(migration?.up).toContain('ADD COLUMN IF NOT EXISTS event_version SMALLINT NOT NULL DEFAULT 1');
+    expect(migration?.up).toContain('ADD COLUMN IF NOT EXISTS sync_groups TEXT[]');
+    expect(migration?.up).toContain('ablo_outbox_event_envelope_valid');
+    expect(migration?.up).not.toContain('SET NOT NULL');
+    expect(migration?.up).not.toContain('DELETE');
   });
 });

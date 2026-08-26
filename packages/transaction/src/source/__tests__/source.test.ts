@@ -52,6 +52,7 @@ describe('sourceEventForOperation', () => {
     });
 
     expect(event).toEqual({
+      version: 2,
       id: 'evt_1',
       model: 'files',
       entityId: 'src/a.ts',
@@ -465,10 +466,12 @@ describe('dataSource', () => {
   });
 
   it('routes external-write events through the events handler', async () => {
+    const acknowledgements: Array<string | undefined> = [];
     const handler = dataSource({
       schema,
       apiKey: TEST_API_KEY,
-      async events({ cursor, limit }) {
+      async events({ cursor, acknowledgedThrough, limit }) {
+        acknowledgements.push(acknowledgedThrough);
         if (!cursor) {
           return {
             events: [
@@ -503,11 +506,14 @@ describe('dataSource', () => {
       },
     });
     await expect(
-      post(handler, { type: 'events', cursor: 'cursor_2', limit: 10 }),
+      post(handler, {
+        type: 'events', cursor: 'cursor_2', acknowledgedThrough: 'cursor_2', limit: 10,
+      }),
     ).resolves.toMatchObject({
       status: 200,
       body: { events: [] },
     });
+    expect(acknowledgements).toEqual([undefined, 'cursor_2']);
   });
 
   it('returns 404 when events handler is not configured', async () => {

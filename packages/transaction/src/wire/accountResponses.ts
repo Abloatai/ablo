@@ -19,12 +19,11 @@ import { listEnvelopeSchema } from './listEnvelope.js';
 // hand-written mirror here would be a second copy of the exact record this
 // response exists to stop withholding.
 import { fieldMetaSchema, relationMetaSchema } from './modelShape.js';
-import { onStaleModeSchema } from '../coordination/schema.js';
 // The price's own vocabulary. A dashboard that restated the tier names or the
 // meter set would be a second definition of what the invoice is computed from.
 import { meterEventSchema, planTierSchema, rateBracketSchema } from './pricing.js';
-import type { SyncDeltaAction } from './delta.js';
-import { deltaSchema } from './delta.js';
+import type { SyncDeltaAction } from '../observation/contract.js';
+import { deltaSchema } from '../observation/contract.js';
 // Kept for the {@link ListEnvelope} references below; `GET /v1/logs`'s own
 // envelope moved to `feedEvent.ts`, which owns the union it wraps.
 import type { ListEnvelope } from './listEnvelope.js';
@@ -85,22 +84,14 @@ export type ProvisionKeyResponse = z.infer<typeof provisionKeyResponseSchema>;
  * three members as a TypeScript interface: `wire/` holds runtime-validatable
  * schemas, and it is the protocol leaf — everything depends on it and it depends
  * on nothing. The check that the two never drift therefore lives on the policy
- * side of that edge, next to the interface, in `../policy/types.ts`.
+ * side of that edge, next to the interface, in `../claims/policy.ts`.
  */
-export const conflictAxisWireSchema = z.object({
-  user: onStaleModeSchema.optional(),
-  agent: onStaleModeSchema.optional(),
-  system: onStaleModeSchema.optional(),
-});
-
 /** One model in the deployed schema, as the schema read reports it. */
 export const schemaModelResponseSchema = z.object({
   /** The key local code addresses (`ablo.records`). */
   key: z.string(),
   /** The wire typename the engine routes and gates on. */
   typename: z.string(),
-  /** Declared disposition, or null for the engine default. */
-  conflict: conflictAxisWireSchema.nullable(),
   /**
    * Per-model content hash — the unit of the client's drift check, and the
    * revalidation key for everything below it.

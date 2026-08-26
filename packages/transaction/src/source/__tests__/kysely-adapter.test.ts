@@ -26,8 +26,8 @@ import {
   type KyselyDeleteBuilder,
   type KyselyReturningExecutable,
 } from '../adapters/kysely.js';
-import { SOURCE_IDEMPOTENCY_RETENTION } from '../idempotency.js';
-import type { Row } from '../adapter.js';
+import { SOURCE_IDEMPOTENCY_RETENTION } from '../adapters/idempotency.js';
+import type { Row } from '../adapters/adapter.js';
 
 // A schema where field names DIVERGE from columns three ways:
 //   - operatorId      → operator_id      (default camelToSnake rule)
@@ -188,8 +188,8 @@ describe('kyselyDataSource', () => {
       'ablo_idempotency_request_hash',
       'ablo_idempotency_permanent_retention',
       'ablo_outbox',
-      'ablo_outbox_correlation',
-      'ablo_outbox_sync_groups',
+      'ablo_outbox_add_correlation',
+      'ablo_outbox_add_event_version_and_sync_groups',
     ]);
   });
 
@@ -231,6 +231,7 @@ describe('kyselyDataSource', () => {
     expect(reserveParams).toHaveLength(4);
     expect(reserveParams[3]).toBe(SOURCE_IDEMPOTENCY_RETENTION);
     expect(db.calls.find((call) => call.table === 'ablo_outbox')?.values).toMatchObject({
+      event_version: 2,
       correlation_id: 'corr1',
       transaction_id: 'op1',
     });
@@ -476,6 +477,7 @@ describe('kyselyDataSource', () => {
 
   it('pages the outbox by cursor with stable ordering', async () => {
     const db = new FakeKysely([
+      [],
       [
         {
           cursor: '7',
@@ -484,6 +486,7 @@ describe('kyselyDataSource', () => {
           entity_id: 't1',
           type: 'CREATE',
           data: JSON.stringify({ id: 't1', title: 'A' }),
+          sync_groups: ['item:t1'],
           organization_id: null,
           client_tx_id: 'tx1',
           correlation_id: 'corr1',
@@ -494,13 +497,16 @@ describe('kyselyDataSource', () => {
     ]);
     const adapter = kyselyDataSource(db, schema);
 
+    await adapter.acknowledgeEvents('5');
     const page = await adapter.events('5', 100);
     expect(page.events).toHaveLength(1);
     expect(page.events[0]?.entityId).toBe('t1');
     expect(page.events[0]?.correlationId).toBe('corr1');
     expect(page.events[0]?.transactionId).toBe('op1');
     expect(page.nextCursor).toBe('7');
-    const call = db.calls[0];
+    expect(db.calls[0]?.kind).toBe('raw');
+    expect(db.calls[0]?.table).toContain('DELETE FROM ablo_outbox');
+    const call = db.calls[1];
     if (!call) throw new Error('expected a recorded select call');
     expect(call.wheres).toEqual([['cursor', '>', '5']]);
     expect(call.orderBy).toEqual(['cursor', 'asc']);

@@ -185,6 +185,12 @@ The bearer JWT's signature could not be verified against the issuer's JWKS (wron
 
 Your session has expired or is no longer valid. Sign in again to continue.
 
+### source_api_key_missing
+
+`HTTP 401` · not retryable
+
+The Data Source handler has no signing key configured. Configure it with the signing key from the current Data Source registration.
+
 ### source_api_key_unresolved
 
 `HTTP 401` · not retryable
@@ -196,6 +202,42 @@ The API key presented for this data source could not be resolved to a known key.
 `HTTP 401` · not retryable
 
 The localhost Data Source connector could not authenticate. Rerun `ablo dev --local` so it mints and uses a fresh branch-bound secret key.
+
+### source_id_missing
+
+`HTTP 401` · not retryable
+
+The signed Data Source request did not include its webhook id. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.
+
+### source_signature_invalid
+
+`HTTP 401` · not retryable
+
+The Data Source rejected Ablo's signature. Configure the endpoint or localhost connector with the signing key from the current Data Source registration.
+
+### source_signature_missing
+
+`HTTP 401` · not retryable
+
+The signed Data Source request did not include its webhook signature. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.
+
+### source_timestamp_expired
+
+`HTTP 401` · not retryable
+
+The signed Data Source request fell outside the allowed clock-skew window. Synchronize the endpoint host clock, then retry.
+
+### source_timestamp_invalid
+
+`HTTP 401` · not retryable
+
+The signed Data Source request carried an invalid webhook timestamp.
+
+### source_timestamp_missing
+
+`HTTP 401` · not retryable
+
+The signed Data Source request did not include its webhook timestamp. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.
 
 ### unknown_auth_host
 
@@ -320,6 +362,12 @@ This production Data Source has not opted into reverse-channel transport. `ablo 
 `HTTP 403` · not retryable
 
 A Data Source reverse channel must authenticate with the branch-bound secret (`sk_`) key created by `ablo dev`; browser, ephemeral, restricted, and management keys cannot serve a database.
+
+### source_forbidden
+
+`HTTP 403` · not retryable
+
+The Data Source key is not allowed to perform this operation.
 
 ### wide_scope_forbidden
 
@@ -935,7 +983,7 @@ The mutator rejected the input because it violates a business rule.
 
 `client-only` · not sent over the network
 
-The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.
+The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `claim`) failed validation against the write-options schema.
 
 ### write_payload_invalid
 

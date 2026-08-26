@@ -23,6 +23,38 @@
   ],
   "common": [
     {
+      "type": "DeveloperPortal",
+      "url": "https://docs.abloatai.com"
+    },
+    {
+      "type": "Documentation",
+      "url": "https://docs.abloatai.com"
+    },
+    {
+      "type": "APIReference",
+      "url": "https://docs.abloatai.com/api-reference"
+    },
+    {
+      "type": "GettingStarted",
+      "url": "https://docs.abloatai.com/quickstart"
+    },
+    {
+      "type": "Authentication",
+      "url": "https://docs.abloatai.com/api-keys"
+    },
+    {
+      "type": "Examples",
+      "url": "https://docs.abloatai.com/examples"
+    },
+    {
+      "type": "WellKnown",
+      "url": "https://docs.abloatai.com/.well-known/api-catalog"
+    },
+    {
+      "type": "SecurityTxt",
+      "url": "https://docs.abloatai.com/.well-known/security.txt"
+    },
+    {
       "type": "Terms of Service",
       "url": "https://www.abloatai.com/terms-conditions"
     },
@@ -33,6 +65,10 @@
     {
       "type": "ChangeLog",
       "url": "https://docs.abloatai.com/changelog"
+    },
+    {
+      "type": "Security",
+      "url": "https://github.com/Abloatai/ablo/security/advisories/new"
     },
     {
       "type": "APIOnboarding",

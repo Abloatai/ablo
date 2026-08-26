@@ -1,9 +1,4 @@
 {
-  "__tests__/contract/retrieve-surface.contract.test.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 2
-    }
-  },
   "__tests__/contract/schema-validation.test.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 3
@@ -286,12 +281,12 @@
   },
   "__tests__/unit/ConnectionManager.probeAuth.test.ts": {
     "@typescript-eslint/require-await": {
-      "count": 2
+      "count": 1
     }
   },
   "__tests__/unit/ConnectionManager.wsDropRecovery.test.ts": {
     "@typescript-eslint/require-await": {
-      "count": 2
+      "count": 1
     }
   },
   "__tests__/unit/Model.test.ts": {

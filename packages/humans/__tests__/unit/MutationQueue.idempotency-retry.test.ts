@@ -16,7 +16,7 @@ import {
   MutationQueue,
   type QueuedMutation,
 } from '../../src/local/transactions/mutations/MutationQueue';
-import { createDurableCommitEnvelope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+import { createDurableCommitEnvelope } from '@abloatai/transaction/commit';
 import {
   createItemFixture,
   createTestContext,

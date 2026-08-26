@@ -13,13 +13,13 @@ import type {
   ClaimSkipParams,
   ModelCreateParams,
   ModelDeleteParams,
-  ModelRetrieveParams,
-} from '../resources/modelOperations.js';
+  ModelReadParams,
+} from '../client/resources/modelOperations.js';
 import type { HeldClaim } from '../types/streams.js';
 import type { ModelToolOptions } from './toolOptions.js';
 
 export interface ToolModel<T, CreateInput = Partial<T>, Fields = T> {
-  get(params: ModelRetrieveParams): Promise<T | undefined>;
+  read(params: ModelReadParams): Promise<T | undefined>;
   create(params: ModelCreateParams<T, CreateInput>): Promise<T>;
   delete(params: ModelDeleteParams<T, Fields>): Promise<void>;
   claim(
@@ -40,7 +40,7 @@ export type ReadToolResult<T> =
   | { readonly status: 'not_found'; readonly message: string };
 
 export function readTool<TInput, T>(
-  model: Pick<ToolModel<T>, 'get'>,
+  model: Pick<ToolModel<T>, 'read'>,
   options: ReadToolOptions<TInput, T>,
 ) {
   return tool<TInput, ReadToolResult<T>>({
@@ -54,7 +54,7 @@ export function readTool<TInput, T>(
     toModelOutput: options.toModelOutput,
     execute: async (input) => {
       const id = options.id(input);
-      const row = await model.get({ id });
+      const row = await model.read({ id });
       return row === undefined
         ? {
             status: 'not_found',

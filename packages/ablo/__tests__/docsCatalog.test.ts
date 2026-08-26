@@ -52,6 +52,7 @@ describe('docs catalog', () => {
     const integrations = findDoc(catalog, 'integrations');
     const temporal = findDoc(catalog, 'integrations/temporal');
     const inngest = findDoc(catalog, 'integrations/inngest');
+    const sandboxRuntime = findDoc(catalog, 'integrations/sandbox-runtime');
 
     expect(coordination?.title).toBe('Coordination');
     expect(coordination?.description).toMatch(/^Choose plain writes/);
@@ -63,6 +64,8 @@ describe('docs catalog', () => {
     expect(temporal?.description).toMatch(/^Run long-lived, retryable agent records/);
     expect(inngest?.title).toBe('Inngest for long-running records');
     expect(inngest?.description).toMatch(/^Run event-driven, retryable agent records/);
+    expect(sandboxRuntime?.title).toBe('Anthropic Sandbox Runtime');
+    expect(sandboxRuntime?.description).toMatch(/^Run an Ablo agent with OS-enforced/);
     expect(catalog.filter((e) => e.kind !== 'package').every((e) => e.description !== '')).toBe(
       true
     );

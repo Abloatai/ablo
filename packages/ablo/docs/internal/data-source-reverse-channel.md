@@ -16,7 +16,7 @@ Data Source has two directions today:
 | `commit` / `load` / `list` | Ablo → customer | **inbound webhook only** (`dataSource()` route) | ❌ no: needs public URL |
 
 The asymmetry is the whole bug. `events` already ships an outbound transport
-(`src/source/pushQueue.ts`), so external writes reach Ablo from localhost
+(`src/source/delivery/pushQueue.ts`), so external writes reach Ablo from localhost
 without a tunnel. The `commit`/`load`/`list` leg never got one, so Ablo Cloud
 has no way to reach a `localhost:3000` dev server.
 
@@ -57,7 +57,7 @@ LOCAL DEV (no public URL)
 ### Why it's small
 
 `dataSource(options)` is already `(request: Request) => Promise<Response>` in
-`src/source/factory.ts`. The connector does not reimplement any handler logic —
+`src/source/endpoint/factory.ts`. The connector does not reimplement any handler logic —
 it:
 
 1. Opens a WS to a new Ablo Cloud endpoint (e.g. `/v1/source/listen`),

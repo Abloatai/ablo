@@ -26,6 +26,7 @@ import { BRANCH_DEV_USAGE } from './branchDev';
 import { WHOAMI_USAGE } from './whoami';
 import { PUSH_USAGE } from './push';
 import { SETUP_USAGE } from './setup/run';
+import { brand } from './theme';
 
 /** Headings in the short help — the core loop, in the order you meet it. */
 export const CORE_GROUPS = ['Start', 'Every day', 'More'] as const;
@@ -36,6 +37,7 @@ export const FULL_GROUPS = [
   'Set up',
   'Your database',
   'Your schema',
+  'Your writes',
   'Read the docs',
   "See what's happening",
   'Workspace',
@@ -96,8 +98,8 @@ export const COMMANDS = [
     full: {
       group: 'Set up',
       rows: [
-        { run: 'login', does: 'Authorize in your browser — stores one mk_ management credential' },
-        { run: 'login --project <slug>', does: 'Same, for one project — it becomes active' },
+        { run: 'login', does: 'Authorize in your browser, pick a project — stores its mk_ management credential' },
+        { run: 'login --project <slug>', does: 'Same, without the picker — the named project becomes active' },
       ],
     },
   },
@@ -185,6 +187,28 @@ export const COMMANDS = [
         { run: 'push --force', does: 'Allow destructive changes' },
         { run: 'push --rename a:b', does: 'Treat model "a" as renamed to "b"' },
         { run: 'push --backfill model.field=value', does: 'Seed existing rows so a required field can be added' },
+      ],
+    },
+  },
+  {
+    name: 'claims',
+    core: {
+      group: 'Every day',
+      does: 'Say what you are editing, so another writer waits instead of clobbering it',
+    },
+    full: {
+      group: 'Your writes',
+      rows: [
+        { run: 'claims acquire <model> <id>', does: 'Take the lease on one row' },
+        { run: 'claims acquire <model> <id> -- <cmd>', does: 'Hold it only while <cmd> runs, then release' },
+        { run: 'claims acquire <model> <id> --queue', does: 'Wait in line when it is held, instead of failing' },
+        { run: 'claims acquire <model> <id> --ttl 5m', does: 'Lease length: 30s, 5m, 2h (default 60s)' },
+        { run: 'claims acquire <model> <id> --description <t>', does: 'What you are doing, shown to whoever waits' },
+        { run: 'claims release <model> <id>', does: 'Give the lease back' },
+        { run: 'claims heartbeat <model> <id>', does: 'Extend a lease you already hold' },
+        { run: 'claims list [<model> [<id>]]', does: 'Who holds what, and who waits' },
+        { run: 'claims list --actor <id>', does: 'Narrow a listing to one holder' },
+        { run: 'claims list --json', does: 'Same, machine-readable' },
       ],
     },
   },
@@ -353,6 +377,8 @@ const REDIRECTS: ReadonlyMap<string, string> = new Map([
   ['deregister', 'connect deregister'],
   ['register', 'connect register'],
   ['rotate', 'connect rotate'],
+  ['claim', 'claims acquire'],
+  ['release', 'claims release'],
 ]);
 
 /** Damerau-lite edit distance, enough to catch a doubled, dropped, or
@@ -409,9 +435,52 @@ export function suggestCommand(raw: string): string | null {
   return REDIRECTS.get(best.name) ?? best.name;
 }
 
-/** Per-command usage, when the command's module publishes one. */
+/**
+ * Usage for `ablo <command> --help`.
+ *
+ * A module may publish `usage` when the command needs more than a row list —
+ * grouped sections, the credential it reads, what the server decides. Those
+ * blocks are deliberately richer than the `--all` rows, which are a one-line
+ * reference across every command, so the two are presentations of one surface
+ * rather than two statements of it, and composing them would print the same
+ * flag twice in two spellings.
+ *
+ * Everything else renders from the rows it already declared above, so a command
+ * with nothing to add gets its help for free and cannot describe itself
+ * differently in two places. Before this, a module that wanted usage restated
+ * its own invocations in its own file: `claims` shipped a hand-written block
+ * listing the same invocations the rows below it already carried.
+ *
+ * What keeps the two honest is `commands.test.ts`, which asserts every flag the
+ * rows mention also appears in the prose. Presentation may differ; coverage may
+ * not.
+ *
+ * Commands with neither prose nor rows answer `undefined`, and the caller falls
+ * back to the top-level list.
+ */
 export function usageFor(name: CommandName): string | undefined {
-  return BY_NAME.get(name)?.usage;
+  const command = BY_NAME.get(name);
+  if (command === undefined) return undefined;
+  if (command.usage !== undefined) return command.usage;
+  const rows = command.full?.rows ?? [];
+  // A continuation row carries the rest of a long flag list under the row above
+  // it. It is excluded from the width — having no description to align to, and
+  // being the longest line, it would push the column off the screen — but not
+  // from the output, which is the same split `ablo help --all` makes. Dropping
+  // it would silently lose the flags it carries, which is `init`'s whole
+  // second line.
+  const described = rows.filter((row) => row.does !== undefined);
+  if (described.length === 0) return undefined;
+  const width = Math.max(...described.map((row) => row.run.length)) + 2;
+  const headline = command.core?.does;
+  return [
+    `  ${brand(`ablo ${name}`)}${headline !== undefined ? ` — ${headline}` : ''}`,
+    '',
+    ...rows.map((row) =>
+      row.does === undefined ? `       ${row.run}` : `  ablo ${row.run.padEnd(width)}${row.does}`,
+    ),
+    '',
+  ].join('\n');
 }
 
 /** Rows for one short-help heading, in declaration order. */

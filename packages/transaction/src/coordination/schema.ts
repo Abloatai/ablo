@@ -18,8 +18,8 @@ import type { AssertExact } from '../types/assertExact.js';
  *   1. Presence (observation): who is working where. It reports, never blocks.
  *   2. Claims (pessimistic leases): `claim_begin` / `claim_abandon` grant one
  *      participant exclusive intent on a target while others wait.
- *   3. Stale-context (optimistic): a `readAt` watermark plus an `onStale` write
- *      guard that catches a lost update when the row moved after you read it.
+ *   3. Stale-context (optimistic): a `readAt` watermark that rejects a lost
+ *      update when the row moved after you read it.
  *
  * These Zod schemas are the single definition of each shape. Both the client
  * SDK and the server derive their TypeScript types from them with `z.infer`
@@ -225,7 +225,7 @@ export type TargetRef = z.infer<typeof targetRefSchema>;
  *
  * Declared beside {@link targetRefSchema} because the two are the same shape in
  * two spellings, and a member added to one belongs in the other. Both are read
- * by {@link staleNotificationSchema} and the claim family below, so this has to
+ * by the claim family below, so this has to
  * precede them.
  */
 export const modelTargetSchema = z
@@ -255,55 +255,18 @@ const streamTargetSchema = targetRefSchema
 //  Layer 3 — optimistic stale-context (the write guard)
 // ─────────────────────────────────────────────────────────────────────────
 
-/**
- * How the server treats a write whose snapshot watermark (`readAt`) is older
- * than the target row's latest change. There are three dispositions:
- *   • `notify`    — hold the write and return a {@link StaleNotification}
- *                   carrying the current value, so the actor (agent or human)
- *                   can resolve it.
- *   • `reject`    — throw `AbloStaleContextError`, the default when `readAt`
- *                   is present.
- *   • `overwrite` — apply the write blindly, last write wins, with no signal.
- */
-export const onStaleModeSchema = z.enum(['reject', 'overwrite', 'notify']);
-export type OnStaleMode = z.infer<typeof onStaleModeSchema>;
-
 /** Maximum decision-input entries one logical commit may ask the server to scan. */
 export const MAX_READ_SET_ENTRIES = 500;
 
-/** A persisted entry cannot overwrite: it observes future writes, not its own. */
-export const trackOnStaleSchema = onStaleModeSchema.exclude(['overwrite']);
-export type TrackOnStale = z.infer<typeof trackOnStaleSchema>;
-
 /**
  * The optimistic guard carried on a commit operation. `readAt` is the
- * snapshot watermark from `context.capture` (null/absent ⇒ unguarded write).
- * `bypass` is the explicit, recorded override of a *foreign* pessimistic
- * claim — see the claim layer below.
+ * snapshot watermark captured by `read` (null/absent ⇒ unguarded write).
  */
 export const writeGuardSchema = z.object({
   readAt: logPositionSchema.nullish(),
-  onStale: onStaleModeSchema.nullish(),
-  bypass: z.boolean().optional(),
 });
 export type WriteGuard = z.infer<typeof writeGuardSchema>;
 
-/**
- * The advisory returned to a committer whose write hit a stale-context
- * conflict under `onStale: 'notify'` — it reports that the value the committer
- * reasoned against changed while they were away. Rather than throwing, the
- * server hands back the conflicting field's current value as data so the
- * actor — an agent or a human — can reconcile and re-commit. A claim is the
- * prospective form of the same idea (coordinate before acting); this
- * notification is the in-flight form (here is what changed, you resolve). It
- * rides on the commit acknowledgement alongside `lastSyncId`; an empty or
- * absent array means nothing the committer depended on moved.
- *
- * Only `onStale: 'notify'` produces this. The conflicting operation was held,
- * not written, and the actor reconciles against `currentValues` and
- * re-commits. `reject` throws instead, and `overwrite` proceeds silently —
- * neither notifies.
- */
 /**
  * A log position, as the server reports one.
  *
@@ -329,203 +292,18 @@ const syncIdSchema = z.number().int().nonnegative();
  *   • `parent`     — it sits one declared containment edge below the root.
  *   • `transitive` — the root is ≥2 hops up (`comment → item → project`).
  */
-export const stalePropagationSchema = z
-  .object({
-    via: z.enum(['self', 'parent', 'transitive']),
-    /**
-     * The intermediate models walked from the moved row up to the scope root,
-     * nearest hop first — the part of the route a reader cannot see from the
-     * two endpoints. Empty on `self` and `parent`, which have no intermediate.
-     *
-     * Model names, not rows: naming the intermediate ROWS would cost a join per
-     * notification, and the route is what explains the reach. `target` already
-     * identifies the row that moved and `group` the premise it broke.
-     */
-    through: z.array(z.string()).readonly(),
-  })
-  .readonly();
-export type StalePropagation = z.infer<typeof stalePropagationSchema>;
-
-/**
- * What both notification scopes carry. The arms below derive from it rather
- * than restate it, the same way {@link claimStateSchema} projects the claim
- * record.
- */
-const staleNotificationBaseSchema = z.object({
-  /** Names this object's type; every returned object carries such a tag. */
-  object: z.literal('stale_notification'),
-  /**
-   * The row that moved, and which part of it — `fields` holds the columns whose
-   * concurrent change collided (empty ⇒ a whole-entity CREATE/DELETE).
-   *
-   * The same shape a claim names its subject with, so one reader handles "who
-   * holds this row" and "this row moved under you" without learning two
-   * vocabularies. In BOTH scopes this is the row that actually changed: a group
-   * notification names the moved row here and the fired premise in `group`.
-   */
-  target: modelTargetSchema,
-  /** The watermark the committer reasoned against (its `readAt`). */
-  readAt: syncIdSchema,
-  /**
-   * Newest delta id on the premise — the committer's new watermark. Re-capture
-   * context at/after this id to reconcile.
-   */
-  observedSyncId: syncIdSchema,
-  /** Who wrote the conflicting delta. */
-  writtenBy: z.object({
-    kind: participantKindSchema,
-    id: z.string(),
-  }),
-});
-
-/** A premise on one row: that row moved. */
-export const rowStaleNotificationSchema = staleNotificationBaseSchema.extend({
-  scope: z.literal('row'),
-  /**
-   * The live values of `target.fields` after the conflict — the piece a plain
-   * stale error omits. It lets the actor reconcile without a follow-up read.
-   *
-   * Row scope only. Reading live values is cheap for one known row and is what
-   * a group breach cannot promise, so the group arm omits the field rather than
-   * carrying an empty one that reads as "nothing changed".
-   */
-  currentValues: z.record(z.string(), z.unknown()),
-});
-export type RowStaleNotification = z.infer<typeof rowStaleNotificationSchema>;
-
-/** A premise on a whole sync group: something in it moved. */
-export const groupStaleNotificationSchema = staleNotificationBaseSchema.extend({
-  scope: z.literal('group'),
-  /**
-   * The group premise that fired (`report:abc`, `section:s1`).
-   *
-   * Same format schema the premise declares, so the value a caller writes into
-   * `reads[].group` and the value it gets back name a group identically. The
-   * BRANDED view is for values Ablo mints; a notification only echoes the
-   * premise it was handed, and re-parsing it to acquire a brand would be a
-   * second validation of data the commit boundary already checked.
-   */
-  group: syncGroupRefSchema,
-  /**
-   * How `target` reached `group`. Absent when the schema's record-group spec is
-   * unavailable to the commit path, which is the only case where the server
-   * knows a group moved without knowing the route.
-   */
-  propagation: stalePropagationSchema.optional(),
-  /**
-   * How much of the group moved — the decision "re-read these rows" versus
-   * "give up and take the whole group" needs a size, and a premise that only
-   * says *something* changed forces the expensive branch every time.
-   *
-   * Counts DISTINCT ROWS, not deltas: two writes to one row is one row's worth
-   * of re-reading. `sample` names the most recently changed of them and is
-   * capped, so `truncated` says whether it tells the whole story.
-   *
-   * Absent when the commit path did not measure it (a durable `track` fires per
-   * commit and does not pay for the extra statement).
-   */
-  changed: z
-    .object({
-      count: z.number().int().nonnegative(),
-      sample: z.array(modelTargetSchema).readonly(),
-      truncated: z.boolean(),
-    })
-    .optional(),
-});
-export type GroupStaleNotification = z.infer<
-  typeof groupStaleNotificationSchema
->;
-
-/**
- * One advisory, two scopes, told apart by `scope`.
- *
- * A real discriminated union rather than a flat object with an optional
- * `group`, which is what {@link readDependencySchema} already does for the
- * premise side. While it was flat, the two scopes disagreed about what their
- * fields meant — `model`/`id` held a row in one and the group key in the other,
- * and `conflictingFields`/`currentValues` were empty by construction in the
- * group case — so every consumer had to re-derive the scope from `group`'s
- * presence and read the prose to know which fields were load-bearing.
- */
-export const staleNotificationSchema = z.discriminatedUnion('scope', [
-  rowStaleNotificationSchema,
-  groupStaleNotificationSchema,
-]);
-export type StaleNotification = z.infer<typeof staleNotificationSchema>;
-
-/** One row named by a commit-lifetime ReadSet entry. */
-export const readSetRowTargetSchema = z.object({
-  scope: z.literal('row'),
+/** One compact row read carried into a later commit. */
+const readRowDependencySchema = z.object({
   model: z.string(),
   id: z.string(),
   fields: z.array(z.string()).readonly().optional(),
+  readAt: logPositionSchema,
 });
-export type ReadSetRowTarget = z.infer<typeof readSetRowTargetSchema>;
 
-/** One sync group named by a ReadSet entry. */
-export const readSetGroupTargetSchema = z.object({
-  scope: z.literal('group'),
+/** One compact group read carried into a later commit. */
+const readGroupDependencySchema = z.object({
   group: syncGroupRefSchema,
-});
-export type ReadSetGroupTarget = z.infer<typeof readSetGroupTargetSchema>;
-
-export const commitReadSetTargetSchema = z.discriminatedUnion('scope', [
-  readSetRowTargetSchema,
-  readSetGroupTargetSchema,
-]);
-export type CommitReadSetTarget = z.infer<typeof commitReadSetTargetSchema>;
-
-/** Persisted row tracking is row-grained; it has no field storage axis. */
-export const persistedReadSetRowTargetSchema = readSetRowTargetSchema.omit({ fields: true });
-export const persistedReadSetTargetSchema = z.discriminatedUnion('scope', [
-  persistedReadSetRowTargetSchema,
-  readSetGroupTargetSchema,
-]);
-export type PersistedReadSetTarget = z.infer<typeof persistedReadSetTargetSchema>;
-
-/** One exact input to the decision made by this commit. */
-export const commitReadSetEntrySchema = z.object({
-  target: commitReadSetTargetSchema,
-  watermark: logPositionSchema,
-  lifetime: z.literal('commit'),
-  onStale: onStaleModeSchema,
-});
-export type CommitReadSetEntry = z.infer<typeof commitReadSetEntrySchema>;
-
-/** One exact input retained after the declaring commit settles. */
-export const persistedReadSetEntrySchema = z.object({
-  target: persistedReadSetTargetSchema,
-  watermark: logPositionSchema,
-  lifetime: z.literal('persisted'),
-  onStale: trackOnStaleSchema,
-});
-export type PersistedReadSetEntry = z.infer<typeof persistedReadSetEntrySchema>;
-
-export const readSetEntrySchema = z.discriminatedUnion('lifetime', [
-  commitReadSetEntrySchema,
-  persistedReadSetEntrySchema,
-]);
-export type ReadSetEntry = z.infer<typeof readSetEntrySchema>;
-
-export const readSetSchema = z
-  .array(readSetEntrySchema)
-  .max(MAX_READ_SET_ENTRIES)
-  .readonly();
-export type ReadSet = z.infer<typeof readSetSchema>;
-
-/**
- * Wire projection of a commit-lifetime ReadSet entry. The public field names
- * stay compatible (`readAt`, flat row/group target); every member is selected
- * from the canonical entry rather than restated beside it.
- */
-const readRowDependencySchema = readSetRowTargetSchema.omit({ scope: true }).extend({
-  readAt: commitReadSetEntrySchema.shape.watermark,
-  onStale: commitReadSetEntrySchema.shape.onStale.optional(),
-});
-
-const readGroupDependencySchema = readSetGroupTargetSchema.omit({ scope: true }).extend({
-  readAt: commitReadSetEntrySchema.shape.watermark,
-  onStale: commitReadSetEntrySchema.shape.onStale.optional(),
+  readAt: logPositionSchema,
 });
 
 export const readDependencySchema = z.union([
@@ -534,73 +312,10 @@ export const readDependencySchema = z.union([
 ]);
 export type ReadDependency = z.infer<typeof readDependencySchema>;
 
-/**
- * A durable ReadSet entry — what a participant is watching so that a later
- * change to it opens a {@link StaleNotification}. Where a {@link ReadDependency}
- * is checked once at commit and discarded, a `TrackDependency` is kept and
- * re-checked against every future delta. The row form watches one object; the
- * group form watches a whole sync group ("anything in `report:abc`"). See
- * `packages/ablo/docs/groups.md` for how it drives change propagation.
- *
- * It is a projection of the canonical persisted entry, not a second declaration of the
- * same reference: a track names its target exactly as a read does, and the
- * three ways it differs are stated here as omissions the compiler holds.
- *
- *   • `onStale` NARROWED, not dropped — `notify` (the default) reports the
- *     change on the tracker's next receipt and lets the commit through;
- *     `reject` refuses that commit while the belief is stale, so an agent
- *     cannot write on something it has been shown to be out of date about.
- *     `overwrite` is excluded because it means "apply my write anyway" and a
- *     track guards no write of its own to apply;
- *   • no `fields` — a track fires at row grain, because the server keeps one
- *     row per tracked target and reports that the target moved, not which
- *     column did (`track_dependencies` has no field axis to store one in);
- *   • `readAt` optional — it defaults to the watermark of the commit that
- *     registered the track, so a caller with nothing to say about when it last
- *     looked gets "from here on".
- *
- * A field added to the ReadSet target reaches both halves; a field the durable half
- * genuinely cannot carry has to be omitted here on purpose, in one line, rather
- * than by being quietly left out of a copy.
- */
-/**
- * What a track does when the caller says nothing — reporting, the behavior every
- * track had before the disposition existed, so an existing registration is
- * unchanged.
- *
- * Declared here because the value has to agree in three places that cannot
- * import each other: this schema, the column DEFAULT, and the server's insert.
- * The two SQL copies are pinned to this one by a test
- * (`trackOnStaleDomain.test.ts`) rather than by anyone remembering.
- */
-export const DEFAULT_TRACK_ON_STALE: TrackOnStale = 'notify';
-
-const trackBaseSchema = {
-  readAt: persistedReadSetEntrySchema.shape.watermark.optional(),
-  onStale: persistedReadSetEntrySchema.shape.onStale.optional(),
-} as const;
-
-export const trackDependencySchema = z.union([
-  persistedReadSetRowTargetSchema.omit({ scope: true }).extend(trackBaseSchema),
-  readSetGroupTargetSchema.omit({ scope: true }).extend(trackBaseSchema),
-]);
-export type TrackDependency = z.infer<typeof trackDependencySchema>;
-
-/** Bounded wire projections of the two ReadSet lifetimes. */
+/** Bounded wire projection of one commit's reads. */
 export const readDependencyListSchema = z
   .array(readDependencySchema)
   .max(MAX_READ_SET_ENTRIES);
-export const trackDependencyListSchema = z
-  .array(trackDependencySchema)
-  .max(MAX_READ_SET_ENTRIES);
-
-/** Shared combined-cardinality rule for envelopes carrying both projections. */
-export function readSetProjectionEntryCount(value: {
-  readonly reads?: readonly unknown[] | null;
-  readonly track?: readonly unknown[] | null;
-}): number {
-  return (value.reads?.length ?? 0) + (value.track?.length ?? 0);
-}
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Layer 2 — pessimistic claims and leases
@@ -736,8 +451,6 @@ export const claimErrorSchema = z.object({
   heldByExpiresAt: z.number().optional(),
   /** Rich holder context for conflict rejections. Additive: older frames omit it. */
   heldByClaim: wireClaimSummarySchema.optional(),
-  /** Optional conflict-policy explanation. Additive: older frames omit it. */
-  policyReason: z.string().optional(),
 });
 export type ClaimError = z.infer<typeof claimErrorSchema>;
 
@@ -793,7 +506,7 @@ export const claimRejectionSchema = z.object({
    * there, so this reads the way {@link wireParticipantKindSchema} reads its
    * dialect: a value that parses becomes the typed reason, and one that does
    * not is absent rather than smuggled through as prose. Prose has its own
-   * field — `policyReason` below — which is why nothing is lost by refusing to
+   * field — `message` below — which is why nothing is lost by refusing to
    * carry it here.
    *
    * The registry code a caller finally sees on `AbloClaimedError`
@@ -818,7 +531,7 @@ export const claimRejectionSchema = z.object({
   heldByClaimId: z.string().optional(),
   heldByExpiresAt: z.number().optional(),
   heldByClaim: wireClaimSummarySchema.optional(),
-  policyReason: z.string().optional(),
+  message: z.string().optional(),
 });
 export type ClaimRejection = z.infer<typeof claimRejectionSchema>;
 
@@ -963,7 +676,7 @@ export type HeldClaimStatus = z.infer<typeof heldClaimStatusSchema>;
  *
  * Every caller-facing surface that answers a question about a claim is a
  * PROJECTION of this record, never a second object: {@link modelClaimSchema} is
- * what a peer may see, and `claimStateSchema` (`wire/claims.ts`) is what a
+ * what a peer may see, and `claimStateSchema` (`claims/contract.ts`) is what a
  * caller polls about a claim of its own. Each is pinned to this record, so a
  * field added here either reaches the people it was declared for or fails to
  * compile.
@@ -1405,7 +1118,7 @@ export type CommitOperationType = z.infer<typeof commitOperationTypeSchema>;
 
 /**
  * A single mutation in a commit batch, as it arrives on the wire. Extends the
- * optimistic `writeGuard` (`readAt`/`onStale`/`bypass`) — the structural link
+ * optimistic `writeGuard` (`readAt`) — the structural link
  * that makes "every write is stale-guarded" legible in the type, not just in
  * prose.
  */

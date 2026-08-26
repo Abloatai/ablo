@@ -13,6 +13,7 @@ into authoritative application state.
 
 | Category | Integration | Status | Use it for |
 |---|---|---|---|
+| Agent execution | [Anthropic Sandbox Runtime](./integrations/sandbox-runtime.md) | Available | Restricting the filesystem, network, sockets, and inherited authority of an agent process |
 | Long-running records | [Temporal](./integrations/temporal.md) | Available | Durable Workflows, Activity retries, timers, cancellation, and durable AI SDK calls |
 | Long-running records | [Inngest](./integrations/inngest.md) | Available | Event-driven durable functions, retriable steps, flow control, and checkpointed AI SDK calls |
 | Data ingestion | Connector runtimes | Planned | Bringing external data into Ablo-backed models without creating a second write authority |
@@ -21,6 +22,14 @@ An integration gets its own guide when there is runnable application code and
 the boundary has been tested. A dedicated package comes later still: only
 repeated production integrations that reveal substantial reusable behavior
 justify adding another public runtime dependency.
+
+## Agent execution
+
+Use [Anthropic Sandbox Runtime](./integrations/sandbox-runtime.md) to enforce the
+boundary around an agent process. The runtime owns filesystem and network
+access. Ablo remains below it and owns typed shared-state operations, claims,
+idempotency, and confirmation. The runnable example lives in
+`examples/sandboxed-agent`.
 
 ## Long-running records
 

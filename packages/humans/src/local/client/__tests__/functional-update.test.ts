@@ -12,7 +12,7 @@ import {
   reconcileFunctionalUpdate,
   isReconcilableConflict,
   type ReconcileTransport,
-} from '@abloatai/transaction/resources/functionalUpdate';
+} from '@abloatai/transaction/client/resources/functionalUpdate';
 import {
   AbloContentionError,
   AbloStaleContextError,

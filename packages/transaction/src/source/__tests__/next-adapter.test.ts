@@ -12,7 +12,7 @@ import {
   ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH,
   signAbloSourceRequest,
 } from '../index.js';
-import { dataSourceNext } from '../next.js';
+import { dataSourceNext } from '../endpoint/next.js';
 import { memoryDataSource } from '../adapters/memory.js';
 
 class TestResponse {

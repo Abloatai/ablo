@@ -40,17 +40,15 @@
  *   `ablo.<model>.update(id, current => apply(current, input))`. The runtime
  *   re-reads and re-applies `apply` on top of every concurrent write, backing off
  *   between rounds, so many agents accumulate into one row and the model never
- *   sees a conflict. This requires the model's agent conflict policy to be
- *   `reject` (the default, or `agentsReject()`). A model that declares
- *   `agentsNotify()` holds the losing write instead of rejecting it, which
- *   defeats the reconcile loop — there, use `'claim'` or `'queue'`, or change the
+ *   sees a conflict. Stale conditional writes always reject, which drives the
+ *   reconcile loop. For long or side-effecting work, use `'claim'` or `'queue'`; otherwise change the
  *   policy.
  *
  * - `'claim'` gives mutual exclusion. It takes a fail-fast claim; if another
  *   participant holds the row, it returns `{ status: 'claimed' }` and leaves the
  *   decision to retry up to the model. A visible signal serves the agent better
  *   than a hidden wait when it might spend its turn on something else. Works under
- *   any conflict policy.
+ *   the fixed foreign-claim rejection rule.
  *
  * - `'queue'` joins Ablo's server-owned FIFO queue. The model calls once and
  *   the tool waits for the canonical claim grant; it does not recreate queueing
@@ -63,8 +61,8 @@ import type {
   ClaimSkipParams,
   ClaimParams,
   ModelUpdateParams,
-} from '../resources/modelOperations.js';
-import type { ModelUpdater, FunctionalUpdateOptions } from '../resources/functionalUpdate.js';
+} from '../client/resources/modelOperations.js';
+import type { ModelUpdater, FunctionalUpdateOptions } from '../client/resources/functionalUpdate.js';
 import type { HeldClaim } from '../types/streams.js';
 import type { ModelToolOptions } from './toolOptions.js';
 

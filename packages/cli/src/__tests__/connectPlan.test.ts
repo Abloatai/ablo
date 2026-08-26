@@ -200,3 +200,118 @@ describe('passwordClause', () => {
     expect(passwordClause("a'b", 'plaintext')).toBe("a''b");
   });
 });
+
+describe('a provider that reserves BYPASSRLS (Amazon RDS, Aurora)', () => {
+  const TABLES = ['slide_decks', 'slides'] as const;
+
+  const rdsPlan = plan({
+    credentials: CREDS,
+    tables: TABLES,
+    canGrantBypassRls: false,
+  });
+  const rdsSql = rdsPlan.flatMap((step) => step.sql ?? []);
+
+  it('creates the replication role without the attribute the provider withholds', () => {
+    const create = rdsSql.find((s) => s.includes(`CREATE ROLE`) && s.includes(ABLO_REPLICATION_ROLE));
+    expect(create).toBeDefined();
+    // `CREATE ROLE ... BYPASSRLS` fails with "permission denied to create role"
+    // as the RDS master user, because Postgres lets a role grant only the
+    // attributes it holds and RDS keeps this one on `rdsadmin`.
+    expect(create).not.toMatch(/\bBYPASSRLS\b/);
+    expect(create).toMatch(/\bREPLICATION\b/);
+  });
+
+  it('never tries to add the attribute afterwards either', () => {
+    expect(rdsSql.some((s) => /ALTER ROLE .* WITH BYPASSRLS/.test(s))).toBe(false);
+  });
+
+  it('gives the reader a SELECT policy on each published table instead', () => {
+    for (const table of TABLES) {
+      const policy = rdsSql.find(
+        (s) => s.startsWith('CREATE POLICY') && s.includes(`"${table}"`),
+      );
+      expect(policy).toBeDefined();
+      expect(policy).toContain('FOR SELECT');
+      expect(policy).toContain(`TO "${ABLO_REPLICATION_ROLE}"`);
+      expect(policy).toContain('USING (true)');
+    }
+  });
+
+  it('is safe to re-run, since CREATE POLICY has no IF NOT EXISTS', () => {
+    for (const table of TABLES) {
+      const dropIndex = rdsSql.findIndex(
+        (s) => s.startsWith('DROP POLICY IF EXISTS') && s.includes(`"${table}"`),
+      );
+      const createIndex = rdsSql.findIndex(
+        (s) => s.startsWith('CREATE POLICY') && s.includes(`"${table}"`),
+      );
+      expect(dropIndex).toBeGreaterThanOrEqual(0);
+      expect(createIndex).toBeGreaterThan(dropIndex);
+    }
+  });
+
+  it('writes no policy when no table list was given, so it cannot reach into a shared database', () => {
+    const allTables = plan({ credentials: CREDS, canGrantBypassRls: false });
+    const sql = allTables.flatMap((step) => step.sql ?? []);
+    expect(sql.some((s) => s.startsWith('CREATE POLICY'))).toBe(false);
+  });
+
+  it('leaves the ordinary path untouched where the attribute can be granted', () => {
+    const normal = plan({ credentials: CREDS, tables: TABLES });
+    const sql = normal.flatMap((step) => step.sql ?? []);
+    expect(sql.some((s) => s.includes('BYPASSRLS'))).toBe(true);
+    expect(sql.some((s) => s.startsWith('CREATE POLICY'))).toBe(false);
+  });
+});
+
+describe('a provider that reserves REPLICATION (Amazon RDS, Aurora)', () => {
+  const rdsPlan = plan({
+    credentials: CREDS,
+    tables: ['slides'],
+    provider: 'rds',
+    canGrantBypassRls: false,
+    canGrantReplication: false,
+  });
+  const sql = rdsPlan.flatMap((step) => step.sql ?? []);
+  const create = sql.find((s) => s.includes('CREATE ROLE') && s.includes(ABLO_REPLICATION_ROLE));
+
+  it('does not set an attribute this admin cannot pass on', () => {
+    // Postgres lets a role grant only what it holds, and the RDS master user
+    // has rolreplication = false, so `WITH ... REPLICATION` is refused with
+    // "permission denied to create role" exactly as BYPASSRLS is.
+    expect(create).toMatch(/\bNOREPLICATION\b/);
+    expect(create).not.toMatch(/(?<!NO)\bREPLICATION\b/);
+  });
+
+  it('grants the provider role that carries the capability instead', () => {
+    const grant = sql.find((s) => s.startsWith('GRANT "rds_replication"'));
+    expect(grant).toBeDefined();
+    expect(grant).toContain(`TO "${ABLO_REPLICATION_ROLE}"`);
+  });
+
+  it('states inheritance on the grant, because membership alone is not the capability', () => {
+    const grant = sql.find((s) => s.startsWith('GRANT "rds_replication"'));
+    // Postgres 16 records inheritance per membership. Without this the reader
+    // is a member that does not inherit: MEMBER true, USAGE false, replication
+    // broken, and every "was it granted" check satisfied. Verified against a
+    // live Aurora cluster, where ALTER ROLE ... INHERIT left USAGE false and
+    // only the re-grant flipped it.
+    expect(grant).toContain('WITH INHERIT TRUE');
+  });
+
+  it('keeps the attribute where the admin holds it, and grants nothing', () => {
+    const normal = plan({ credentials: CREDS, tables: ['slides'], provider: 'rds' });
+    const normalSql = normal.flatMap((step) => step.sql ?? []);
+    const normalCreate = normalSql.find(
+      (s) => s.includes('CREATE ROLE') && s.includes(ABLO_REPLICATION_ROLE),
+    );
+    expect(normalCreate).toMatch(/(?<!NO)\bREPLICATION\b/);
+    expect(normalSql.some((s) => s.startsWith('GRANT "rds_replication"'))).toBe(false);
+  });
+
+  it('grants nothing on a provider with no such role, rather than inventing one', () => {
+    const generic = plan({ credentials: CREDS, tables: ['slides'], canGrantReplication: false });
+    const genericSql = generic.flatMap((step) => step.sql ?? []);
+    expect(genericSql.some((s) => s.startsWith('GRANT "rds_replication"'))).toBe(false);
+  });
+});

@@ -6,15 +6,15 @@
  * writes.
  *
  * Against a fake fetch where an claim is ALWAYS held on Item/t1:
- *   - retrieve() resolves with the row by default (free);
- *   - retrieve({ ifClaimed: 'fail' }) DOES throw — proving the held claim is
+ *   - read() resolves with the row by default (free);
+ *   - read({ ifClaimed: 'fail' }) DOES throw — proving the held claim is
  *     genuinely detected (the free read above isn't a false pass) and that
  *     gating reads is opt-in (developer's choice), not the default;
  *   - update({ ifClaimed: 'fail' }) throws on the same claimed row — the write
  *     side of the asymmetry.
  */
 
-import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { createHttpTransport } from '@abloatai/transaction/transport/http';
 import { AbloClaimedError } from '@abloatai/transaction/errors';
 import {
   claimListResponse,
@@ -72,16 +72,16 @@ function makeClient() {
 }
 
 describe('reads stay free under a claim', () => {
-  it('retrieve resolves by default even when the row is claimed', async () => {
+  it('read resolves by default even when the row is claimed', async () => {
     const client = makeClient();
-    const read = await client.model('Item').retrieve({ id: 't1' });
+    const read = await client.model('Item').read({ id: 't1' });
     expect(read.data).toMatchObject({ id: 't1', title: 'hello' });
   });
 
-  it('retrieve gates only when the caller opts in (ifClaimed: fail)', async () => {
+  it('read gates only when the caller opts in (ifClaimed: fail)', async () => {
     const client = makeClient();
     await expect(
-      client.model('Item').retrieve({ id: 't1', ifClaimed: 'fail' }),
+      client.model('Item').read({ id: 't1', ifClaimed: 'fail' }),
     ).rejects.toBeInstanceOf(AbloClaimedError);
   });
 

@@ -100,12 +100,64 @@ END $$;`;
  * resulting connection string in `DATABASE_URL`; the password never passes
  * through Ablo's CLI or servers.
  */
+/**
+ * How the reader comes to see every published row during the initial snapshot.
+ *
+ * Logical decoding streams what committed regardless of row-level security, but
+ * the snapshot that precedes it is an ordinary SELECT, and a policy that reads a
+ * session variable the reader never sets matches nothing. The reader would come
+ * up, report success, and sync an empty database while live changes arrived on
+ * top of it — a failure that certifies itself as complete.
+ *
+ * BYPASSRLS is the direct answer and the one Postgres intends. It is also
+ * unavailable on the most common managed Postgres there is: on Amazon RDS and
+ * Aurora the attribute belongs to `rdsadmin`, so neither the master user nor
+ * `rds_superuser` can pass it on, and `CREATE ROLE ... BYPASSRLS` fails with
+ * "permission denied to create role". Owning the tables is no way out either,
+ * because a table set to FORCE ROW LEVEL SECURITY applies its policies to the
+ * owner too.
+ *
+ * So where the attribute cannot be granted, the reader is named in a policy of
+ * its own instead. This is narrower than BYPASSRLS rather than a concession to
+ * it: SELECT only, one role, one table at a time, and visible in `pg_policies`
+ * where a reviewer can see what was granted — instead of an attribute that
+ * silently exempts its holder from every policy in the database.
+ */
+export function replicationBypassSql(input: {
+  readonly role: string;
+  readonly tables: readonly string[];
+  readonly schema: string;
+  readonly canGrantBypassRls: boolean;
+}): readonly string[] {
+  if (input.canGrantBypassRls) return [];
+
+  // Only for a named set. Without one the publication is FOR ALL TABLES, and
+  // writing policies onto tables Ablo was never told about would be reaching
+  // into whatever else shares the database.
+  return input.tables.flatMap((table) => {
+    const qualified = `${quoteIdent(input.schema)}.${quoteIdent(table)}`;
+    const policy = quoteIdent(`${input.role}_snapshot`);
+    return [
+      // CREATE POLICY has no IF NOT EXISTS, and every step here is safe to
+      // re-run, so the drop carries the idempotency.
+      `DROP POLICY IF EXISTS ${policy} ON ${qualified};`,
+      `CREATE POLICY ${policy} ON ${qualified} FOR SELECT TO ${quoteIdent(input.role)} USING (true);`,
+    ];
+  });
+}
+
 export function connectSetupSql(input: {
   readonly tables?: readonly string[];
   readonly role?: string;
   readonly writeRole?: string;
   readonly schema?: string;
   readonly publication: string;
+  /**
+   * Whether the admin running this can hand out BYPASSRLS. False on Amazon RDS
+   * and Aurora, where the attribute belongs to `rdsadmin` alone, so the reader
+   * is given explicit SELECT policies instead. See replicationBypassSql.
+   */
+  readonly canGrantBypassRls?: boolean;
 }): readonly string[] {
   const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
   const writeRole =
@@ -113,6 +165,7 @@ export function connectSetupSql(input: {
   const tables = input.tables ?? [];
   const schema = input.schema ?? 'public';
   const publication = input.publication;
+  const canGrantBypassRls = input.canGrantBypassRls !== false;
   const qualifiedTables = tables.map((table) => `${quoteIdent(schema)}.${quoteIdent(table)}`);
   const publicationTarget =
     tables.length > 0 ? `FOR TABLE ${qualifiedTables.join(', ')}` : 'FOR ALL TABLES';
@@ -151,9 +204,11 @@ export function connectSetupSql(input: {
     // 3. A least-privilege role: it can stream replication and SELECT the
     // published tables, including the initial snapshot of RLS-protected tables.
     // Logical decoding already exposes every published row independently of
-    // RLS; BYPASSRLS makes the ordinary SELECT snapshot match that same scope.
-    `CREATE ROLE ${quoteIdent(role)} WITH NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE REPLICATION NOINHERIT LOGIN PASSWORD '<password>';`,
+    // RLS, so the reader needs the ordinary SELECT snapshot to match that same
+    // scope. How it gets there depends on what this admin may grant.
+    `CREATE ROLE ${quoteIdent(role)} WITH NOSUPERUSER ${canGrantBypassRls ? 'BYPASSRLS ' : ''}NOCREATEDB NOCREATEROLE ${canGrantBypassRls ? 'REPLICATION NOINHERIT' : 'NOREPLICATION INHERIT'} LOGIN PASSWORD '<password>';`,
     ...replicationReadGrants,
+    ...replicationBypassSql({ role, tables, schema, canGrantBypassRls }),
     // 4. A distinct DML role: no replication, role administration, ownership,
     // schema creation, or DDL. It runs NOBYPASSRLS with row_security on, so on a
     // table that HAS row-level-security policies they govern its writes and it
@@ -367,6 +422,13 @@ export async function probeReadiness(
      * reading, where no schema is in hand).
      */
     readonly coordinatedTables?: readonly string[];
+    /**
+     * The role that carries REPLICATION on this provider, when the attribute
+     * itself is withheld. On Amazon RDS and Aurora the capability arrives
+     * through membership in `rds_replication` and `rolreplication` stays false,
+     * so reading the attribute alone reports a working reader as broken.
+     */
+    readonly replicationGrantRole?: string | null;
   }
 ): Promise<readonly CheckItem[]> {
   const publication = opts.publication;
@@ -418,12 +480,30 @@ export async function probeReadiness(
         }
   );
 
-  // 3. The connected role must have REPLICATION (superuser implies it).
+  // 3. The connected role must be able to stream replication. Three ways to
+  //    hold that: the attribute, superuser, or membership in the role a managed
+  //    provider lends it through. The third is not a technicality — on RDS and
+  //    Aurora it is the ONLY way, because the attribute belongs to `rdsadmin`
+  //    and `rds_replication` does not carry `rolreplication` either. Reading the
+  //    attribute alone calls a correctly configured reader broken, which is
+  //    worse than a wrong answer: it invites someone to "fix" what already works.
   const roleRows = await sql.unsafe<RoleReplRow[]>(
     `SELECT rolreplication, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
   );
   const role = roleRows[0];
-  const hasReplication = Boolean(role && (role.rolreplication || role.rolsuper));
+  const grantRole = opts.replicationGrantRole ?? null;
+  const viaGrant = grantRole
+    ? (
+        await sql.unsafe<{ member: boolean }[]>(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_roles r
+             WHERE r.rolname = $1 AND pg_has_role(current_user, r.oid, 'MEMBER')
+           ) AS member`,
+          [grantRole] as never[]
+        )
+      )[0]?.member === true
+    : false;
+  const hasReplication = Boolean(role && (role.rolreplication || role.rolsuper)) || viaGrant;
   items.push(
     hasReplication
       ? {
@@ -443,6 +523,15 @@ export async function probeReadiness(
   //    'd' (DEFAULT) is usable only when the table has a primary key; 'n'
   //    (NOTHING) is never usable; 'f' (FULL) and 'i' (USING INDEX) are always fine.
   if (pubRows.length > 0) {
+    // A table hides rows from the snapshot when row security is active for this
+    // role AND nothing admits it. `row_security_active` answers only the first
+    // half: it stays true for a reader that a permissive policy lets read
+    // everything, which is exactly how the reader is set up where the provider
+    // withholds BYPASSRLS. Checking it alone reports 59 tables as hiding rows
+    // the reader can, in fact, read every one of.
+    //
+    // So the tables that actually hide rows are those with row security active
+    // and no unrestricted SELECT policy naming this role.
     const rlsRows = await sql.unsafe<{ table_name: string }[]>(
       `SELECT DISTINCT pt.tablename AS table_name
          FROM pg_publication_tables pt
@@ -450,6 +539,20 @@ export async function probeReadiness(
          JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = pt.tablename
         WHERE pt.pubname = $1 AND pt.schemaname = $2
           AND row_security_active(c.oid)
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_policies p
+             WHERE p.schemaname = pt.schemaname
+               AND p.tablename = pt.tablename
+               AND p.permissive = 'PERMISSIVE'
+               AND p.cmd IN ('ALL', 'SELECT')
+               AND p.qual = 'true'
+               -- Membership, not containment: pg_policies.roles is name[], while
+               -- ARRAY['public'] is text[]. Postgres has no name[] @> text[] operator, so
+               -- the containment spelling fails at execution rather than at parse time:
+               -- the probe threw instead of reporting, which reads as an unreachable
+               -- database rather than a readable one.
+               AND ('public' = ANY(p.roles) OR current_user = ANY(p.roles))
+          )
         ORDER BY table_name`,
       [publication, schema] as never[]
     );
@@ -464,7 +567,9 @@ export async function probeReadiness(
             label: `${rlsRelevant.length} published table${rlsRelevant.length === 1 ? '' : 's'} hide historical rows behind RLS`,
             fix:
               `ALTER ROLE current_user WITH BYPASSRLS;\n` +
-              `Logical replication already exposes every published row; this lets the ordinary initial SELECT read that same scope.`,
+              `Where the provider reserves that attribute (Amazon RDS, Aurora), give the reader a policy instead:\n` +
+              `CREATE POLICY <reader>_snapshot ON <table> FOR SELECT TO <reader> USING (true);\n` +
+              `Logical replication already exposes every published row; either lets the ordinary initial SELECT read that same scope.`,
           }
     );
 

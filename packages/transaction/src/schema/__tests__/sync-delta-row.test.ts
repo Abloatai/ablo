@@ -14,7 +14,7 @@ import {
   backfillProvenanceSchema,
   DELTA_DATA_CLASSIFICATION,
   DELTA_PHYSICAL_STORAGE,
-} from '../../log/syncDeltaRow.js';
+} from '../../observation/persistence/syncDeltaRow.js';
 
 describe('sync-delta decomposition (P0)', () => {
   it('core accepts an outbox-marker-shaped change (no server-assigned fields)', () => {

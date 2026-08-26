@@ -25,10 +25,10 @@ import {
 import type {
   DurableWriteStore,
   DurableWritesConfig,
-} from '@abloatai/transaction/durableWrites';
+} from '@abloatai/transaction/commit';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import { globalRuntime } from '../context.js';
-import { resolveDurableWrites } from '@abloatai/transaction/durableWrites';
+import { resolveDurableWrites } from '@abloatai/transaction/commit';
 
 export interface InternalComponentsInput<S extends SchemaRecord> {
   readonly schema: Schema<S>;

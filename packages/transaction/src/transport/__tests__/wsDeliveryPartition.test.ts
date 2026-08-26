@@ -1,4 +1,4 @@
-import { WsTransport } from '../wsTransport.js';
+import { WsTransport } from '../websocket/transport.js';
 
 describe('WsTransport delivery routing', () => {
   const originalWebSocket = globalThis.WebSocket;

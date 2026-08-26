@@ -9,7 +9,7 @@ meaning. Choose the narrowest one that matches the operation.
 |---|---|---|
 | Set an independent value | `update({ id, data })` | Last-write-wins when no claim applies. |
 | Compute a value from the current row | `update(id, current => next)` | Re-reads and retries if the row changes concurrently. |
-| Write only if earlier rows are still current | `reads: [record, policy]` | Rejects when an explicitly named dependency changed. |
+| Write only if earlier rows are still current | `reads: [record, rules]` | Rejects when an explicitly named dependency changed. |
 | Read, call a model, then write | `claim({ id })` | Other participants cannot write the claimed target by default until your claim ends. |
 
 **If a model call sits between the read and the write, take a claim.** A stale
@@ -25,8 +25,8 @@ does not carry a stale premise. It is intentionally last-write-wins.
 Pass the exact rows that produced a decision on the write:
 
 ```ts
-const record = await ablo.records.get({ id: recordId });
-const policy = await ablo.policies.get({ id: policyId });
+const record = await ablo.records.read({ id: recordId });
+const policy = await ablo.policies.read({ id: policyId });
 if (!record || !policy) throw new Error('required input is missing');
 
 const result = await model({ record, policy });
@@ -91,7 +91,7 @@ Use explicit returned rows when application code reads first and writes later,
 but does not need to reserve the row:
 
 ```ts
-const report = await ablo.reports.get({ id: reportId });
+const report = await ablo.reports.read({ id: reportId });
 if (!report) throw new Error('report missing');
 
 await ablo.reports.update({
@@ -101,37 +101,13 @@ await ablo.reports.update({
 });
 ```
 
-The dispositions are:
-
-| `onStale` | Behavior |
-|---|---|
-| `reject` | Reject the write if its premise is stale. |
-| `notify` | Leave the row unchanged and return the current value for reconciliation. |
-| `overwrite` | Apply the write without a stale check. |
+There is no stale-mode option on the write. If a declared row changed, Ablo
+rejects the whole mutation with `AbloStaleContextError`. Re-read and recompute,
+or use the functional update form when the computation is pure and retryable.
+To make an unconditional assignment, omit `reads` deliberately.
 
 See [Concurrency Convention](./concurrency-convention.md) for guarded batches
-and notifications.
-
-### Decide the model's conflict policy
-
-Who yields is a design decision about the model, not something to restate on
-every write. Declare it once, in the schema, and it travels to the server with
-the rest of the model:
-
-```ts
-import { coordination, model, z } from '@abloatai/ablo/schema';
-
-const cards = model(
-  { title: z.string() },
-  {
-    conflict: coordination.humansOverwrite().agentsReject(),
-  },
-);
-```
-
-An omitted participant kind uses the engine default, `reject`. A per-write
-`onStale` states the disposition for that one write. Keep the policy simple, and
-document any rule that lets a participant overwrite a held claim.
+and the `get` / `read` boundary.
 
 ## Claims
 
@@ -155,7 +131,7 @@ await ablo.reports.update({
 If another participant already holds the target, `claim` waits its turn and
 then resolves with a fresh row in `claim.data`. Ordinary reads remain open. By
 default, a write from a participant that does not hold the active claim is
-rejected; an explicit model conflict policy can choose otherwise.
+rejected.
 
 Bind claims with `await using` whenever possible. The claim then releases when
 the scope exits, including when the external call or write throws. For runtimes
@@ -198,7 +174,7 @@ try {
 }
 ```
 
-To wait with limits, keep the policy together:
+To wait with limits, keep the contention settings together:
 
 ```ts
 const claim = await ablo.records.claim({
@@ -226,6 +202,19 @@ await using claim = await ablo.records.claim({
 Claims on disjoint fields can coexist. A whole-row claim conflicts with every
 field claim on that row.
 
+### Relations do not create hierarchical claims
+
+A `parent: true` relation controls ownership, access inheritance, and sync
+routing. It does not make claims conflict across related rows. For example, a
+claim on one document row and a claim on one of its page rows have different
+model-and-ID targets and can coexist.
+
+Choose the row that represents the actual unit of exclusive work. Page rows
+allow different pages to process concurrently. If a whole-document operation
+must exclude every page operation, enumerate the authoritative page manifest,
+acquire page claims in one stable order, and guard the manifest against change.
+Do not infer that exclusion from the schema relation alone.
+
 The target options are:
 
 | Option | Purpose |
@@ -251,11 +240,101 @@ The main methods are:
 
 | Method | Purpose |
 |---|---|
-| `claim({ id })` | Acquire the target, waiting by default. |
+| `claim({ id, ...options })` | Read and claim an existing model row; the handle includes fresh row data. |
+| `claim(id, options)` | Claim an identifier in a registered model namespace without reading a row. |
 | `claim.state({ id })` | Read the current holder without blocking. |
 | `claim.queue({ id })` | Read the current wait order. |
 | `claim.release({ id })` | Release early when you do not hold a handle. |
 | `join({ scope })` | Observe presence for a broader scope. |
+
+Choose the overload deliberately:
+
+| Form | Evidence requirement | Typical use |
+|---|---|---|
+| `model.claim({ id })` | The row exists and the caller may read it. | Coordinate work on a synchronized row while using `handle.data`. |
+| `model.claim(id, options)` | The model namespace is registered; no row is read. | Select one participant before calling an existing authoritative service. |
+
+The identifier-only form is row-free, not schema-free. It does not authorize a
+worker or test fixture to push an unrelated model into an inherited production
+schema. Register the namespace through the application's normal schema process,
+or select an already registered namespace whose ownership matches the operation.
+
+## Coordinate an existing database operation
+
+Use this pattern when an application already has a service that protects a
+transition with a Postgres row lock or advisory lock, but slow preparation such
+as OCR, a model call, or another tool currently happens while that database
+lock is held.
+
+Keep the ownership boundary explicit:
+
+| Owner | Responsibility |
+|---|---|
+| Ablo claim | Select one participating worker before expensive work begins. |
+| Application service | Authoritative re-read, transition policy, database lock, idempotency, and commit. |
+| Postgres | Canonical row, constraints, and final integrity boundary. |
+
+The operation runs in this order:
+
+```text
+claim identifier
+  -> prepare expensive result once
+    -> application service re-reads and commits under its database lock
+      -> release claim in finally
+```
+
+Model the service seam as two operations rather than moving database policy
+into a resolver, worker, or agent tool:
+
+```ts
+interface ExistingOperationService<Input, Result, Row> {
+  run(
+    input: Input,
+    prepare: () => Promise<Result>,
+  ): Promise<Row>;
+
+  commitPrepared(
+    input: Input,
+    prepared: Result,
+  ): Promise<Row>;
+}
+```
+
+The existing rollout path calls `run` and preserves current behavior. The
+coordinated path wins the claim, prepares once, then calls `commitPrepared`.
+Both methods stay under the same application-service owner and enforce the same
+authorization and transition rules.
+
+When the transition permits it, implement `commitPrepared` as one SQL statement
+that acquires a transaction-level advisory lock, re-reads the row, validates
+its current state, and updates it. The statement's implicit transaction
+releases the advisory lock automatically. This can remove several sequential
+client/database round trips without replacing the existing database lock.
+
+Do not make any of these substitutions:
+
+- Do not assume a remote Ablo request joins a local Postgres transaction.
+- Do not remove database constraints or locks during the coordination rollout.
+- Do not prepare expensive work speculatively before the claim resolves.
+- Do not assume direct SQL writers obey an Ablo claim. A claim coordinates only
+  callers routed through the participating operation.
+- Do not use a claim as durable workflow state. A lease expires; workflow
+  progress must survive independently.
+
+Measure the old and coordinated paths with the same inputs. Record cold and
+warm claim acquire/release latency, database round-trip latency, database-lock
+duration, end-to-end latency, duplicate work under contention, and recovery
+after worker exit. Keep a per-operation switch to the old path until the new
+path preserves behavior and improves the selected race at production
+percentiles.
+
+For a runnable GraphQL.js implementation and PostgreSQL race/crash proof, see
+[GraphQL.js over an existing backend](./approaches/graphql/graphql-js.md).
+For a domain-neutral hosted lease proof, see
+[Verify hosted coordination separately](./examples/coordination-conformance.md).
+For the same operation boundary applied to source-versioned document
+processing, see
+[Process an existing document once](./examples/existing-document-pipeline.md).
 
 ## Choosing correctly
 

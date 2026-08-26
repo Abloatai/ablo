@@ -18,19 +18,21 @@ import type {
   InferCreate,
   InferRow,
 } from '@abloatai/transaction/schema/schema';
-import type { PresenceStream, Snapshot } from '@abloatai/transaction/types/streams';
+import type { PresenceStream } from '@abloatai/transaction/types/streams';
 import type { InstanceCache } from './local/InstanceCache.js';
 import type { SyncStoreContract } from './react/context.js';
 import type { SyncWebSocket, CoreSyncEventMap } from './local/sync/SyncWebSocket.js';
 import type { SyncStatus } from './local/BaseSyncedStore.js';
-import type { ModelOperations } from './local/client/createModelProxy.js';
+import type { ModelOperations } from './local/client/createModelOperations.js';
 import type {
   ClaimResource,
   CommitResource,
   CreateAgentClientParams,
   SessionResource,
-} from '@abloatai/transaction/resources/httpResources';
+} from '@abloatai/transaction/client/resources/httpResources';
 import type { EffectiveAuthority } from '@abloatai/transaction/auth';
+import type { ReadDependency } from '@abloatai/transaction/coordination';
+import type { CapturedRow } from '@abloatai/transaction/transport/http';
 export type { LocalReadOptions } from './local/client/resourceTypes.js';
 
 /** The typed sync engine client — one property per model in the schema */
@@ -310,25 +312,7 @@ export type AbloClient<S extends SchemaRecord> = {
    * Canonical low-level mutation API. Every untyped model write compiles
    * down to `commits.create(...)`.
    */
-  readonly commits: CommitResource;
-
-  /**
-   * Capture a context-staleness watermark over a set of entities.
-   * Returns a flat snapshot with `stamp` (thread into writes as
-   * `readAt`), `signal` (aborts on any captured-entity delta), and
-   * `onChange` (callback form). Reads from the engine's InstanceCache;
-   * subscription is on the engine's existing transport.
-   *
-   * Use before an LLM call to prevent the model from completing
-   * against now-stale data:
-   * ```ts
-   * const snap = engine.snapshot({ sections: report.sectionIds });
-   * await streamText({ messages, signal: snap.signal });
-   * ```
-   */
-  snapshot<ModelName extends keyof S & string>(
-    entities: Readonly<Record<ModelName, string | readonly string[]>>,
-  ): Snapshot<Schema<S>, ModelName>;
+  readonly commits: CommitResource<ReadDependency | CapturedRow>;
 
   /**
    * Subscribe to pushed frames — deltas, presence updates, claim grants and

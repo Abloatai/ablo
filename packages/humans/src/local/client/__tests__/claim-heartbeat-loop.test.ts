@@ -15,7 +15,7 @@ import {
   heartbeatCadenceMs,
   resolveHeartbeatPlan,
   startClaimHeartbeatLoop,
-} from '@abloatai/transaction/coordination/claimHeartbeatLoop';
+} from '@abloatai/transaction/claims';
 import { AbloClaimedError, AbloConnectionError } from '@abloatai/transaction/errors';
 
 describe('heartbeatCadenceMs', () => {

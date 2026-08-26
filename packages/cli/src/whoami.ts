@@ -151,10 +151,8 @@ export function selectWhoamiCredential(
   if (managementKey) {
     return {
       key: managementKey,
-      source: process.env.ABLO_MANAGEMENT_KEY
-        ? 'env:ABLO_MANAGEMENT_KEY'
-        : 'stored login',
-      targetSource: process.env.ABLO_MANAGEMENT_KEY ? 'env' : 'stored',
+      source: 'stored login',
+      targetSource: 'stored',
     };
   }
 

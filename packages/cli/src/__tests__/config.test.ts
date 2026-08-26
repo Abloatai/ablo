@@ -32,7 +32,6 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     dir = mkdtempSync(join(tmpdir(), 'ablo-cfg-'));
     process.env = { ...OLD_ENV, ABLO_CONFIG_DIR: dir };
     delete process.env.ABLO_API_KEY;
-    delete process.env.ABLO_MANAGEMENT_KEY;
     // The runtime-key chain reads ./.env.local and ./.env — pin cwd to the
     // fresh temp dir so a real project's env files can never leak into tests.
     oldCwd = process.cwd();
@@ -401,7 +400,7 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
   });
 
   describe('resolveManagementKey', () => {
-    it('prefers the dedicated override and never treats ABLO_API_KEY as management', () => {
+    it('uses an mk_ ABLO_API_KEY override but ignores runtime key classes', () => {
       setProfileKeys(
         'default',
         { management: { apiKey: 'mk_stored' } },
@@ -409,8 +408,9 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
       );
       process.env.ABLO_API_KEY = 'sk_test_runtime';
       expect(resolveManagementKey()).toBe('mk_stored');
-      process.env.ABLO_MANAGEMENT_KEY = 'mk_ci';
+      process.env.ABLO_API_KEY = 'mk_ci';
       expect(resolveManagementKey()).toBe('mk_ci');
+      expect(resolveOrgManagementKey()).toBe('mk_ci');
     });
 
     it('falls back across project profiles and skips expired management credentials', () => {

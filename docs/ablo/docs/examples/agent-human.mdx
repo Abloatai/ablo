@@ -28,7 +28,7 @@ a typed error if the row moved underneath you while the agent was busy.
 ## Schema-Backed Worker
 
 The worker uses the same schema client the app uses. It reads the record from the
-server with `get({ id })`, claims the row, and writes through
+server with `read({ id })`, claims the row, and writes through
 `ablo.records.update(...)` with a stale-check so a concurrent edit can't be
 overwritten.
 
@@ -52,8 +52,8 @@ const ablo = Ablo({
 export async function markDone(recordId: string) {
   await ablo.ready();
 
-  // get({ id }) is an async server read — await it.
-  const record = await ablo.records.get({ id: recordId });
+  // read({ id }) is an async server read — await it.
+  const record = await ablo.records.read({ id: recordId });
   if (!record) return { status: 'not_found' };
 
   try {
@@ -70,21 +70,9 @@ export async function markDone(recordId: string) {
     await using claim = acquired;
     if (claim.data.status === 'done') return { status: 'noop' };
 
-    // Inside an active claim, `update` is stale-checked automatically: the SDK
-    // attaches the claim's snapshot version as `readAt` and sets
-    // `onStale: 'reject'`. The write below is therefore equivalent to passing
-    // those options yourself:
-    //
-    //   ablo.records.update({
-    //     id: claim.data.id,
-    //     data: { status: 'done' },
-    //     readAt: <claim snapshot version>,
-    //     onStale: 'reject',
-    //   });
-    //
-    // If a newer version landed mid-run, the row no longer matches `readAt`, so
-    // the server rejects this commit with AbloStaleContextError (caught below)
-    // instead of clobbering that edit.
+    // The claim handle carries its acquisition snapshot. If a newer version
+    // somehow lands mid-run, the server rejects this commit with
+    // AbloStaleContextError instead of clobbering that edit.
     const updated = await ablo.records.update({
       id: claim.data.id,
       data: { status: 'done' },

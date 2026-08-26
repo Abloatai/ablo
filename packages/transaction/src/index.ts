@@ -17,31 +17,31 @@ export type {
   ObserveOptions,
   ObserveCursorStore,
   ObservedDelta,
-} from './transactionLayer.js';
-export { createTransactionClient } from './headlessClient.js';
+} from './client/contract.js';
+export { createTransactionClient } from './client/headless.js';
 export type {
   TransactionClient,
   TransactionClientOptions,
-} from './headlessClient.js';
+} from './client/headless.js';
 
 // The client entry point (ADR 0016). The bare import constructs the
 // coordination layer over request/response transport; the reactive
 // materialiser is the consumer package's entry point, layered above it.
-export { Ablo } from './ablo.js';
+export { Ablo } from './client/ablo.js';
 export type {
   AbloHttpClient,
   AbloHttpClientOptions,
   CapturedRow,
   HttpModelClient,
   HttpModelMutationParams,
-} from './transport/httpClient.js';
+} from './transport/http/client.js';
 /** What `ablo.<model>.list()` resolves to: the rows, and where the page ends. */
-export type { ModelList } from './resources/httpResources.js';
+export type { ModelList } from './client/resources/httpResources.js';
 export type {
   FunctionalUpdateOptions,
   /** @deprecated Use `FunctionalUpdateOptions`. */
   ContentionOptions,
-} from './resources/functionalUpdate.js';
+} from './client/resources/functionalUpdate.js';
 
 // The types the seam's signatures reference.
 export type {
@@ -60,7 +60,7 @@ export * from './errors.js';
 // published pricing page and the runtime caps both derive from.
 export * from './pricing.js';
 
-// Pre-seam leaf surfaces, kept for compatibility with the first extraction.
+// Deliberate root-level leaf surfaces.
 export * from './errorCodes.js';
 export * from './environment.js';
 export * from './branches.js';

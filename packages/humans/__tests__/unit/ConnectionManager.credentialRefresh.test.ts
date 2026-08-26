@@ -16,15 +16,16 @@
 
 import { ConnectionManager } from '../../src/local/sync/ConnectionManager';
 import type { ConnectionCallbacks } from '../../src/local/sync/ConnectionManager';
+import type { probeNetwork } from '@abloatai/transaction/transport/connection';
 
 // Keep the post-refresh re-probe off the network. 'unreachable' → PROBE_FAILED
 // → waiting_for_network, a deterministic resting state we don't assert on.
-// The probe moved into the confirmation core with the transport (ADR 0016);
-// mock the core module — the sync-engine path re-exports it, so both the
-// manager's internal import and this test's import resolve to this mock.
-jest.mock('@abloatai/transaction/transport/networkProbe', () => ({
-  probeNetwork: jest.fn(async () => ({ outcome: 'unreachable', latencyMs: null })),
-}));
+// The probe is a sibling of ConnectionManager inside the core's
+// `transport/connection` module (ADR 0016), so it cannot be substituted through
+// the package boundary. Drive it through the declared `probe` option instead.
+const mockedProbeNetwork: jest.MockedFunction<typeof probeNetwork> = jest.fn(
+  async () => ({ outcome: 'unreachable' as const, latencyMs: null }),
+);
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -36,7 +37,7 @@ function makeManager(refreshResult?: 'refreshed' | 'session_error' | 'network_er
     onDisconnectWebSocket: jest.fn(),
     onStateChange: jest.fn(),
   };
-  const cm = new ConnectionManager({ baseUrl: 'http://localhost:8080' });
+  const cm = new ConnectionManager({ baseUrl: 'http://localhost:8080', probe: mockedProbeNetwork });
   cm.start(callbacks);
   return { cm, callbacks };
 }
@@ -120,7 +121,7 @@ describe('ConnectionManager — refreshing_credential', () => {
       onDisconnectWebSocket: jest.fn(),
       onStateChange: jest.fn(),
     };
-    const cm = new ConnectionManager({ baseUrl: 'http://localhost:8080' });
+    const cm = new ConnectionManager({ baseUrl: 'http://localhost:8080', probe: mockedProbeNetwork });
     cm.start(callbacks);
     cm.state = 'probing_network';
 

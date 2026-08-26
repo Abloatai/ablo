@@ -45,7 +45,7 @@ describe('schemaToOpenApi', () => {
     expect(paths['/v1/models/items/{id}/claim']).toBeDefined();
     expect(paths['/v1/models/items/{id}/claim/reorder']).toBeDefined();
     expect(paths['/v1/commits']).toBeDefined();
-    // list + create + retrieve + update + delete verbs are present
+    // list + create + read + update + delete verbs are present
     expect((paths['/v1/models/items'] as Record<string, unknown>).get).toBeDefined();
     expect((paths['/v1/models/items'] as Record<string, unknown>).post).toBeDefined();
     const byId = paths['/v1/models/items/{id}'] as Record<string, unknown>;
@@ -231,7 +231,7 @@ describe('schemaToOpenApi operation names', () => {
 /**
  * The commit route is the one an agent cannot work without, and until now
  * neither spec documented its body — so a spec-driven client could not construct
- * a write, and `track` was invisible. These pin the contract in both documents.
+ * a write. These pin the contract in both documents.
  */
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => {
@@ -247,8 +247,9 @@ describe.each([
   const bodySchema = obj(obj(obj(obj(commit.requestBody).content)['application/json']).schema);
   const properties = obj(bodySchema.properties);
 
-  it('carries operations, reads, and track', () => {
-    expect(Object.keys(properties)).toEqual(expect.arrayContaining(['operations', 'reads', 'track']));
+  it('carries operations and reads', () => {
+    expect(Object.keys(properties)).toEqual(expect.arrayContaining(['operations', 'reads']));
+    expect(properties).not.toHaveProperty('track');
   });
 
   it('documents the Idempotency-Key header, which is where request identity lives', () => {
@@ -256,8 +257,8 @@ describe.each([
     expect(params.find((p) => p.name === 'Idempotency-Key')).toMatchObject({ in: 'header' });
   });
 
-  it('does not require operations, so a track-only commit is expressible', () => {
-    expect((bodySchema.required as string[] | undefined) ?? []).not.toContain('operations');
+  it('requires operations', () => {
+    expect((bodySchema.required as string[] | undefined) ?? []).toContain('operations');
   });
 });
 
@@ -305,6 +306,26 @@ describe('abloOpenApi generator readiness', () => {
           );
           expect(schema.$ref).toBe('#/components/schemas/ErrorEnvelope');
         }
+      }
+    }
+  });
+
+  it('publishes a contact and a concrete response example for every operation', () => {
+    expect(obj(spec.info).contact).toMatchObject({
+      name: 'Ablo Support',
+      email: 'support@abloatai.com',
+    });
+
+    for (const pathItem of Object.values(paths)) {
+      for (const [method, rawOperation] of Object.entries(obj(pathItem))) {
+        if (!['get', 'post', 'put', 'patch', 'delete'].includes(method)) continue;
+        const badRequest = obj(obj(obj(rawOperation).responses)['400']);
+        const media = obj(obj(badRequest.content)['application/json']);
+        expect(obj(obj(media.examples).validation).value).toMatchObject({
+          type: 'AbloValidationError',
+          code: 'invalid_request',
+          request_id: expect.any(String),
+        });
       }
     }
   });

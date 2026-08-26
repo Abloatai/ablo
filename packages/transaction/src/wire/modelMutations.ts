@@ -17,13 +17,7 @@
 
 import { z } from 'zod';
 import { logPositionSchema } from '../syncLog/contract.js';
-import {
-  onStaleModeSchema,
-  MAX_READ_SET_ENTRIES,
-  readDependencyListSchema,
-  readSetProjectionEntryCount,
-  trackDependencyListSchema,
-} from '../coordination/schema.js';
+import { readDependencyListSchema } from '../coordination/schema.js';
 
 export const modelMutationRequestSchema = z.object({
   /** The record. Its shape is your schema's; everything around it is protocol. */
@@ -43,8 +37,6 @@ export const modelMutationRequestSchema = z.object({
   id: z.string().nullish(),
   /** The claim this write is made under — a claim id you hold. */
   claim: z.string().nullish(),
-  /** What to do when the row moved since `readAt`. Defaults to rejecting. */
-  onStale: onStaleModeSchema.nullish(),
   /**
    * The watermark this write's decision was made against — the `stamp` from
    * the read. Ablo rejects the write if the row moved in between, which is
@@ -53,8 +45,6 @@ export const modelMutationRequestSchema = z.object({
   readAt: logPositionSchema.nullish(),
   /** Commit-lifetime dependencies checked with the single model operation. */
   reads: readDependencyListSchema.nullish(),
-  /** Durable dependencies registered with the single model operation. */
-  track: trackDependencyListSchema.nullish(),
   /**
    * The fencing token from the claim's grant. Closes the window `readAt` alone
    * cannot: a lease that lapsed and whose successor came and went.
@@ -62,8 +52,5 @@ export const modelMutationRequestSchema = z.object({
   fenceToken: z.number().nullish(),
   /** @compat HTTP idempotency belongs in the `Idempotency-Key` header. */
   idempotencyKey: z.string().optional(),
-}).refine((value) => readSetProjectionEntryCount(value) <= MAX_READ_SET_ENTRIES, {
-  path: ['reads'],
-  message: `reads and track may contain at most ${MAX_READ_SET_ENTRIES} entries combined`,
 });
 export type ModelMutationRequest = z.infer<typeof modelMutationRequestSchema>;

@@ -24,27 +24,27 @@ import type {
   DataSourceAdapter,
   MutationAdapter,
   Row,
-} from '../adapter.js';
-import { defineDatabaseAdapter } from '../adapterFactory.js';
-import { postgresAdapterProfile } from '../adapterProfile.js';
-import type { ChangeSet, EventsPage, Migration } from '../contract.js';
+} from './adapter.js';
+import { defineDatabaseAdapter } from './adapterFactory.js';
+import { postgresAdapterProfile } from './adapterProfile.js';
+import type { ChangeSet } from './contract.js';
+import type { Migration } from './migration.js';
 import {
   changeSetSchema,
-  outboxEventSchema,
   sourceCommitEchoMarkerSchema,
   sourceCommitEchoIntentSchema,
   type SourceCommitEchoIntent,
-} from '../contract.js';
+} from './contract.js';
 import {
   assertSourceIdempotencyIntent,
   assertSourceIdempotencyRetention,
   sourceChangeIntentHash,
   SOURCE_IDEMPOTENCY_RETENTION,
-} from '../idempotency.js';
+} from './idempotency.js';
 import {
   adapterTableMigrations,
   idempotencyLedgerMigrations,
-} from '../migrations.js';
+} from './migrations.js';
 import { ABLO_POSTGRES_COMMIT_ECHO_PREFIX } from '../types.js';
 import {
   authorizeSourceChange,
@@ -52,7 +52,12 @@ import {
   lockSourceSubjectCreates,
   rethrowStrictCreateConflict,
   sourceSyncGroups,
-} from '../subjectAuthorization.js';
+} from './subjectAuthorization.js';
+import {
+  decodeDatabaseOutboxEvent,
+  ENDPOINT_OUTBOX_PRUNE_BATCH_SIZE,
+  type EventsPage,
+} from '../outbox/index.js';
 import {
   createKyselyMutationCore,
   kyselyOperationRowId,
@@ -403,6 +408,7 @@ export function createKyselyMutationAdapter(
                 entity_id: entityId,
                 type: operation.type,
                 data: operation.type === 'DELETE' ? null : JSON.stringify(row),
+                event_version: 2,
                 sync_groups: options.schema
                   ? sourceSyncGroups(options.schema, operation.model, row)
                   : [],
@@ -449,6 +455,22 @@ export function kyselyDataSource<S extends SchemaRecord>(
     ...mutation,
     capabilities: { ...mutation.capabilities, outboxEvents: true },
 
+    async acknowledgeEvents(acknowledgedThrough: string): Promise<void> {
+      await db.transaction().execute(async (transaction) => {
+        await transaction.executeQuery(
+          rawQuery(
+            'ablo-outbox-prune-acknowledged',
+            `DELETE FROM ablo_outbox
+              WHERE cursor IN (
+                SELECT cursor FROM ablo_outbox
+                 WHERE cursor <= $1 ORDER BY cursor ASC LIMIT $2
+            )`,
+            [acknowledgedThrough, ENDPOINT_OUTBOX_PRUNE_BATCH_SIZE],
+          ),
+        );
+      });
+    },
+
     async events(cursor: string | null, limit: number): Promise<EventsPage> {
       const rows = await db
         .selectFrom('ablo_outbox')
@@ -457,22 +479,7 @@ export function kyselyDataSource<S extends SchemaRecord>(
         .orderBy('cursor', 'asc')
         .limit(limit)
         .execute();
-      const events = rows.map((row) =>
-        outboxEventSchema.parse({
-          id: row.id,
-          model: row.model,
-          entityId: row.entity_id,
-          type: row.type,
-          data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data ?? null,
-          syncGroups: row.sync_groups ?? [],
-          organizationId: row.organization_id ?? null,
-          clientTxId: row.client_tx_id ?? null,
-          correlationId: row.correlation_id ?? null,
-          transactionId: row.transaction_id ?? null,
-          occurredAt: row.occurred_at != null ? Number(row.occurred_at) : null,
-          cursor: String(row.cursor),
-        }),
-      );
+      const events = rows.map(decodeDatabaseOutboxEvent);
       return { events, nextCursor: events.at(-1)?.cursor ?? null };
     },
   });

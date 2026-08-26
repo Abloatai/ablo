@@ -4,7 +4,7 @@ describe('ServerDeltaSchema', () => {
   it('accepts the delta shape the server actually sends', () => {
     // The bootstrap route returns `ServerSyncDelta` rows straight from the
     // adapter (apps/sync-server/src/storage/bootstrap.ts), and that shape is
-    // `serverSyncDeltaSchema` in @abloatai/transaction/wire/delta — `actionType`
+    // `serverSyncDeltaSchema` in @abloatai/transaction/observation — `actionType`
     // and `modelId`. Every other case in this file feeds a spelling no
     // producer emits, so this is the one that pins the decoder to its source.
     const fromTheServer = {

@@ -3,13 +3,11 @@
  *
  * Ablo treats people and AI agents alike as participants working on live
  * application entities. A participant announces what it is reading or editing,
- * claims an entity before writing to it, and captures a context snapshot before
- * starting long-running AI work. You keep your own schema, agent stack, tools,
+ * claims an entity before writing to it, and carries exact reads into later
+ * writes. You keep your own schema, agent stack, tools,
  * prompts, and product rules; this package provides the shared coordination
  * layer underneath.
  */
-
-import type { InferModel, Schema } from '../schema/schema.js';
 
 // The shape of a claim's application metadata is declared once, on `Register`.
 // This module reads it back rather than restating it, so the default of every
@@ -20,7 +18,6 @@ import type { ResolveClaimMeta } from './global.js';
 // They are imported here so the rest of this file can reference them, and
 // re-exported so consumers can keep importing them from this module.
 import type {
-  OnStaleMode,
   WireClaim,
   ClaimRejection,
   ClaimLost,
@@ -30,7 +27,6 @@ import type {
   PresenceUpdatePayload,
 } from '../coordination/schema.js';
 export type {
-  OnStaleMode,
   WireClaim,
   ClaimRejection,
   ClaimLost,
@@ -60,9 +56,9 @@ import type { ParticipantRef } from './participant.js';
 export type { ParticipantRef } from './participant.js';
 
 // The delta and approval-stage vocabulary are declared once in
-// `wire/delta.ts`; this module re-serves them for source compatibility.
-import type { Delta } from '../wire/delta.js';
-export type { ConfirmationState, Delta } from '../wire/delta.js';
+// `observation/contract.ts`; this module re-serves them for source compatibility.
+import type { Delta } from '../observation/contract.js';
+export type { ConfirmationState, Delta } from '../observation/contract.js';
 
 /**
  * @deprecated Renamed to {@link Delta} — the authoritative change feed serves
@@ -70,56 +66,6 @@ export type { ConfirmationState, Delta } from '../wire/delta.js';
  * Removed in 0.36.0.
  */
 export type AgentDelta = Delta;
-
-// ─────────────────────────────────────────────────────────────────────
-//  Snapshots — context watermarks for long-running work
-// ─────────────────────────────────────────────────────────────────────
-
-/**
- * A flat, point-in-time view of application data returned by
- * `participant.snapshot(...)`. Capture it before long-running AI work, then
- * detect whether the data changed underneath while that work ran.
- *
- *   - Per-model buckets: `snap.<modelName>[id]` returns the entity, typed from
- *     your schema (via `InferModel`) rather than as `unknown` — so, for
- *     example, `snap.clauses[clauseId].text` is a `string`.
- *   - `stamp` — an opaque version marker. Thread it into writes as
- *     `{ readAt: snap.stamp }` so the server can reject a write made against
- *     stale data.
- *   - `signal` — an `AbortSignal` that fires if any captured entity receives a
- *     change during the window. Pass it into your LLM call so a mid-generation
- *     change aborts the token stream instead of completing against a snapshot
- *     that is no longer current.
- *   - `onChange(fn)` — a callback alternative to `signal` for cases that don't
- *     abort, such as logging, UI flags, or partial regeneration. Returns an
- *     unsubscribe function.
- *
- * The per-model buckets share the object with `stamp`, `signal`, and
- * `onChange`, so naming a model `stamp`, `signal`, or `onChange` collides.
- * Snapshot creation throws a clear error in that case.
- */
-export type Snapshot<
-  TSchema extends Schema = Schema,
-  ModelName extends keyof TSchema['models'] = keyof TSchema['models'],
-> = {
-  readonly stamp: number;
-  readonly signal: AbortSignal;
-  onChange(listener: (change: ContextChange) => void): () => void;
-} & {
-  readonly [M in ModelName]: Readonly<Record<string, InferModel<TSchema, M>>>;
-};
-
-export interface ContextChange {
-  readonly model: string;
-  readonly id: string;
-  readonly severity: 'semantic' | 'metadata';
-}
-
-/**
- * The staleness mode for a write that follows a snapshot. When `readAt` is
- * provided without an `onStale` mode, it defaults to `'reject'`.
- */
-// `OnStaleMode` is defined in `../coordination/schema` and re-exported above.
 
 // ─────────────────────────────────────────────────────────────────────
 //  Coordination primitives — a live stream, not polling
@@ -484,8 +430,8 @@ export interface ClaimStream {
   /**
    * Observe losing a claim you held — distinct from `onRejected`, which is a
    * claim the server refused to grant. Fires when the server reports the loss,
-   * carrying why: `'preempted'` (a privileged participant evicted you) or
-   * `'expired'` (your lease lapsed). This lets a holder react — re-plan or
+   * carrying why: `'preempted'` (the fairness ceiling advanced a queued waiter)
+   * or `'expired'` (your lease lapsed). This lets a holder react — re-plan or
    * re-claim — rather than discovering the lease gone through presence.
    *
    * ```ts

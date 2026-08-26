@@ -9,7 +9,7 @@ import {
   commitStatusSchema,
   commitWaitSchema,
   mutationResultPayloadSchema,
-} from '@abloatai/transaction/wire/commit';
+} from '../../commit/contract.js';
 
 const CREATED_AT = '2026-08-05T10:00:00.000Z';
 const STATUS_AT = '2026-08-05T10:00:00.058Z';
@@ -205,11 +205,10 @@ describe('flattened commit record', () => {
     authority,
     claims: [],
     createdAt: CREATED_AT,
-    readSet: [{
-      target: { scope: 'row' as const, model: 'Item', id: 'item-1' },
-      watermark: 17,
-      lifetime: 'commit' as const,
-      onStale: 'reject' as const,
+    reads: [{
+      model: 'Item',
+      id: 'item-1',
+      readAt: 17,
     }],
     operations: [{ action: 'update', model: 'Item', id: 'item-1', data: { retention: 'redacted' } }],
     receipt: { clientTxId: 'commit-1', serverTxId: 'server-1', ops: 1 },

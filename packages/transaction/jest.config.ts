@@ -1,4 +1,5 @@
 import type { Config } from 'jest';
+import { transactionSourceModuleMapper } from './sourceModuleMapper.mjs';
 
 const config: Config = {
   testEnvironment: 'node',
@@ -21,10 +22,8 @@ const config: Config = {
   moduleFileExtensions: ['ts', 'js', 'json'],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
-    '^@abloatai/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks)$':
-      '<rootDir>/src/$1/index.ts',
-    '^@abloatai/transaction/(.*)$': '<rootDir>/src/$1.ts',
-    '^@abloatai/transaction$': '<rootDir>/src/index.ts',
+    // Every subpath, derived from this package's own `@ablo/source` exports.
+    ...transactionSourceModuleMapper(),
   },
   testTimeout: 10000,
 };

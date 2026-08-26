@@ -34,6 +34,16 @@ interface ProviderSpec {
   readonly isPooledHost?: (hostname: string) => boolean;
   /** The direct target derived from a pooled one, when the name alone determines it. */
   readonly directTarget?: (hostOrTarget: string) => string;
+  /**
+   * The role to grant when this provider withholds the REPLICATION attribute.
+   *
+   * Postgres lets a role hand out only the attributes it holds, and a managed
+   * provider keeps REPLICATION on an internal superuser, so `CREATE ROLE ...
+   * REPLICATION` fails for the customer's own admin. Each provider exposes the
+   * capability as a grantable role instead, and the name differs, which is why
+   * this belongs beside the provider rather than in the recipe.
+   */
+  readonly replicationGrantRole?: string;
 }
 
 const PROVIDERS = [
@@ -62,6 +72,9 @@ const PROVIDERS = [
     logicalReplication: `set rds.logical_replication = 1 in the instance's parameter group, then reboot`,
     // RDS Proxy fronts the instance under a `.proxy-` subdomain.
     isPooledHost: (hostname) => hostname.includes('.proxy-'),
+    // Neither the master user nor rds_superuser carries REPLICATION; AWS keeps
+    // it on rdsadmin and exposes it through this role.
+    replicationGrantRole: 'rds_replication',
   },
 ] as const satisfies readonly ProviderSpec[];
 
@@ -164,6 +177,20 @@ export function detectPooler(hostOrTarget: string): PooledHost | null {
 }
 
 /** How to reach `wal_level = logical` on each provider, in one plain sentence. */
+/**
+ * The role that carries REPLICATION on this provider, when the attribute cannot
+ * be granted directly. Null where the provider has no such role, or where the
+ * admin holds the attribute already and no substitute is needed.
+ */
+export function replicationGrantRole(provider: DbProvider): string | null {
+  // Typed as the interface rather than the inferred literal union: `as const`
+  // narrows each entry to exactly the keys it wrote, so an optional one is
+  // absent from the union's type even though the table declares it.
+  const specs: readonly ProviderSpec[] = PROVIDERS;
+  const spec = specs.find((candidate) => candidate.id === provider);
+  return spec?.replicationGrantRole ?? null;
+}
+
 export function logicalReplicationGuidance(provider: DbProvider): string {
   const spec = PROVIDERS.find((p) => p.id === provider);
   if (spec) return spec.logicalReplication;

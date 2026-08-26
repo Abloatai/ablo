@@ -15,8 +15,10 @@
  * | `current_settled_sync_id()`        | nothing at or below is still in flight    |
  * | `getCommittedSyncId`               | committed, without waiting for the barrier|
  * | `sync_broadcast_cursors.published_through` | the fan-out published through     |
- * | `Client.lastSentSyncId`            | this recipient was offered through        |
- * | `Client.lastAckedSyncId`           | this recipient confirmed through          |
+ * | `log_subscriptions.position`       | this participant was served through, in
+ *                                        the area the same row names            |
+ * | `Client.lastSentSyncId`            | this socket was offered through           |
+ * | `Client.lastAckedSyncId`           | this socket confirmed through             |
  * | `LogPosition.applied`              | the client processed on arrival through   |
  * | `LogPosition.persisted`            | the client durably holds through, in
  *                                        DELIVERED order, not numeric order       |
@@ -36,6 +38,21 @@
  * own head, re-taking the plane lock on every catch-up poll
  * (docs/plans/delivery-verify-at-read.md). Before comparing two positions, say
  * out loud which owner each belongs to.
+ *
+ * ## The owner is a relation, not just a name
+ *
+ * This doc did its job on the NUMBER and could not do it for the relation that
+ * holds one. `log_subscriptions.position` is the durable answer to "where is
+ * this participant, in this area" (ADR 0036) — one record per
+ * `(participant, area)`, with no connection axis, from which delivery and
+ * liveness are projected. The two `Client` fields above are deliberately NOT
+ * folded into it: they are an in-flight socket's frame accounting, which is why
+ * they name a socket rather than a participant.
+ *
+ * The rest of the table is ENGINE-owned and stays separate on purpose. The
+ * fan-out's progress, the compaction checkpoint and the settled head answer a
+ * different question from "where is this participant", and collapsing them
+ * would recreate the exact comparison this doc warns about.
  */
 
 import { z } from 'zod';

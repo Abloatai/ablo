@@ -1,0 +1,80 @@
+# TypeScript library
+
+> Construct the TypeScript client used by one focused Ablo integration approach.
+
+Use `@abloatai/ablo` from a Node.js server, worker, server action, or agent. This
+page owns client construction and lifecycle only. Choose an approach page for
+the application structure around it.
+
+## Server client
+
+Import the application-owned schema and construct an HTTP client for a stateless
+server runtime:
+
+```ts
+// src/ablo/client.ts
+import Ablo from '@abloatai/ablo';
+import { schema } from './schema.js';
+
+export function createServerClient(input: {
+  apiKey: string;
+  baseURL?: string;
+}) {
+  return Ablo({
+    schema,
+    apiKey: input.apiKey,
+    transport: 'http',
+    ...(input.baseURL ? { baseURL: input.baseURL } : {}),
+  });
+}
+
+export type ServerClient = ReturnType<typeof createServerClient>;
+```
+
+The credential supplies identity and authority. Derive it from the trusted
+request, worker, or agent boundary; do not accept an organization or scope from
+model output.
+
+## Schema owner
+
+Keep the schema below the Ablo boundary:
+
+```text
+src/ablo/
+├── index.ts
+├── client.ts
+└── schema.ts
+```
+
+`index.ts` is the only path other application subsystems should enter. Export
+the client constructor, its inferred type, and the schema. Do not duplicate the
+schema's row types; derive them from the client or the schema helpers.
+
+## Lifecycle
+
+Call `ready()` before relying on server-confirmed identity or schema state, and
+dispose clients owned by a finite worker or request scope:
+
+```ts
+const ablo = createServerClient({ apiKey });
+try {
+  await ablo.ready();
+  // Call one application-owned operation.
+} finally {
+  await ablo.dispose();
+}
+```
+
+A long-lived application may own one long-lived client instead. The owner that
+constructs the client also owns disposal.
+
+## Choose the approach
+
+- [GraphQL.js over an existing backend](../approaches/graphql/graphql-js.md) —
+  keep GraphQL as a projection over named application operations.
+- [Agents](../agents.md) — run a stateless agent worker.
+- [Temporal](../integrations/temporal.md) — keep Ablo calls inside Activities.
+- [Inngest](../integrations/inngest.md) — keep Ablo effects inside steps.
+
+For exact model methods and errors, use the [API reference](../api.md) and
+[Client Behavior](../client-behavior.md). This page does not restate them.

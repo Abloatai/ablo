@@ -39,16 +39,12 @@
  */
 
 import { ConnectionManager, type ConnectionCallbacks } from '../../src/local/sync/ConnectionManager';
-import { probeNetwork } from '@abloatai/transaction/transport/networkProbe';
+import type { probeNetwork } from '@abloatai/transaction/transport/connection';
 
-// The probe moved into the confirmation core with the transport (ADR 0016);
-// mock the core module — the sync-engine path re-exports it, so both the
-// manager's internal import and this test's import resolve to this mock.
-jest.mock('@abloatai/transaction/transport/networkProbe', () => ({
-  probeNetwork: jest.fn(async () => ({ outcome: 'reachable', latencyMs: 1 })),
-}));
-
-const mockedProbeNetwork = probeNetwork as jest.MockedFunction<typeof probeNetwork>;
+// The probe is a sibling of ConnectionManager inside the core's
+// `transport/connection` module (ADR 0016), so it cannot be substituted through
+// the package boundary. Drive it through the declared `probe` option instead.
+const mockedProbeNetwork: jest.MockedFunction<typeof probeNetwork> = jest.fn();
 
 function makeCallbacks(): ConnectionCallbacks {
   return {
@@ -71,7 +67,7 @@ describe('ConnectionManager — recovery after a WS drop on a healthy network', 
   });
 
   it('actively probes and reconnects after WS_DISCONNECTED — no browser event needed', async () => {
-    const cm = new ConnectionManager({ baseUrl: 'https://mesh.example.com' });
+    const cm = new ConnectionManager({ baseUrl: 'https://mesh.example.com', probe: mockedProbeNetwork });
     const cbs = makeCallbacks();
     cm.start(cbs);
     expect(cm.state).toBe('connected');
@@ -94,7 +90,7 @@ describe('ConnectionManager — recovery after a WS drop on a healthy network', 
   });
 
   it('a genuine NETWORK_LOST still waits passively for the `online` event', async () => {
-    const cm = new ConnectionManager({ baseUrl: 'https://mesh.example.com' });
+    const cm = new ConnectionManager({ baseUrl: 'https://mesh.example.com', probe: mockedProbeNetwork });
     const cbs = makeCallbacks();
     cm.start(cbs);
 
@@ -118,7 +114,7 @@ describe('ConnectionManager — recovery after a WS drop on a healthy network', 
 
   it('a WS drop whose probe is unreachable backs off (does not reconnect-loop)', async () => {
     mockedProbeNetwork.mockResolvedValue({ outcome: 'unreachable', latencyMs: 1 });
-    const cm = new ConnectionManager({ baseUrl: 'https://mesh.example.com' });
+    const cm = new ConnectionManager({ baseUrl: 'https://mesh.example.com', probe: mockedProbeNetwork });
     const cbs = makeCallbacks();
     cm.start(cbs);
 

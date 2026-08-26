@@ -117,6 +117,9 @@ export function planFor(
   // manages itself, `ablo_idempotency` and `ablo_outbox`. Their definitions come
   // from a single source and use `IF NOT EXISTS`, so re-running is safe and the
   // command never has to ask you to paste table-creation SQL by hand.
+  // Adapter infrastructure remains in `public`, matching the unqualified
+  // runtime queries issued by every endpoint adapter. `targetSchema` applies
+  // only to application models.
   const adapterTables = adapterTableMigrations().map((m) => m.up);
   return { statements: [...plan.statements, ...adapterTables], concurrent: plan.concurrent ?? [] };
 }

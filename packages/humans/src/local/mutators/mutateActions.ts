@@ -23,8 +23,9 @@ type UpdatePatch<S extends Schema, K extends keyof S['models'] & string> =
 
 export interface MutateActions<S extends Schema, K extends keyof S['models'] & string> {
   /**
-   * Create one entity, or an array of entities in a single tick. ID,
-   * createdAt, updatedAt, organizationId default automatically per row.
+   * Create one entity, or an array of entities in a single tick. The id and
+   * the tenancy value default per row; every other column, audit timestamps
+   * included, comes from the declared fields.
    */
   create(data: InferCreate<S, K>): Promise<InferModel<S, K>>;
   create(data: InferCreate<S, K>[]): Promise<InferModel<S, K>[]>;

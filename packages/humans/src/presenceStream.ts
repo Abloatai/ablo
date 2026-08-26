@@ -23,8 +23,8 @@
  *       `leave`.
  */
 
-import type { WsTransport } from '@abloatai/transaction/transport/wsTransport';
-import type { PresenceUpdate } from '@abloatai/transaction/transport/wsTransport';
+import type { WsTransport } from '@abloatai/transaction/transport/websocket';
+import type { PresenceUpdate } from '@abloatai/transaction/transport/websocket';
 import type {
   Activity,
   Peer,

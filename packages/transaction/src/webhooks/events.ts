@@ -11,7 +11,7 @@
  * skip a change it has already processed, and to apply changes in the order they
  * were committed.
  */
-import type { SyncDeltaAction } from '@abloatai/transaction/wire/delta';
+import type { SyncDeltaAction } from '../observation/contract.js';
 
 /**
  * Maps each delta action code to the verb that appears in an event type. Only

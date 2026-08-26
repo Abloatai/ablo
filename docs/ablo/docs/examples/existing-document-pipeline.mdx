@@ -1,0 +1,488 @@
+---
+title: "Existing Document Pipeline"
+description: "This is an advanced evidence-backed state reference, not the default Ablo integration tutorial. If you are coordinating an operation that already owns its Postgres write, start with the [Agent Integration Decision Guide](../agent-integration-decision-guide.md)."
+sidebar:
+  icon: file-check-2
+---
+
+> Coordinate expensive processing over an application-owned document without taking ownership of uploads or storage.
+
+This TypeScript example begins with a stable document identifier. The existing
+application service resolves that identifier to the current source version and
+remains authoritative for authorization, database locking, idempotency, and the
+processing result. Ablo selects one participating worker before whole-document
+extraction and can coordinate individual processing-run page rows independently.
+
+The complete runnable example is
+[`examples/existing-document-pipeline`](../../../../examples/existing-document-pipeline/README.md).
+
+## File structure
+
+```text
+src/documents/index.ts
+  -> src/documents/schema.ts
+  -> src/documents/processDocument/index.ts
+       -> src/documents/processDocument/existingPath.ts
+       -> src/documents/processDocument/coordinatedPath.ts
+       -> src/documents/processDocument/contract.ts
+       -> src/documents/processDocument/sourceChanged.ts
+  -> src/documents/coordination/index.ts
+       -> src/documents/coordination/client.ts
+       -> src/documents/coordination/contract.ts
+  -> src/documents/fields/index.ts
+       -> src/documents/fields/mapExtractResult.ts
+       -> src/documents/fields/fieldIdentity.ts
+       -> src/documents/fields/contract.ts
+  -> src/documents/pages/index.ts
+       -> src/documents/pages/claimPage.ts
+       -> src/documents/pages/mapParseResult.ts
+       -> src/documents/pages/pageIdentity.ts
+       -> src/documents/pages/contract.ts
+  -> src/documents/search/index.ts
+       -> src/documents/search/buildSearchProjection.ts
+       -> src/documents/search/planSearchProjectionPublication.ts
+       -> src/documents/search/searchDocuments.ts
+       -> src/documents/search/inMemoryBackend.ts
+       -> src/documents/search/searchIdentity.ts
+       -> src/documents/search/contract.ts
+  -> src/documents/review/index.ts
+       -> src/documents/review/addAnnotation.ts
+       -> src/documents/review/requestReview.ts
+       -> src/documents/review/signOffReview.ts
+       -> src/documents/review/abloRepository.ts
+       -> src/documents/review/reviewIdentity.ts
+       -> src/documents/review/contract.ts
+```
+
+Enter through `src/documents/index.ts`. The processing operation and its
+failure contract live below that owner. Ablo client construction and the claim
+namespace live below `src/documents/coordination/index.ts`; they do not become a
+generic file service.
+
+The documented public operations are `createDocumentOperations`, `claimPage`,
+`mapFullParseResult`, `mapPdfExtractResultWithCitations`,
+`createSearchDocumentsOperation`, `planSearchProjectionPublication`,
+`createDocumentReviewOperations`, and `createAbloReviewAdapter`.
+
+`structure.json` declares the exact TypeScript inventory, those documented
+operations, and the permitted cross-capability dependency edges. The structure
+test rejects missing or unexpected files, missing documented operation exports,
+undeclared lateral imports, and dependency cycles. This reduces structural
+drift; it does not validate the meaning of every prose description.
+
+## Source pages and processing-run evidence
+
+The metadata graph is:
+
+```text
+documents
+├── documentPages                         stable source pages
+└── documentProcessingRuns
+    ├── documentProcessingRunPages        claimable output pages
+    │   └── documentBlocks                run-owned parse evidence
+    ├── documentExtractionRuns
+    │   └── documentExtractedFields
+    │       └── documentFieldCitations    references block + source page
+    ├── documentSearchProjections
+    │   └── documentSearchEntries         versioned projection targets
+    ├── documentAnnotations               recorded body + retained target
+    └── documentReviewIssues              durable review state
+        └── documentReviewEvents          operations append decisions
+```
+
+Do not combine a source page with one parser run's output page. A source page is
+identified by document ID, source version, and source page number. A run page
+links that stable page to a processing run and records the output position for
+that invocation. Blocks belong to the run page, so rerunning the same source
+does not overwrite prior evidence.
+
+The parent ownership path is document → processing run → run page → block. The
+run page also carries direct document and source-page references for scoped
+reads and provenance.
+
+These models describe application-owned tables or projections exposed through
+Ablo; they do not transfer migration authority to an agent. The existing
+application owns their DDL, foreign keys, constraints, authorization, and
+backfill. `fk: true` documents the expected connected-database contract.
+
+The parser adapter is vendor-neutral, but its input deliberately matches the
+useful parts of Reducto's current Parse response:
+
+| Parser response | Local evidence |
+|---|---|
+| `usage.num_pages` | `documentProcessingRuns.processedPageCount` |
+| `bbox.page` | `documentProcessingRunPages.outputPageNumber` |
+| requested page manifest / `bbox.original_page` | `documentPages.sourcePageNumber` |
+| block `type` and `content` | `documentBlocks.blockType` and `content` |
+| normalized `left`, `top`, `width`, `height` | block geometry |
+| categorical and granular confidence | block confidence fields |
+
+Reducto documents blocks as atomic page elements with normalized `[0,1]`
+bounding boxes, one-indexed processed and original page numbers, and parse or
+extract confidence. The two page numbers differ when a page range is parsed.
+[Reducto Parse response format](https://docs.reducto.ai/parse/response-format).
+
+`mapFullParseResult` accepts only an inline response whose `result.type` is
+`full`. Resolve a URL-backed result before calling it. The adapter also requires
+the ordered source-page manifest used for the request. This preserves blank and
+noncontiguous source pages without guessing an offset from returned blocks. The
+processing run records `processorName` and `processorVersion`; preserve provider
+block types at this adapter boundary and normalize them later only through an
+explicit, versioned domain mapping.
+
+Do not assign `chunks[].content` to a page by default. Reducto chunks group
+blocks according to the selected chunking strategy and only become one chunk
+per page when page chunking is requested.
+[Reducto chunking methods](https://docs.reducto.ai/configs/parse/chunking-methods).
+
+Extracted values can carry multiple citations with their own bounding boxes,
+source content, parent block, and parse/extract confidence. Keep those as a
+field-to-evidence relation rather than flattening them into the page row.
+[Reducto Extract citations](https://docs.reducto.ai/extract/response-format).
+
+Persist parser URLs only when the provider guarantees they are durable. Signed
+or temporary image URLs are retrieval details, not provenance. Likewise,
+`documentBlocks.content` and `documentExtractedFields.valueJson` are illustrative
+evidence: applications handling sensitive documents should synchronize only
+content an agent may receive, or retain a durable evidence reference and
+geometry instead.
+
+## Extracted fields and citations
+
+An extraction run records the extractor and extraction-schema versions. Fields
+belong to that run and use RFC 6901 JSON-pointer paths such as `/total` and
+`/line_items/0/amount`. This makes nested array items addressable without
+turning dynamic field names into database columns. `valueJson` preserves the
+typed provider value while `valueType` supports safe projection and display.
+
+`mapPdfExtractResultWithCitations` recursively maps the citation-enabled
+`{ value, citations }` shape. It is intentionally a PDF/image adapter:
+spreadsheet citations use cell coordinates and require a separate adapter.
+
+Every accepted citation must resolve uniquely through:
+
+```text
+extracted field
+  -> field citation
+    -> processing-run page
+      -> run-owned parse block
+        -> stable source page
+```
+
+The adapter rejects unwrapped leaves, field-count mismatches, non-JSON values,
+page-manifest mismatches, invalid normalized geometry or confidence, and
+orphaned or ambiguous block evidence. This is stricter than merely retaining a
+provider citation blob: an agent can follow typed relations to the exact source
+page and rectangle used for its conclusion.
+
+## Grounded document search
+
+Search is a rebuildable projection, not another source of document truth.
+`buildDocumentSearchProjection` creates two entry kinds behind one contract:
+
+This is the query-side read-model separation described by the CQRS pattern;
+the projection can be regenerated from the authoritative evidence records.
+[Microsoft CQRS pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs).
+
+| Entry kind | Searchable text | Required evidence |
+|---|---|---|
+| `parse_block` | block type and content | block → run page → source page |
+| `extracted_field` | field path, typed value, and cited content | field → citation → block → source page |
+
+Every entry carries `documentId`, projection and processing-run IDs, stable
+source page, run page, block, normalized geometry, display text, and its source
+kind. Field hits additionally carry field path, typed JSON value, and citation
+ID. A search result is therefore immediately usable as agent evidence; the
+resolver does not have to reconstruct provenance after ranking.
+
+`createSearchDocumentsOperation` is the application boundary. It authorizes the
+document before calling the backend and rejects scope leaks, excluded source
+kinds, invalid scores, projection mismatches, excessive result counts, empty
+queries, and unsafe limits. Agent tools and GraphQL resolvers call this named
+operation rather than querying a search table directly:
+
+```ts
+const searchDocuments = createSearchDocumentsOperation({
+  authorize: (documentId) => policy.requireDocumentRead(documentId),
+  backend: postgresDocumentSearch,
+});
+
+const resolvers = {
+  Document: {
+    search: (document, args, context) =>
+      context.documents.search({
+        documentId: document.id,
+        query: args.query,
+        limit: args.limit,
+      }),
+  },
+};
+```
+
+The included in-memory backend exists only to test this contract. A PostgreSQL
+backend can use full-text search and ranking over `searchText`, normally with a
+GIN index for a frequently searched text vector. PostgreSQL documents GIN as
+the preferred text-search index type.
+[PostgreSQL full-text search](https://www.postgresql.org/docs/current/textsearch.html)
+and [text-search index types](https://www.postgresql.org/docs/current/textsearch-indexes.html).
+
+Use `pg_trgm` separately when issuer names, identifiers, or misspellings need
+similarity matching. It supports indexed similarity plus `LIKE` and `ILIKE`, but
+its threshold and ranking behavior remain backend policy—not fields agents may
+mutate through Ablo.
+[PostgreSQL `pg_trgm`](https://www.postgresql.org/docs/current/pgtrgm.html).
+
+Projection IDs include the processing run, optional extraction run, and
+projection version. Build new rows, publish the new projection as ready, then
+supersede the old projection. Persisting entries and publishing readiness should
+be one application-owned atomic commit so readers never observe a partial
+index. The original blocks, fields, and citations remain unchanged and can
+rebuild search after tokenizer, language, or ranking policy changes.
+
+`planSearchProjectionPublication` makes retention explicit. It only replaces a
+ready projection with a different ready version over the same evidence. When an
+annotation, issue, or review event still references any entry in the current
+version, the plan retains that complete immutable snapshot rather than pruning
+unreferenced siblings and leaving a historically incomplete projection. With no
+references, the complete superseded snapshot becomes removable. The hard
+foreign keys from review records to search entries remain the database
+backstop; the publication operation owns the normal lifecycle policy.
+
+## Guarded annotations and review
+
+Annotations and review issues target a retained, versioned
+`documentSearchEntry`. The
+annotation body records what a human or agent said; the target retains the
+processing run, page, block, citation, geometry, and evidence identity that the
+statement refers to. This follows the W3C Web Annotation model's useful body / target
+distinction without claiming full protocol conformance.
+[W3C Web Annotation Data Model](https://www.w3.org/TR/annotation-model/).
+
+Enter through `src/documents/review/index.ts`. A UI, agent tool, or GraphQL
+resolver calls the named `addAnnotation`, `requestReview`, or `signOff`
+operation. It does not expose generic status updates as the business API.
+Authorization, valid transitions, attribution, idempotency, evidence checks,
+and atomic writes therefore have one owner.
+
+The Ablo adapter is deliberately thin:
+
+```ts
+const ctx = await context({
+  ablo,
+  data: {
+    issue: ablo.documentReviewIssues.get({ id: issueId }),
+    target: ablo.documentSearchEntries.get({ id: searchEntryId }),
+  },
+});
+
+await ablo.commits.create({
+  operations: [issueUpdate, signedOffEventCreate],
+  reads: ctx.reads,
+  claim: issueClaim,
+  idempotencyKey,
+});
+```
+
+The coordination responsibilities are deliberately separate:
+
+```text
+claim
+  -> reserves the target for one participant while the lease is valid
+  -> commit-time fencing rejects a stale or lost holder
+
+context().reads
+  -> rejects the commit when a captured premise changed
+
+atomic commit
+  -> persists the complete Ablo state transition together or not at all
+
+idempotency key
+  -> deduplicates an identical commit within its documented scope
+```
+
+`requestReview` captures the target and optional annotation together, validates
+that both name the same recorded evidence pointer, then atomically creates the issue
+and its `requested` event. `signOff` first claims the issue row, then reads the
+issue and target after the claim is granted, and atomically updates the status
+with a `signed_off` event. If either captured row changes before the commit, the
+batch rejects as stale.
+
+The claim is a temporary lease, not workflow storage. A valid claim reserves
+the target for one participant. Foreign commits are rejected while it is held,
+and a stale or lost holder is fenced at commit time. Workers that must exclude
+one another require distinct participant credentials: clients sharing one
+credential are the same participant and do not exclude each other.
+[Ablo coordination](/coordination) documents the participant and transport
+semantics. Lease-based systems must expect work to overlap after pauses or
+expiry and protect correctness at the final write.
+[AWS lease guidance](https://aws.amazon.com/builders-library/leader-election-in-distributed-systems/).
+
+Durable issue status survives lease expiry and worker failure. Review
+operations create new events and do not modify existing events, but that
+application behavior alone does not make the underlying table append-only.
+Enforce unavailable update/delete operations with database permissions,
+triggers, or equivalent policy before making a storage-level append-only claim.
+A crash before the atomic sign-off leaves the issue open; another authorized
+participant can claim and retry it.
+[Microsoft event-sourcing guidance](https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing)
+describes the stronger immutable event-store pattern and its operational
+requirements.
+
+Blocks and citations are canonical evidence. Search entries are versioned
+evidence pointers or grounded projection snapshots. This reference design
+requires the application to retain referenced projection versions and entries
+and prohibit deletion while referenced. An alternative is to store an immutable
+target snapshot on the annotation together with canonical block and citation
+references. Publish a new projection version instead of rewriting a referenced
+entry.
+
+An idempotency key deduplicates replay of the identical Ablo commit within the
+server's documented organization, participant, and retention scope. Ordinary
+recorded results are retained for 24 hours. It does not make provider calls,
+emails, storage writes, or other external effects idempotent; those systems need
+their own keys and replay policy.
+[Ablo idempotency](/idempotency) is the governing replay contract.
+
+Both humans and agents can author annotations. Application authorization still
+decides who may request review and who may sign off; `actorKind` is attribution,
+not permission.
+
+## Page claim granularity
+
+Use the row-backed object form for an existing processing-run page row:
+
+```ts
+const claim = await ablo.documentProcessingRunPages.claim({
+  id: processingRunPageId,
+  contention: { mode: 'skip' },
+});
+```
+
+Claims on the same run-page row conflict. Claims on different run-page IDs can
+coexist, so pages of one PDF may process concurrently without mixing separate
+processing runs.
+
+That exclusion is participant-scoped and lease-scoped. Separate workers use
+separate participant credentials. A worker must treat claim loss as loss of
+authority to commit; the commit-time claim fence and captured-read checks are
+the correctness boundary when work overlaps after expiry or a network pause.
+
+`parent: true` controls ownership, access inheritance, and sync routing. It does
+not create hierarchical claim conflicts across different model rows. A claim
+on `documents/document_1` does not automatically conflict with a run-page
+claim. Whole-document exclusion is not exercised by this example. That application
+protocol requires an authoritative run manifest, stable acquisition order,
+release after partial acquisition, and a guarded manifest/version check.
+
+## Operation contract
+
+The extractor sees evidence, not storage infrastructure:
+
+```ts
+interface DocumentSource {
+  documentId: string;
+  sourceVersion: string;
+}
+
+interface ExistingDocumentService {
+  readSource(documentId: string): Promise<DocumentSource | undefined>;
+  readCompleted(runId: string): Promise<ProcessedDocument | undefined>;
+  process(input, prepare): Promise<ProcessDocumentResult>;
+  commitPrepared(input, source, prepared): Promise<ProcessDocumentResult>;
+}
+```
+
+The old path calls `process`, preserving extraction inside the existing
+critical section. The coordinated path claims `documentId`, checks for a
+completed replay, reads the current source version, extracts once, and calls
+`commitPrepared`.
+
+The coordination adapter uses `model.claim(documentId, options)`, the
+identifier-only overload. It does not read a model row. A model namespace must
+already be registered in the connected Ablo schema; declaring an empty model in
+this example is not permission for an integration agent to provision or replace
+an inherited production schema. Do not replace it with
+`model.claim({ id: documentId })`: the object form reads a fresh model row and
+would incorrectly couple this operation to an Ablo document snapshot.
+
+`commitPrepared` must re-read the authoritative document and compare its source
+version with the version supplied to the extractor. If they differ, reject the
+result. Do not attach output produced from old bytes to a newer document.
+
+## Provenance
+
+Every accepted result records:
+
+```text
+documentId
+sourceVersion
+runId
+extractorVersion
+```
+
+The example's identity helpers are deterministic only for the same canonical
+inputs, encoding rules, namespace, and version. Treat those rules as persisted
+schema: changing normalization or identity format requires an explicit new
+version and migration. Deterministic IDs support replay; they do not extend
+Ablo's idempotency retention window or deduplicate external effects.
+
+Source pages, run pages, blocks, fields, search projections, and review issues
+should refer back to this evidence. Do not encode storage URLs or file bytes in provenance;
+the existing application resolves its own document reference.
+
+## Verification
+
+```bash
+cd examples/existing-document-pipeline
+npm test
+npm run typecheck
+```
+
+The executable checks exercise:
+
+- result parity between the existing and coordinated paths;
+- expensive extraction outside the retained database critical section;
+- one extraction when two workers contend;
+- stale-result rejection after a source-version change;
+- claim release and retry after extractor failure;
+- exact run and extractor provenance;
+- idempotent replay without another extraction;
+- stable source-page and run-owned output-page relations;
+- complete page manifests, including pages without blocks;
+- noncontiguous source-page manifests;
+- run-specific block identity and normalized confidence validation;
+- nested JSON-pointer field identity and one-to-many citations;
+- complete field → citation → block → source-page traceability;
+- unified issuer, field, amount, and block search results;
+- authorization and backend scope validation;
+- versioned projection rebuilds without evidence mutation;
+- guarded human and agent annotations over retained projection targets;
+- atomic review-request issue and event creation;
+- claim-serialized sign-off with atomic status and event persistence;
+- stale target and stale issue rejection with safe retry;
+- exclusion on the same page; and
+- concurrent work on different pages.
+
+These checks demonstrate the application contract under deterministic
+repositories and claim fixtures. Production guarantees additionally depend on
+the connected database transaction boundary, authorization policy, lease store,
+participant credentials, projection-retention policy, and deployment
+configuration.
+
+Run [Hosted coordination conformance](/coordination-conformance) separately
+for real delegated identities, heartbeat, exclusion, and process-death expiry.
+Keeping that proof independent prevents this domain example from pushing a
+document schema merely to retest the lease primitive.
+
+## Non-goals
+
+This pattern does not own uploads, signed URLs, downloads, object storage,
+malware scanning, retention, or deletion. Those systems pre-exist the
+coordination operation and remain unchanged.
+
+It does not define external durable workflow orchestration, missing-item
+detection, or leadsheet generation. Those can consume the durable review and
+grounded evidence state without moving their execution lifecycle into a claim.
+
+None of the coordination mechanisms in this example automatically protects
+external side effects.

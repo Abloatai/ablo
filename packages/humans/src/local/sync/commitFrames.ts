@@ -8,9 +8,8 @@
 
 export {
   buildCommitFrame,
-  parseNotifications,
   recordClaim,
   type CommitAck,
   type CommitFrameOperation,
   type ClaimTracePorts,
-} from '@abloatai/transaction/transport/commitFrames';
+} from '@abloatai/transaction/transport/websocket';

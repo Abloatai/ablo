@@ -25,7 +25,7 @@ import {
   reconcilePublicationPlan,
   type PublicationState,
 } from './connectSetup';
-import { logicalReplicationGuidance, type DbProvider } from './dbProvider';
+import { logicalReplicationGuidance, replicationGrantRole, type DbProvider } from './dbProvider';
 import { scramSha256Verifier } from './dbRole';
 
 /** How a role's password is written into the SQL — mirrors {@link scopedRoleStatements}. */
@@ -168,6 +168,17 @@ export function connectApplyPlan(input: {
   /** Inherit-grants that let this admin manage tables an earlier integration's role
    *  owns, run first so the publish and grant steps apply cleanly. See connectOwnership. */
   readonly inheritGrants?: readonly string[];
+  /**
+   * Whether this admin can hand out BYPASSRLS. Probed rather than assumed: on
+   * Amazon RDS and Aurora it belongs to `rdsadmin`, so the reader is given
+   * explicit SELECT policies instead. See replicationBypassSql.
+   */
+  readonly canGrantBypassRls?: boolean;
+  /**
+   * Whether this admin can hand out REPLICATION. Where it cannot, the attribute
+   * is omitted and the provider's own replication role is granted instead.
+   */
+  readonly canGrantReplication?: boolean;
 }): readonly ApplyStep[] {
   const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
   const writeRole =
@@ -180,7 +191,17 @@ export function connectApplyPlan(input: {
   // The canonical recipe. We keep every statement except the three we must
   // replace to run unattended, identified by their leading verb so a change to
   // the recipe's wording surfaces in the drift test rather than silently.
-  const recipe = connectSetupSql({ tables, role, writeRole, schema, publication });
+  const canGrantBypassRls = input.canGrantBypassRls !== false;
+  const canGrantReplication = input.canGrantReplication !== false;
+  const grantedReplicationRole = canGrantReplication ? null : replicationGrantRole(provider);
+  const recipe = connectSetupSql({
+    tables,
+    role,
+    writeRole,
+    schema,
+    publication,
+    canGrantBypassRls,
+  });
   const isWal = (s: string): boolean => s.startsWith('ALTER SYSTEM SET wal_level');
   const isPublication = (s: string): boolean => s.startsWith('CREATE PUBLICATION');
   const isRoleCreate = (s: string): boolean => s.startsWith('CREATE ROLE ');
@@ -262,19 +283,50 @@ END $$;`,
     {
       key: 'replication-role',
       title: 'Create the read-only login Ablo reads with',
-      detail: `${role} — it can follow your changes and snapshot the same published rows, including through RLS`,
+      detail: canGrantBypassRls
+        ? `${role} — it can follow your changes and snapshot the same published rows, including through RLS`
+        : `${role} — it can follow your changes, and reads the published rows through a SELECT policy of its own, because this provider reserves BYPASSRLS`,
       sql: [
         idempotentRole(
           role,
-          'NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE REPLICATION NOINHERIT',
+          // NOINHERIT everywhere the capability is an attribute: the reader
+          // should hold what it was given and nothing that arrives later.
+          // Where the provider lends REPLICATION as a role instead, the
+          // membership only confers it by inheriting — a NOINHERIT member holds
+          // it in name, `pg_has_role(..., 'USAGE')` is false, and replication
+          // fails while every "was it granted" check says yes. So the grant
+          // path inherits, and its only membership is the one granted below.
+          `NOSUPERUSER ${canGrantBypassRls ? 'BYPASSRLS ' : ''}NOCREATEDB NOCREATEROLE ${canGrantReplication ? 'REPLICATION' : 'NOREPLICATION'} ${grantedReplicationRole ? 'INHERIT' : 'NOINHERIT'}`,
           input.credentials.replicationClause,
           input.rotate === true,
         ),
         // Unlike a password, this is a required invariant rather than secret
         // material owned by one plane. Re-assert it for an existing pre-snapshot
         // role so `connect apply` repairs the exact upgrade gap that otherwise
-        // certifies an RLS-filtered empty snapshot as complete.
-        `ALTER ROLE ${quoteIdent(role)} WITH BYPASSRLS;`,
+        // certifies an RLS-filtered empty snapshot as complete. Where the
+        // attribute cannot be granted at all, the policies in the grants step
+        // carry the same invariant.
+        ...(canGrantBypassRls ? [`ALTER ROLE ${quoteIdent(role)} WITH BYPASSRLS;`] : []),
+        // The provider keeps REPLICATION on an internal superuser and lends it
+        // through a role. Without this the reader authenticates and then cannot
+        // open a replication slot, which surfaces far from its cause.
+        ...(grantedReplicationRole
+          ? [
+              // WITH INHERIT TRUE, because Postgres 16 records inheritance on
+              // the MEMBERSHIP rather than only on the role. A member that does
+              // not inherit holds the grant without holding what it carries:
+              // `pg_has_role(..., 'MEMBER')` is true, `USAGE` is false, and
+              // replication does not work while every "was it granted" check
+              // says yes.
+              //
+              // Stated on the grant rather than left to the role's default so
+              // it also repairs a reader created before this path existed.
+              // `ALTER ROLE ... INHERIT` does not: it changes the default for
+              // FUTURE memberships and leaves the recorded one untouched, which
+              // is a fix that reports success and changes nothing.
+              `GRANT ${quoteIdent(grantedReplicationRole)} TO ${quoteIdent(role)} WITH INHERIT TRUE;`,
+            ]
+          : []),
       ],
     },
     {

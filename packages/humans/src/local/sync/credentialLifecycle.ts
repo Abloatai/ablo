@@ -15,4 +15,4 @@ export {
   type CredentialRefreshResult,
   type CredentialRefresher,
   type CredentialLifecycleContext,
-} from '@abloatai/transaction/transport/credentialLifecycle';
+} from '@abloatai/transaction/transport/connection';

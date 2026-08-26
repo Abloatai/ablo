@@ -2085,6 +2085,15 @@
       "docUrl": "https://docs.abloatai.com/errors#source_adapter_misconfigured"
     },
     {
+      "code": "source_api_key_missing",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The Data Source handler has no signing key configured. Configure it with the signing key from the current Data Source registration.",
+      "docUrl": "https://docs.abloatai.com/errors#source_api_key_missing"
+    },
+    {
       "code": "source_api_key_unresolved",
       "category": "auth",
       "surface": "wire",
@@ -2229,6 +2238,24 @@
       "docUrl": "https://docs.abloatai.com/errors#source_event_invalid"
     },
     {
+      "code": "source_forbidden",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The Data Source key is not allowed to perform this operation.",
+      "docUrl": "https://docs.abloatai.com/errors#source_forbidden"
+    },
+    {
+      "code": "source_id_missing",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The signed Data Source request did not include its webhook id. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.",
+      "docUrl": "https://docs.abloatai.com/errors#source_id_missing"
+    },
+    {
       "code": "source_network_error",
       "category": "transport",
       "surface": "wire",
@@ -2255,6 +2282,24 @@
       "docUrl": "https://docs.abloatai.com/errors#source_request_failed"
     },
     {
+      "code": "source_signature_invalid",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The Data Source rejected Ablo's signature. Configure the endpoint or localhost connector with the signing key from the current Data Source registration.",
+      "docUrl": "https://docs.abloatai.com/errors#source_signature_invalid"
+    },
+    {
+      "code": "source_signature_missing",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The signed Data Source request did not include its webhook signature. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.",
+      "docUrl": "https://docs.abloatai.com/errors#source_signature_missing"
+    },
+    {
       "code": "source_tenancy_not_enforced",
       "category": "tenant",
       "surface": "wire",
@@ -2262,6 +2307,33 @@
       "retryable": false,
       "message": "This model gets its tenant identity from the connected Data Source, but that connection is not ready for scoped reads yet. Ablo refused the read to prevent data from crossing tenant boundaries. Connect the branch and retry; for internally logged models, use `by: 'column'` or `by: 'parent'`.",
       "docUrl": "https://docs.abloatai.com/errors#source_tenancy_not_enforced"
+    },
+    {
+      "code": "source_timestamp_expired",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The signed Data Source request fell outside the allowed clock-skew window. Synchronize the endpoint host clock, then retry.",
+      "docUrl": "https://docs.abloatai.com/errors#source_timestamp_expired"
+    },
+    {
+      "code": "source_timestamp_invalid",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The signed Data Source request carried an invalid webhook timestamp.",
+      "docUrl": "https://docs.abloatai.com/errors#source_timestamp_invalid"
+    },
+    {
+      "code": "source_timestamp_missing",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The signed Data Source request did not include its webhook timestamp. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.",
+      "docUrl": "https://docs.abloatai.com/errors#source_timestamp_missing"
     },
     {
       "code": "source_transport_pinned",
@@ -2517,7 +2589,7 @@
       "category": "validation",
       "surface": "client",
       "retryable": false,
-      "message": "The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.",
+      "message": "The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `claim`) failed validation against the write-options schema.",
       "docUrl": "https://docs.abloatai.com/errors#write_options_invalid"
     },
     {

@@ -4,7 +4,7 @@
  * `http://localhost:8080` (the old fallbacks, which made a probe without a
  * baseUrl report a healthy production deployment as offline).
  */
-import { probeNetwork } from '@abloatai/transaction/transport/networkProbe';
+import { probeNetwork } from '@abloatai/transaction/transport/connection';
 import { ABLO_DEFAULT_BASE_URL } from '@abloatai/transaction/auth/hostedEndpoints';
 
 /** The response surface probeNetwork reads — status + auth-failure header. */

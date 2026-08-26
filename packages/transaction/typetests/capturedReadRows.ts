@@ -1,4 +1,4 @@
-import { Ablo } from '../src/ablo.js';
+import { Ablo } from '../src/client/ablo.js';
 import { defineSchema, model, z } from '../src/schema/index.js';
 
 const schema = defineSchema({
@@ -12,7 +12,17 @@ const client = Ablo({
 });
 
 async function capturedRowsGuideReads(): Promise<void> {
-  const captured = await client.items.get({ id: 'item-1' });
+  const observed = await client.items.get({ id: 'item-1' });
+  if (observed) {
+    await client.items.update({
+      id: 'item-2',
+      data: { status: 'done' },
+      // @ts-expect-error — get observes; only read returns guardable evidence.
+      reads: [observed],
+    });
+  }
+
+  const captured = await client.items.read({ id: 'item-1' });
   if (!captured) return;
 
   await client.items.update({
@@ -32,15 +42,9 @@ async function capturedRowsGuideReads(): Promise<void> {
     await client.items.update({
       id: 'item-2',
       data: { status: 'done' },
+      // @ts-expect-error — list observes; use read({ id }) for decision evidence.
       reads: [listed],
     });
-    await client.items.update(
-      'item-2',
-      (current) => ({ status: current.status }),
-      {
-        reads: [listed],
-      },
-    );
   }
 
   await client.items.update({

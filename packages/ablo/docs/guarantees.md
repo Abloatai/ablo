@@ -44,11 +44,11 @@ The server remains the source of truth.
 
 ## Stale-Write Protection
 
-Use `snapshot(...)` and `readAt` when a write depends on state the agent already
-read:
+Use `read(...)` and carry the returned row in `reads` when a write depends on
+state the agent already read:
 
 ```ts
-const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
+const report = await ablo.weatherReports.read({ id: 'report_stockholm' });
 if (!report) throw new Error('report missing');
 
 await ablo.weatherReports.update({
@@ -67,7 +67,7 @@ not acquire this guarantee.
 
 Two other dispositions exist. `overwrite` applies the write with no stale check
 at all. `notify` **holds** the write, so the row is left as it stands, and hands
-back a `StaleNotification` carrying the current value for the actor to reconcile
+back an `AbloStaleContextError` so the actor can re-read and reconcile
 and re-issue; the rest of the batch still commits.
 
 See [Concurrency Convention](./concurrency-convention.md) for the full taxonomy,
@@ -96,8 +96,7 @@ claim queues fairly behind the holder).
 
 By default, a held claim rejects writes from other participants to the claimed
 target. Contenders that call `claim` wait their turn; ordinary reads remain
-open. An explicit model conflict policy can choose another disposition for a
-participant kind. While you hold a claim, the matching
+open. While you hold a claim, the matching
 `ablo.<model>.update({ id, ... })` is rejected with `AbloStaleContextError` if
 the row changed underneath you after your claim point.
 

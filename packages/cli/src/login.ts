@@ -2,22 +2,29 @@
  * Manages the stored command-line credential through two commands.
  *
  *   ablo login                  Browser device flow (RFC 8628): you approve at
- *                               /cli, and the command provisions one mode-free
- *                               project management credential.
- *   ablo login --project <slug> The same, but scopes and mints the pair to a
- *                               named project, which then becomes active.
+ *                               /cli, pick one of the organization's projects
+ *                               in the terminal, and the command provisions one
+ *                               mode-free management credential scoped to it.
+ *                               That project becomes active.
+ *   ablo login --project <slug> The same without the picker: scopes and mints
+ *                               the credential to a named project.
  *   ablo login --org <slug>     Preselects the organization on the approval
  *                               page. The page is the authority — the browser
  *                               choice decides what the credential is scoped
  *                               to, and this flag only picks the default.
  *   ablo logout                 Clears the stored keys.
  *
- * With no `--project`, login targets the currently active project — so it
- * doubles as a refresh in place — and otherwise falls back to the
- * organization's default project. With no `--org`, the approval page offers
- * the session's active organization. In a headless or CI environment you don't log
- * in; you set `ABLO_MANAGEMENT_KEY` for control-plane commands and a
- * branch-bound `ABLO_API_KEY` for runtime commands.
+ * The picker appears once the browser has approved, because that approval is
+ * what fixes the organization whose projects there are to choose from. It
+ * starts on the currently active project, so a plain Enter refreshes a
+ * credential in place, and it is skipped when there is nothing to choose — an
+ * organization holding only its default project. Without a terminal (agents
+ * and CI wrappers) there is no picker either: login then targets the active
+ * project, else the organization's default, exactly as `--project` would. With
+ * no `--org`, the approval page offers the session's active organization. In a
+ * headless or CI environment you don't log in; `ABLO_API_KEY` is the one
+ * explicit credential input. CI presents an `mk_` value while preparing the
+ * branch, then gives the runtime its branch-bound `sk_` or restricted `rk_`.
  *
  * The device flow is two plain HTTP calls, one for the code and one that polls
  * for the token, which keeps the published command lean. Prompts are drawn with
@@ -37,6 +44,12 @@ import {
   DEFAULT_PROFILE,
   type KeyEntry,
 } from './config';
+import {
+  projectDisplayName,
+  projectListResult,
+  type ProjectListResult,
+  type ProjectObject,
+} from './projects';
 import { brand } from './theme';
 
 const CLIENT_ID = 'ablo-cli';
@@ -53,13 +66,14 @@ const stripSlash = (u: string) => u.replace(/\/+$/, '');
  *   in local development).
  *
  * - DASHBOARD_URL — the product dashboard (`www.abloatai.com`), which serves the
- *   browser approval page (`/cli`), the sign-up page, and the key-handoff route
- *   (`/api/cli/provision-key`). None of these live on the auth server. Point it
- *   at the canonical `www` host: the bare apex redirects to `www`, and a browser
- *   fetch drops the `Authorization` header on that cross-origin hop, so the
- *   authenticated provision call would arrive without its token and fail with a
- *   401 — the browser reads "Approved" while the command reports "Could not
- *   provision a key". Override it with `ABLO_DASHBOARD_URL`.
+ *   browser approval page (`/cli`), the sign-up page, and the CLI bridge routes
+ *   (`/api/cli/projects` for the picker, `/api/cli/provision-key` for the key
+ *   handoff). None of these live on the auth server. Point it at the canonical
+ *   `www` host: the bare apex redirects to `www`, and a browser fetch drops the
+ *   `Authorization` header on that cross-origin hop, so the authenticated
+ *   provision call would arrive without its token and fail with a 401 — the
+ *   browser reads "Approved" while the command reports "Could not provision a
+ *   key". Override it with `ABLO_DASHBOARD_URL`.
  */
 const AUTH_URL = stripSlash(process.env.ABLO_AUTH_URL ?? 'https://auth.abloatai.com');
 const DASHBOARD_URL = stripSlash(process.env.ABLO_DASHBOARD_URL ?? 'https://www.abloatai.com');
@@ -109,6 +123,75 @@ function parseSlugFlag(argv: readonly string[], flag: string): string | undefine
   return eq ? eq.slice(flag.length + 1) || undefined : undefined;
 }
 
+/**
+ * The slug the server should resolve, or undefined for the organization's
+ * default project. `default` names that project locally (it is the reserved
+ * profile), so it is a slug with nothing to resolve, mirroring `ablo projects
+ * use default`.
+ */
+function projectSlugOrDefault(slug: string | undefined): string | undefined {
+  return slug === DEFAULT_PROFILE ? undefined : slug;
+}
+
+/**
+ * The organization's projects as the approved session sees them. The command
+ * holds only the device-flow session token here, so the listing goes through
+ * the dashboard's CLI bridge (`/api/cli/projects`), which exchanges that token
+ * for a session key and asks the engine, exactly as the key handoff does.
+ */
+async function listProjectsForSession(accessToken: string): Promise<ProjectListResult> {
+  const res = await fetch(`${DASHBOARD_URL}/api/cli/projects`, {
+    headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+  }).catch(() => null);
+  if (!res) return { ok: false, reason: `${DASHBOARD_URL} could not be reached` };
+  return projectListResult(res.status, await res.json().catch(() => null));
+}
+
+/**
+ * The project picker. Returns the slug to scope the credential to, or
+ * undefined for the organization's default project.
+ *
+ * The cursor starts on the active project when the list holds it, so a plain
+ * Enter refreshes the credential in place. An organization holding only its
+ * default project has nothing to choose, and a list that cannot be fetched is
+ * not a reason to abandon a login the browser already approved: both continue
+ * exactly as a terminal-less login would, and the second says so.
+ */
+async function pickProject(accessToken: string): Promise<string | undefined> {
+  const active = getActiveProject();
+  const s = spinner();
+  s.start('Listing projects…');
+  const listed = await listProjectsForSession(accessToken);
+  if (!listed.ok) {
+    const fallback = projectSlugOrDefault(active?.slug);
+    s.stop(
+      `Couldn't list projects (${listed.reason}); continuing with ${
+        fallback ? `project ${pc.bold(fallback)}` : 'the organization default'
+      }.`,
+    );
+    return fallback;
+  }
+  if (listed.projects.every((p) => p.default)) {
+    s.stop('One project, the organization default.');
+    return undefined;
+  }
+  s.stop(`${listed.projects.length} projects`);
+  const current = active ? listed.projects.find((p) => p.id === active.id) : undefined;
+  const choice = await select<ProjectObject>({
+    message: 'Project',
+    options: listed.projects.map((p) => {
+      const hint = projectDisplayName(p) ?? (p.default ? 'organization default' : undefined);
+      return { value: p, label: p.slug, ...(hint ? { hint } : {}) };
+    }),
+    ...(current ? { initialValue: current } : {}),
+  });
+  if (isCancel(choice)) {
+    cancel('Cancelled.');
+    process.exit(0);
+  }
+  return choice.default ? undefined : choice.slug;
+}
+
 /** Injectable seam (tests capture the approval URL; default opens the OS browser). */
 export interface LoginDeps {
   readonly openUrl?: (url: string) => void;
@@ -118,13 +201,11 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   const openUrl = deps.openUrl ?? openBrowser;
   intro(`${brand('ablo')} login`);
 
-  // Which project to scope the minted pair to: an explicit `--project`, else
-  // the active project (login doubles as a refresh in place), else the
-  // org-default. The server resolves + verifies the slug against the org.
-  // `--project default` means the org-default (no slug to resolve), mirroring
-  // `ablo projects use default`.
-  const requested = parseSlugFlag(argv, '--project') ?? getActiveProject()?.slug;
-  const targetProject = requested === DEFAULT_PROFILE ? undefined : requested;
+  // An explicit `--project` settles the scope before the browser opens. Its
+  // absence is answered after the approval, by the picker or the stored
+  // preference (see `pickProject`). The server resolves + verifies the slug
+  // against the org.
+  const flagged = parseSlugFlag(argv, '--project');
   // Which organization to preselect on the approval page. No stored fallback:
   // the page defaults to the session's active organization, and its choice —
   // not this flag — decides what the credential is scoped to.
@@ -235,8 +316,21 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     s.stop('Timed out waiting for approval.');
     process.exit(1);
   }
+  s.stop('Approved.');
 
-  s.message(
+  // Which project to scope the minted credential to. The flag answers
+  // outright; a terminal is asked, now that the approval has fixed the
+  // organization; anything else targets the active project (login doubles as
+  // a refresh in place), else the org-default.
+  const targetProject =
+    flagged !== undefined
+      ? projectSlugOrDefault(flagged)
+      : interactive
+        ? await pickProject(accessToken)
+        : projectSlugOrDefault(getActiveProject()?.slug);
+
+  const mint = spinner();
+  mint.start(
     targetProject
       ? `Provisioning project access for ${targetProject}…`
       : 'Provisioning project access…',
@@ -244,9 +338,9 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   const provRes = await fetch(`${DASHBOARD_URL}/api/cli/provision-key`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-    // Scope the minted keys to the chosen project (`--project`/active), with
-    // the device_code as a legacy fallback for the /cli picker. Both harmless
-    // if absent → org-default keys.
+    // Scope the minted keys to the chosen project, with the device_code as a
+    // legacy fallback for the /cli picker. Both harmless if absent →
+    // org-default keys.
     body: JSON.stringify({
       device_code: code.device_code,
       ...(targetProject ? { project_slug: targetProject } : {}),
@@ -254,14 +348,14 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   }).catch(() => null);
 
   if (!provRes) {
-    s.stop('Could not provision a key.');
+    mint.stop('Could not provision a key.');
     log.error(
       `Could not reach ${DASHBOARD_URL} to finish the handoff. Check your connection and run \`ablo login\` again.`,
     );
     process.exit(1);
   }
   if (!provRes.ok) {
-    s.stop('Could not provision a key.');
+    mint.stop('Could not provision a key.');
     // The dashboard forwards the engine's error envelope untouched, so read it
     // through the same translator every other transport uses rather than
     // reaching for a field name — the envelope is flat (`message`/`code`), and
@@ -293,7 +387,7 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     await provRes.json().catch(() => null),
   );
   if (!parsedProv.success) {
-    s.stop('Could not provision a key.');
+    mint.stop('Could not provision a key.');
     log.error('The key handoff returned something this version does not recognize.');
     log.error(`Try again, or upgrade with ${pc.bold('npm i -g @abloatai/ablo')}.`);
     process.exit(1);
@@ -325,7 +419,7 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     },
     { mode: 'sandbox', activeProject: prov.project ?? undefined },
   );
-  s.stop(`Saved project credential to ${path}`);
+  mint.stop(`Saved project credential to ${path}`);
   // Name what the credential is scoped to — the org in prose, the project
   // dimmed beside it — so a wrong-org login is visible here, not on a later
   // failing command.
@@ -350,10 +444,10 @@ export function logout(): void {
   } else {
     console.log(`  ${pc.dim('○')} Not logged in — nothing to remove.`);
   }
-  if (process.env.ABLO_MANAGEMENT_KEY) {
+  if (process.env.ABLO_API_KEY?.startsWith('mk_')) {
     console.log(
       pc.dim(
-        `  Note: ${pc.bold('ABLO_MANAGEMENT_KEY')} is still set in this shell and takes precedence.`,
+        `  Note: ${pc.bold('ABLO_API_KEY')} still contains an ${pc.bold('mk_')} credential in this shell and takes precedence.`,
       ),
     );
   }

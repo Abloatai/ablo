@@ -19,8 +19,8 @@ import type { AbloPersistence } from '../persistence.js';
 import type {
   DurableWriteStore,
   DurableWritesConfig,
-} from '@abloatai/transaction/durableWrites';
-import type { CommitOutboxScope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+} from '@abloatai/transaction/commit';
+import type { CommitOutboxScope } from '@abloatai/transaction/commit';
 
 // ── Options ───────────────────────────────────────────────────────────────
 

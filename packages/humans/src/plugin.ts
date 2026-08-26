@@ -19,9 +19,9 @@ import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 import type { ErrorCodeSpec } from '@abloatai/transaction/errorCodes';
 import type { Logger } from '@abloatai/transaction/logger';
 import type { CoordinationObservability } from '@abloatai/transaction/observability';
-import type { WsTransport } from '@abloatai/transaction/transport/wsTransport';
+import type { WsTransport } from '@abloatai/transaction/transport/websocket';
 import type { AuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
-import type { SyncDeltaWireCore } from '@abloatai/transaction/wire/delta';
+import type { SyncDeltaWireCore } from '@abloatai/transaction/observation';
 import type { ModelData } from '@abloatai/transaction/types/modelData';
 
 /**

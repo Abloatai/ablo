@@ -13,7 +13,7 @@
 import type {
   ClaimField,
   ClaimParams,
-} from '@abloatai/transaction/resources/modelOperations';
+} from '@abloatai/transaction/client/resources/modelOperations';
 type Identical<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
   (<T>() => T extends B ? 1 : 2) ? true : false;

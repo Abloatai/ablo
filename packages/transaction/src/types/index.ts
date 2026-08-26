@@ -228,9 +228,8 @@ export interface PartialIndexInfo {
   path: string[];
 }
 
-// Re-export the stream, snapshot, and coordination types that make up the
-// engine's public surface (PresenceStream, ClaimStream, Snapshot, and the
-// rest), reached through `Ablo({...}).presence`, `.claims`, and `.snapshot()`.
+// Re-export the stream and coordination types that make up the engine's public
+// surface, reached through `Ablo({...}).presence` and `.claims`.
 //
 // The list is written out by name rather than `export *` so that adding a
 // symbol here is always a deliberate decision, and new types don't become
@@ -238,7 +237,6 @@ export interface PartialIndexInfo {
 export type {
   // Coordination wire shapes, defined in `../coordination/schema` and
   // re-exported through streams.ts.
-  OnStaleMode,
   WireClaim,
   ClaimRejection,
   PresenceKind,
@@ -250,8 +248,6 @@ export type {
   ConfirmationState,
   Delta,
   AgentDelta,
-  Snapshot,
-  ContextChange,
   ClaimTarget,
   PresenceTarget,
   PresenceStream,

@@ -92,7 +92,7 @@ export {
 export {
   awaitClaimGrant,
   type GrantTransport,
-} from '@abloatai/transaction/coordination/awaitClaimGrant';
+} from '@abloatai/transaction/claims';
 
 // An enum naming the strategies for loading a model's data. Referenced when
 // registering models in extension code.

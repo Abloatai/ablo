@@ -1,5 +1,61 @@
 # @abloatai/transaction
 
+## 0.58.0
+
+### Minor Changes
+
+- Converge agent context on exact reads. `context()` now returns only `data` and
+  `reads`, retaining each row's own `readAt` evidence instead of publishing a
+  context-level cursor or source classification.
+
+  Remove the reactive client's cache-based `snapshot()` operation and its
+  `Snapshot` type. Call `read()` for every row an action depends on, assemble
+  those rows with `context()`, and pass `context.reads` to `create`, `update`, or
+  `delete`.
+
+  Atomic `commits.create()` batches now accept and resolve the same captured rows
+  on both the stateless HTTP and reactive WebSocket clients. Typed model claim
+  handles can be passed directly to an atomic batch without erasing their row
+  data type. Disposing a reactive client also disposes its mutation queue and
+  releases commit-lane timers.
+
+- Separate observation from decision input: `ablo.<model>.get({ id })` returns a
+  plain current row, while `ablo.<model>.read({ id })` privately retains compact
+  model, id, and watermark evidence that can
+  be passed through a mutation's `reads` option and retained in its attributed
+  commit record without copying row contents.
+
+  Remove the older `retrieve` and durable `track` model surfaces. A row returned by
+  `read` has one stale behavior when carried into a mutation: the stale mutation
+  does not land. `get` and `list` remain observational, and live `onChange` remains
+  the socket-based notification path.
+
+  This is an announced public-surface break with no compatibility aliases. Replace
+  `retrieve({ id })` with `get({ id })` for observation or `read({ id })` when a
+  later mutation depends on the row. Replace `track(...)`, `CommitContext.track`,
+  and mutation `track` / `onStale` options with captured rows passed through the
+  mutation's `reads` option. Stale premises now always reject the mutation;
+  stateful WebSocket clients can use `onChange` to observe subsequent updates.
+
+  Schema-level conflict policy configuration and its `agents*`, `humans*`, and
+  `system*` policy constants are removed, along with the supporting conflict,
+  stale-notification, persisted-read-set, and internal read-set exports. Use an
+  active claim when work needs exclusive row access, and use `read` plus `reads`
+  for optimistic premise checks. AI SDK `ToolModel.get` is likewise replaced by
+  `ToolModel.read`.
+
+- Use `ABLO_API_KEY` as the CLI's single explicit credential input. Management,
+  branch-runtime, and restricted-agent authority now follow from the credential's
+  kind and server-side grant instead of a separate `ABLO_MANAGEMENT_KEY`
+  environment variable.
+
+  Keep control-plane credentials out of sandbox integration recipes and pass only
+  a delegated, per-run `rk_` credential to an agent runtime.
+
+  Add explicitly hosted, expiring `test` branches for live integration fixtures.
+  These branches use Ablo's log-backed storage, expire within 24 hours, and leave
+  ordinary customer branches unbound until their own database is connected.
+
 ## 0.57.0
 
 ### Minor Changes
@@ -18,12 +74,25 @@
   and every storage adapter. Caller-selected CREATE ids now use strict conflict
   semantics, and source outboxes persist transactionally derived `syncGroups` so
   tombstones reach only the row's authorized subject group. Subject-scoped models
-  stamp exactly that one group because delivery matching is OR-based. Before
-  applying the `sync_groups` migration, operators must use the previous release to
-  consume every legacy endpoint-outbox event, verify its polling cursor has
-  advanced past them, and then explicitly purge those historical `ablo_outbox`
-  rows. The migration rejects any remaining legacy row instead of silently
-  assigning unroutable groups.
+  stamp exactly that one group because delivery matching is OR-based. The
+  endpoint outbox is now explicitly versioned: historical and old-writer events
+  are version 1, while new writers emit database-constrained version-2 events
+  with immutable `syncGroups`. Both versions coexist during rollout; pages
+  served by an old reader retain v1 semantics, so v2 routing becomes universal
+  after all readers upgrade. Pagination and durable acknowledgement are
+  separate protocol fields, and built-in adapters perform bounded cleanup only
+  from the explicit acknowledgement. No pre-upgrade drain, write pause, or
+  manual deletion is required.
+
+  Reorganize the transaction core around downward-owned operation trees. The
+  public seam, headless runtime, and model resources now live under `client/`.
+  Commit lifecycle and confirmation live under `commit/`, claim contracts
+  and lease behavior under `claims/`, and delta/feed behavior under
+  `observation/`. Source endpoints, connectors, delivery, database adapters,
+  and outbox behavior each have their own entry point; transport is split into
+  HTTP, WebSocket, and shared connection mechanisms. Repository consumers now
+  use those owned entry points; the former flat module paths and broad wildcard
+  exports are removed instead of retained as a parallel compatibility tree.
 
   `SourceRequestContext.requiredSyncGroups` is renamed `syncGroups`; both spellings
   carry the same value this release and the old one is removed in 0.58.0.

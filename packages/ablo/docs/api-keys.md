@@ -23,9 +23,9 @@ and remap them before each command.
 
 | Job | Credential | How you get it |
 |---|---|---|
-| Manage a project or its branches | `mk_` | `npx ablo login --project <slug>` stores it for the CLI. |
+| Manage a project or its branches | `mk_` | `npx ablo login` stores it for the CLI; pick the project in the terminal, or name it with `--project <slug>`. |
 | Develop locally | expiring `sk_` bound to the current branch | `npx ablo dev` writes it as `ABLO_API_KEY` in gitignored `.env.local`. |
-| Prepare a branch once, including CI | expiring `sk_` bound to that branch | `npx ablo dev --no-watch --branch <ref>`; CI supplies `ABLO_MANAGEMENT_KEY`. |
+| Prepare a branch once, including CI | expiring `sk_` bound to that branch | `npx ablo dev --no-watch --branch <ref>`; headless CI supplies an `mk_` credential through `ABLO_API_KEY`. |
 | Run the production backend | `sk_` bound to the production root | Store it as the deployment's `ABLO_API_KEY`. |
 | Read in a browser | `pk_` | Publishable, read-only key. |
 | Write in a browser as a user | short-lived `ek_` | Your backend exposes `authEndpoint` and mints it. |
@@ -33,9 +33,9 @@ and remap them before each command.
 The everyday loop is therefore:
 
 ```bash
-npx ablo login --project <project>  # once per project
-npx ablo dev                        # follows Git, mints and wires this branch
-npx ablo status                     # broad readiness report
+npx ablo login    # once per project: approve in the browser, pick the project
+npx ablo dev      # follows Git, mints and wires this branch
+npx ablo status   # broad readiness report
 ```
 
 Application code and agents still read one variable:
@@ -91,7 +91,7 @@ The credential class lives in the prefix:
 
 | Prefix | Purpose | Stored where |
 |---|---|---|
-| `mk_` | project and branch management | CLI credential store or `ABLO_MANAGEMENT_KEY` |
+| `mk_` | project and branch management | CLI credential store; `ABLO_API_KEY` only in headless automation |
 | `sk_` | trusted runtime, full branch authority | server-side `ABLO_API_KEY` |
 | `rk_` | restricted runtime or agent | trusted runtime that needs the delegated scope |
 | `pk_` | publishable, browser-safe read access | browser bundle |

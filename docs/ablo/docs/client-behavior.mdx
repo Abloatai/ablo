@@ -1,11 +1,14 @@
 ---
 title: "Client Behavior"
-description: "Per-write options, claim behavior, and which errors are safe to retry."
+description: "Guarded writes, claim behavior, and which errors are safe to retry."
 sidebar:
   icon: monitor
 ---
 
-When several writers touch the same data at once — an agent worker, a Server Action, a person in the browser — the SDK decides whose write lands and how the others find out. This page is the reference for that: per-write options like `wait` and `onStale`, claiming a record so your slow work runs uninterrupted, and which errors are safe to retry.
+When several writers touch the same data at once — an agent worker, a Server
+Action, a person in the browser — the SDK protects explicit read dependencies
+and claims records across slow work. This page describes those guarantees and
+which errors are safe to retry.
 
 Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so two writers serialize instead of clobbering.
 
@@ -37,7 +40,7 @@ Common options:
 | `baseURL` | Override the hosted sync endpoint for staging or private deployments. An HTTPS origin, optionally with a path prefix; plain HTTP is accepted for localhost. Your key travels here, so a URL carrying its own credentials, a query, or a fragment is refused at construction. |
 | `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
 | `durableWrites` | Optional crash recovery for unacknowledged agent/worker writes. Independent of the default memory cache; accepts `{ store, namespace? }`. |
-| `transport` | `'websocket'` (default) is the live, stateful client: a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (the `local` reads, `onChange`, `join`) are compile errors rather than runtime gaps. |
+| `transport` | `'websocket'` (default) is the live, stateful client: a persistent socket, a local synced pool, and model `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but ordinary calls are HTTP round trips with no socket. Stateful-only model methods (`local`, model `onChange`, and `join`) are compile errors. A listener added through `context().onChange` holds one HTTP response open only until its context changes or its last listener stops. |
 | `fetch` | Custom fetch implementation for tests or non-standard runtimes. |
 | `defaultHeaders` | Extra headers attached to every HTTP request. |
 | `defaultQuery` | Extra query parameters attached to every HTTP request. |
@@ -56,7 +59,7 @@ Each schema model becomes a typed model:
 ```ts
 await ablo.ready();
 
-const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
+const report = await ablo.weatherReports.read({ id: 'report_stockholm' });
 const local = ablo.weatherReports.local.get('report_stockholm');
 
 await ablo.weatherReports.create({ data: { location: 'Stockholm', status: 'pending' } });
@@ -68,7 +71,7 @@ On the reactive client, each model write changes local state optimistically
 before the call returns. Its promise always waits for authoritative
 confirmation, so `await update(...)` is the confirmation barrier.
 
-Call `get`/`list` first — they fetch from the server and you `await` them.
+Call `get`/`list` to observe, or `read` when a later mutation depends on the row.
 After that, `local.get`/`local.list`/`local.count` read the already-synced data instantly with
 no `await`, and stay reactive in render. Use the async pair to load, the sync trio
 to read.
@@ -86,14 +89,13 @@ through the same model client path. A human Server Action, a browser view, and a
 agent worker can all use `ablo.weatherReports`:
 
 ```ts
-const report = await ablo.weatherReports.get({ id });
-const snap = ablo.snapshot({ weatherReports: id });
+const report = await ablo.weatherReports.read({ id });
+if (!report) throw new Error('Row not found');
 
 await ablo.weatherReports.update({
   id,
   data: patch,
-  readAt: snap.stamp,
-  onStale: 'reject',
+  reads: [report],
 });
 ```
 
@@ -109,23 +111,27 @@ actor routing through Ablo is coordinated. The one write it can't coordinate is
 one made directly against your database, around Ablo — the WAL echo still catches
 it for reads, but it bypasses claims and ordering.
 
-## Per-Write Options
+## Guarded Writes
 
 ```ts
+const report = await ablo.weatherReports.read({ id: 'report_stockholm' });
+if (!report) throw new Error('report not found');
+
 await ablo.weatherReports.update({
-  id: 'report_stockholm',
+  id: report.id,
   data: { status: 'ready' },
-  readAt: snap.stamp,
-  onStale: 'reject',
+  reads: [report],
   idempotencyKey: 'report_stockholm:mark-ready:v1',
 });
 ```
 
 | Option | Purpose |
 |---|---|
-| `readAt` | State cursor the write was based on. |
-| `onStale` | Policy when the target changed after `readAt`. Prefer `reject`. |
+| `reads` | Exact rows returned by `read` that this mutation depends on. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
+
+A stale premise always rejects with `AbloStaleContextError`. Omit `reads` only
+when the assignment is intentionally unconditional.
 
 ## Claimed Behavior
 

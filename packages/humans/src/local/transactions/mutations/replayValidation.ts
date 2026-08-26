@@ -23,14 +23,12 @@ import type { RuntimeContext } from '../../RuntimeContext.js';
 import {
   commitEnvelopeMemberSchema,
   commitOutboxScopeSchema,
-} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
-import { onStaleModeSchema } from '@abloatai/transaction/coordination/schema';
+} from '@abloatai/transaction/commit';
 
 /** The subset of a write's options that is stored with each transaction or queued mutation. */
 const persistedWriteOptionsSchema = z
   .object({
     readAt: z.number().nullable().optional(),
-    onStale: onStaleModeSchema.nullable().optional(),
     idempotencyKey: z.string().optional(),
     label: z.string().optional(),
     // Aligned with the `WriteOptions` type: a claimed write persisted locally

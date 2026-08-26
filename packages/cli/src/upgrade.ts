@@ -11,8 +11,8 @@
  *       update(id, data, opts?) → update({ id, data, ...opts })
  *       create(data, opts?)     → create({ data, ...opts })
  *       delete(id, opts?)       → delete({ id, ...opts })
- *       retrieve(id, opts?)     → retrieve({ id, ...opts })
- *   - load()  → retrieve({ id }) (when filtering by id) / list({ where })
+ *       retrieve(id, opts?)     → get({ id, ...opts })
+ *   - load()  → get({ id }) (when filtering by id) / list({ where })
  *   - withSync(X) → observer(X)  (withSync was an alias of observer)
  *
  * Structural changes it flags for manual review instead of rewriting:
@@ -96,7 +96,9 @@ function verbRewrite(call: CallExpression, verb: string): string | null {
   const args = call.getArguments();
   const first = args[0];
   if (first === undefined) return null;
-  const calleeText = call.getExpression().getText(); // e.g. "ablo.records.update"
+  const calleeText = verb === 'retrieve'
+    ? `${call.getExpression().getText().slice(0, -'retrieve'.length)}get`
+    : call.getExpression().getText(); // e.g. "ablo.records.update"
 
   if (verb === 'create') {
     // create(data, opts?) becomes create({ data, ...opts }). The old `data`
@@ -105,14 +107,16 @@ function verbRewrite(call: CallExpression, verb: string): string | null {
     if (Node.isObjectLiteralExpression(first) && hasKey(first, 'data')) return null;
     return `${calleeText}({ data: ${first.getText()}${spreadOpts(args[1])} })`;
   }
-  // update/delete/retrieve: the first positional was a bare `id` (never an object),
-  // so an object-literal first arg means it's already migrated.
-  if (Node.isObjectLiteralExpression(first)) return null;
+  // update/delete: an object-literal first arg means it is already migrated.
+  // `retrieve({ id })` still needs its method renamed to `get({ id })`.
+  if (Node.isObjectLiteralExpression(first)) {
+    return verb === 'retrieve' ? `${calleeText}(${first.getText()})` : null;
+  }
   const keyed = params.map((key, i) => (args[i] ? `${key}: ${args[i].getText()}` : null)).filter(Boolean);
   return `${calleeText}({ ${keyed.join(', ')}${spreadOpts(args[params.length])} })`;
 }
 
-/** load({ where: { id } }) → retrieve({ id }); load({ where }) / load() → list(...). Returns new text or null. */
+/** load({ where: { id } }) → get({ id }); load({ where }) / load() → list(...). Returns new text or null. */
 function loadRewrite(call: CallExpression): string | null {
   const callee = call.getExpression();
   if (!Node.isPropertyAccessExpression(callee)) return null;
@@ -124,9 +128,9 @@ function loadRewrite(call: CallExpression): string | null {
       const whereVal = where.getInitializerOrThrow();
       if (Node.isObjectLiteralExpression(whereVal)) {
         const idProp = whereVal.getProperty('id');
-        // load({ where: { id } }) with only `id` → retrieve({ id })
+        // load({ where: { id } }) with only `id` → get({ id })
         if (idProp && whereVal.getProperties().length === 1 && Node.isPropertyAssignment(idProp)) {
-          return `${base}.retrieve({ id: ${idProp.getInitializerOrThrow().getText()} })`;
+          return `${base}.get({ id: ${idProp.getInitializerOrThrow().getText()} })`;
         }
       }
       return `${base}.list({ where: ${whereVal.getText()} })`;
@@ -199,7 +203,7 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
       } else if (method === 'load') {
         const next = loadRewrite(call);
         if (next) {
-          record(call, 'load→retrieve/list', (call.getText().split('\n')[0] ?? '').slice(0, 80), next.slice(0, 80));
+          record(call, 'load→get/list', (call.getText().split('\n')[0] ?? '').slice(0, 80), next.slice(0, 80));
           call.replaceWithText(next);
         }
       }

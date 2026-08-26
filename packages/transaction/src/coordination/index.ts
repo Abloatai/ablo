@@ -21,28 +21,11 @@ export {
   DEFAULT_CLAIM_DESCRIPTION,
   targetRefSchema,
   // Layer 3 — optimistic stale-context
-  onStaleModeSchema,
   MAX_READ_SET_ENTRIES,
-  readSetRowTargetSchema,
-  readSetGroupTargetSchema,
-  commitReadSetTargetSchema,
-  persistedReadSetRowTargetSchema,
-  persistedReadSetTargetSchema,
-  commitReadSetEntrySchema,
-  persistedReadSetEntrySchema,
-  readSetEntrySchema,
-  readSetSchema,
   writeGuardSchema,
-  staleNotificationSchema,
-  rowStaleNotificationSchema,
-  groupStaleNotificationSchema,
-  stalePropagationSchema,
 
   readDependencySchema,
   readDependencyListSchema,
-  readSetProjectionEntryCount,
-  trackDependencySchema,
-  trackDependencyListSchema,
   // Layer 2 — pessimistic claim / claim-lease
   claimStatusSchema,
   wireClaimStatusSchema,
@@ -92,45 +75,14 @@ export {
   presenceUpdateFrameSchema,
 } from './schema.js';
 
-// Conflict-policy runtime — the engine detects a conflict, and the policy
-// decides what to do about it. These are re-exported here so that server-side
-// code can reach both the coordination vocabulary and its default conflict
-// resolution from this one subpath, without importing the full client from the
-// package root.
-export { defaultPolicy, capabilityPreemptPolicy, interpretConflictAxis } from '../policy/types.js';
-export type {
-  Conflict,
-  ConflictAxis,
-  ConflictDecision,
-  ConflictKind,
-  ConflictOperation,
-  ConflictPolicy,
-  StaleContextConflict,
-  ClaimHeldConflict,
-} from '../policy/types.js';
-
 // Inferred types, one per schema (plus the standalone aliases).
 export type {
   // Shared primitives
   ParticipantKind,
   TargetRef,
   // Layer 3 — optimistic stale-context
-  OnStaleMode,
-  ReadSetRowTarget,
-  ReadSetGroupTarget,
-  CommitReadSetTarget,
-  PersistedReadSetTarget,
-  CommitReadSetEntry,
-  PersistedReadSetEntry,
-  ReadSetEntry,
-  ReadSet,
   WriteGuard,
-  StaleNotification,
-  RowStaleNotification,
-  GroupStaleNotification,
-  StalePropagation,
   ReadDependency,
-  TrackDependency,
   // Layer 2 — pessimistic claim / claim-lease
   ClaimStatus,
   WireClaimStatus,
@@ -182,12 +134,12 @@ export type {
   ClaimCounterparty,
   ConflictEvent,
   CoordinationObserver,
-} from './events.js';
+} from '../claims/events.js';
 
 // The conflict rule itself — whether two claims on one row collide. It is the
 // protocol's decision, not the server's deployment of it, so it lives here and
 // every claim authority imports it.
-export { targetsConflict } from './targetConflict.js';
+export { targetsConflict } from '../claims/targetConflict.js';
 
 // The locator itself — what a claim points at, and the projections that keep
 // its three entity spellings (`entityType`/`entityId`, `model`/`id`,
@@ -197,7 +149,7 @@ export type {
   ClaimTargetDetails,
   ClaimTargetSource,
   EntityLocator,
-} from './locator.js';
+} from '../claims/locator.js';
 export {
   batchFence,
   claimIdFor,
@@ -207,4 +159,4 @@ export {
   wireTarget,
   modelTarget,
   streamTarget,
-} from './locator.js';
+} from '../claims/locator.js';

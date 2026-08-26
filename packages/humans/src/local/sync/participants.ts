@@ -1,4 +1,4 @@
-import type { JoinOptions } from '@abloatai/transaction/resources/modelOperations';
+import type { JoinOptions } from '@abloatai/transaction/client/resources/modelOperations';
 import type { SyncWebSocket } from './SyncWebSocket.js';
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
 import { scopeKindOf, type ModelDef } from '@abloatai/transaction/schema/model';

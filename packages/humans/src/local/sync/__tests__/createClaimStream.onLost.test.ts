@@ -12,9 +12,10 @@ import type { ClaimLost } from '@abloatai/transaction/types/streams';
 import {
   dispatchWsFrame,
   type WsSession,
-} from '@abloatai/transaction/transport/wsFrameHandlers';
+} from '@abloatai/transaction/transport/websocket';
 import { noopLogger } from '@abloatai/transaction/logger';
 import { noopSocketObservability } from '@abloatai/transaction/observability';
+import { claimLifetimeOf } from '@abloatai/transaction/claims/lifetime';
 
 /**
  * A `ClaimTransport` backed by a real EventEmitter, plus a test-only `emit` to
@@ -24,15 +25,20 @@ import { noopSocketObservability } from '@abloatai/transaction/observability';
  */
 function fakeWs(): ClaimTransport & {
   emit(event: string, payload: Record<string, unknown>): void;
+  sent: unknown[];
 } {
   const bus = new EventEmitter();
+  const sent: unknown[] = [];
   return {
     subscribe(event, handler) {
       bus.on(event, handler);
       return () => bus.off(event, handler);
     },
     isConnected: () => true,
-    send: () => undefined,
+    send: (frame) => {
+      sent.push(frame);
+    },
+    sent,
     emit(event, payload) {
       bus.emit(event, payload);
     },
@@ -65,6 +71,47 @@ function frameSession(onEmit: (event: string, payload: unknown) => void): WsSess
 }
 
 describe('createClaimStream.onLost', () => {
+  it('ends the exact granted handle when the server reports it lost', () => {
+    const ws = fakeWs();
+    const stream = createClaimStream({ participantId: 'me' });
+    stream.attach(ws);
+    const handle = stream.claim(
+      { type: 'item', id: 't1' },
+      { description: 'editing' },
+      'i-exact',
+    );
+    const lifetime = claimLifetimeOf(handle);
+
+    ws.emit('claim_lost', {
+      claimId: 'i-exact',
+      reason: 'preempted',
+      target: { entityType: 'item', entityId: 't1' },
+    });
+
+    expect(lifetime?.ended).toBe(true);
+    expect(lifetime?.reason).toMatchObject({ code: 'claim_lost' });
+  });
+
+  it('ends grants on disconnect and never re-announces them on reconnect', () => {
+    const ws = fakeWs();
+    const stream = createClaimStream({ participantId: 'me' });
+    stream.attach(ws);
+    const handle = stream.claim(
+      { type: 'item', id: 't1' },
+      { description: 'editing' },
+      'i-one-grant',
+    );
+    const lifetime = claimLifetimeOf(handle);
+    expect(ws.sent).toHaveLength(1);
+
+    ws.emit('disconnected', {});
+    ws.emit('connected', {});
+
+    expect(lifetime?.ended).toBe(true);
+    expect(lifetime?.reason).toMatchObject({ name: 'AbloConnectionError' });
+    expect(ws.sent).toHaveLength(1);
+  });
+
   it('delivers claim_lost with reason="preempted" to onLost listeners', () => {
     const ws = fakeWs();
     const stream = createClaimStream({ participantId: 'me' });

@@ -148,7 +148,7 @@ describe('MutationQueue', () => {
         item,
         TEST_USER_CONTEXT,
         { title: 'New' },
-        { readAt: 42, onStale: 'reject' },
+        { readAt: 42 },
       );
 
       await flushMicrotasks();
@@ -157,7 +157,6 @@ describe('MutationQueue', () => {
       const [call] = mocks.mutationExecutor.getCallsByMethod('commit');
       expect(call?.operations?.[0]).toMatchObject({
         readAt: 42,
-        onStale: 'reject',
       });
     });
   });

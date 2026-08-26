@@ -106,10 +106,6 @@ describe('Architectural pin — one WebSocket per engine', () => {
     presence.onChange(() => {});
     claims.onChange(() => {});
 
-    // Snapshot also rides the engine's transport — no extra socket.
-    const snap = engine.snapshot({ notes: 'n-1' });
-    expect(snap.stamp).toBeDefined();
-
     // Microtask drain so any deferred-attach `transport.subscribe`
     // calls land.
     await new Promise((r) => setTimeout(r, 50));

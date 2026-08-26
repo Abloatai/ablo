@@ -1,0 +1,69 @@
+# Verify hosted coordination separately
+
+> Prove claim behavior once, without coupling the proof to a document, workflow, or GraphQL schema.
+
+Use two test layers when adopting Ablo behind an existing application:
+
+| Proof | Responsibility |
+|---|---|
+| Domain contract | State transitions, stale evidence, provenance, idempotency, and old/new path parity. |
+| Hosted coordination conformance | Participant identity, exclusion, heartbeat, release, and lease-expiry recovery. |
+
+The runnable hosted proof is
+[`examples/coordination-conformance`](../../../../examples/coordination-conformance/README.md).
+It creates a temporary test branch that inherits an existing non-production
+schema. It does not push a schema or change domain rows.
+
+## File structure
+
+```text
+src/conformance/index.ts
+  -> src/conformance/claimExclusion.ts
+  -> src/conformance/contract.ts
+src/runtime/index.ts
+  -> src/runtime/client.ts
+  -> src/runtime/config.ts
+live/index.ts
+  -> live/claimAndExit.ts
+```
+
+The conformance operation depends on a narrow structural claim interface. The
+runtime child supplies the real Ablo model resource. Domain examples depend on
+the same narrow behavior without inheriting this runner's branch or credential
+setup.
+
+## Run
+
+First run the deterministic structure and configuration checks:
+
+```bash
+cd examples/coordination-conformance
+npm test
+npm run typecheck
+```
+
+Then name an existing model on the CLI login's dedicated non-production
+project:
+
+```bash
+ABLO_CONFORMANCE_MODEL=existingModel npm run test:live
+```
+
+The model name supplies only a typed claim namespace. Every claim target is a
+new random identifier; the proof creates no model row. The disposable branch
+is deleted even when an assertion fails.
+
+The runtime deliberately calls `model.claim(id, options)`. This identifier
+overload is row-free. `model.claim({ id, ...options })` is the row-backed form:
+it reads the model row and is not interchangeable in a coordination-only
+rollout.
+
+## What this lets domain examples omit
+
+A document-processing example does not need its own branch provisioning,
+session delegation, heartbeat, or process-death fixture. It must still test its
+own behavior when a claim is won, skipped, released after failure, and combined
+with changing evidence.
+
+This separation prevents a vertical testcase from force-replacing an inherited
+schema merely to re-prove generic lease behavior.

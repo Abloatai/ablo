@@ -100,6 +100,7 @@ export default defineConfig({
           items: [
             "/",
             "/quickstart",
+            "/agent-integration-decision-guide",
             "/integration-guide",
             "/deployment",
             "/pricing",
@@ -160,7 +161,9 @@ export default defineConfig({
             "/examples/agent-human",
             "/examples/scoped-agent",
             "/examples/server-agent",
+            "/examples/coordination-conformance",
             "/examples/existing-python-backend",
+            "/examples/existing-document-pipeline",
             "/examples/nextjs",
           ],
         },

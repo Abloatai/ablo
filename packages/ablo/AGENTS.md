@@ -6,6 +6,12 @@ Claims don't lock. If another writer holds the row, `claim` waits for them and r
 
 ## Start here — scaffold with `ablo init`
 
+Before choosing among identifier claims, row claims, captured reads, atomic
+commits, existing database writes, and Ablo-routed writes, use the
+[Agent Integration Decision Guide](./docs/agent-integration-decision-guide.md).
+It routes existing applications to the smallest relevant example and names the
+test layer that proves each guarantee.
+
 Don't hand-write the integration. Run the CLI; it generates the current-API schema, client, the database connection (logical replication by default, or a signed Data Source endpoint as the fallback), and (for Next.js) the browser provider + session route:
 
 - **Read the docs for THIS version:** `npx ablo docs` lists every page, `npx ablo docs <page>` prints one. They ship inside the installed package, so they describe the code in `node_modules` and work with no network. Read them instead of a docs URL — a website describes the newest release, so against a pinned version it will hand you a call your package doesn't have (`retrieve`/`list` replaced `get`/`getAll`/`getCount` in 0.35.0).
@@ -21,7 +27,7 @@ Don't hand-write the integration. Run the CLI; it generates the current-API sche
 
 When you use the signed-endpoint fallback, the generated `ablo/data-source.ts` is the whole endpoint and needs no hand-editing: `dataSourceNext({ schema, apiKey, adapter: prismaDataSource(prisma, schema) })` (or `drizzleDataSource(db, schema)`). The adapter owns commit / idempotency / outbox.
 
-**Working on a real database?** Plain model writes are last-write-wins when no active claim applies. Use a functional update, a held claim, or `readAt` when a result depends on an earlier value. Reads are safe to inspect; raw application DDL (`ALTER TABLE …`) and a `--yes` connection cutover belong to a human. When you're unsure whether a write fits, `npx ablo check` reports the live column-by-column fit read-only, before anything runs. Full sorting rule: [Operating on Your Database](./docs/operating-on-your-database.md).
+**Working on a real database?** Plain model writes are last-write-wins when no active claim applies. Use a functional update, a held claim, or `read` plus `reads` when a result depends on an earlier value. Reads are safe to inspect; raw application DDL (`ALTER TABLE …`) and a `--yes` connection cutover belong to a human. When you're unsure whether a write fits, `npx ablo check` reports the live column-by-column fit read-only, before anything runs. Full sorting rule: [Operating on Your Database](./docs/operating-on-your-database.md).
 
 ## Rule
 
@@ -35,10 +41,10 @@ The schema is the integration contract — it drives typed model clients, React 
 
 Every model verb takes ONE options object. The common loop:
 
-1. **Read** the row — `await ablo.<model>.get({ id })` (async; from the server) or `await ablo.<model>.list({ where })` for many. In React render, read synchronously with `useAblo((a) => a.<model>.local.get(id))`.
+1. **Get or read** the row — `get({ id })` observes; `read({ id })` declares that a later mutation depends on this exact version. `list({ where })` is observational. In React render, use `local.get(id)`.
 2. **See who's active** (optional) — `ablo.<model>.claim.state({ id })` (synchronous; never blocks).
 3. **Claim** the row before changing it — `await using claim = await ablo.<model>.claim({ id, description?, ttl? })`. If someone else holds it, this waits for them, then gives you the fresh row on `claim.data`. The claim auto-releases when it goes out of scope (`await using`).
-4. **Write** — `await ablo.<model>.update({ id: claim.data.id, data })`. Because you hold the claim, the write is rejected if the row changed underneath you.
+4. **Write** — pass `reads: [row]` when the decision used a row returned by `read`, or write through the held claim. If the declared read moved, the mutation does not land.
 
 Keep coding assistants on this schema-backed path.
 
@@ -58,7 +64,7 @@ const schema = defineSchema({
 
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
-const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
+const report = await ablo.weatherReports.read({ id: 'report_stockholm' });
 if (!report) throw new Error('Report not found');
 
 // If someone else holds the row, claim waits for them and re-reads the fresh

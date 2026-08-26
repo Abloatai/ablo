@@ -2,12 +2,12 @@
  * Write-options threading — the one-dialect contract.
  *
  * The public params of `ablo.<model>.create/update/delete` promise the full
- * `WriteOptions` vocabulary (`idempotencyKey`, `label`, `readAt`, `onStale`).
+ * `WriteOptions` vocabulary (`idempotencyKey`, `label`, `readAt`, `reads`).
  * These tests pin the pipeline end (MutationQueue → MutationExecutor):
  * every field a caller puts on a write must reach the wire operation —
- * `readAt`/`onStale` at the op root, `idempotencyKey`/`label` in the op's
+ * `readAt` at the op root, `idempotencyKey`/`label` in the op's
  * `options` slot (`MutationOperation.options`). Before this contract was
- * enforced, the queue silently narrowed to `readAt`/`onStale` and the rest
+ * enforced, the queue silently narrowed to `readAt` and the rest
  * compiled but did nothing.
  */
 
@@ -20,7 +20,7 @@ import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
 import { createItemFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
 import type { MutationOperation } from '../../interfaces/index.js';
-import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
+import { assertWriteOptions } from '@abloatai/transaction/client/resources/writeOptionsSchema';
 import { AbloValidationError } from '@abloatai/transaction/errors';
 
 describe('MutationQueue write-options threading', () => {
@@ -63,21 +63,19 @@ describe('MutationQueue write-options threading', () => {
     });
   });
 
-  it('carries the stale guard (readAt/onStale) alongside idempotency on one op', async () => {
+  it('carries the stale watermark alongside idempotency on one op', async () => {
     const item = createItemFixture();
 
     await queue.create(item, userContext, {
       idempotencyKey: 'idem_test_2',
       label: 'claimed write',
       readAt: 42,
-      onStale: 'reject',
     });
 
     await waitFor(() => committedOperations().length > 0);
     const [op] = committedOperations();
     if (!op) throw new Error('expected a committed operation');
     expect(op.readAt).toBe(42);
-    expect(op.onStale).toBe('reject');
     expect(op.options).toEqual({
       idempotencyKey: 'idem_test_2',
       label: 'claimed write',
@@ -102,13 +100,12 @@ describe('MutationQueue write-options threading', () => {
   it('omits the options slot entirely when no idempotency fields are set', async () => {
     const item = createItemFixture();
 
-    await queue.create(item, userContext, { readAt: 7, onStale: 'notify' });
+    await queue.create(item, userContext, { readAt: 7 });
 
     await waitFor(() => committedOperations().length > 0);
     const [op] = committedOperations();
     if (!op) throw new Error('expected a committed operation');
     expect(op.readAt).toBe(7);
-    expect(op.onStale).toBe('notify');
     expect(op.options).toBeUndefined();
   });
 
@@ -132,11 +129,9 @@ describe('writeOptionsSchema — THE runtime write-options contract', () => {
         label: 'audit tag',
         wait: 'confirmed',
         readAt: 42,
-        onStale: 'reject',
         claim: { id: 'claim_1' },
         claimRef: { id: 'claim_1' },
         reads: [{ model: 'items', id: 'item_1', readAt: 42 }],
-        track: [{ group: 'report:abc', readAt: 42 }],
       }); },
     ).not.toThrow();
   });
@@ -150,19 +145,6 @@ describe('writeOptionsSchema — THE runtime write-options contract', () => {
     expect(() => { assertWriteOptions({ claim: lease }); }).not.toThrow();
     // Validation never replaces the object — the handle keeps its functions.
     expect(typeof lease.release).toBe('function');
-  });
-
-  it('rejects a misspelled onStale with a typed, param-targeted error', () => {
-    try {
-      assertWriteOptions({ onStale: 'rejct' }, 'item write');
-      throw new Error('expected assertWriteOptions to throw');
-    } catch (err) {
-      expect(err).toBeInstanceOf(AbloValidationError);
-      const abloErr = err as AbloValidationError;
-      expect(abloErr.code).toBe('write_options_invalid');
-      expect(abloErr.param).toBe('onStale');
-      expect(abloErr.message).toContain('item write');
-    }
   });
 
   it('rejects a non-integer readAt watermark', () => {

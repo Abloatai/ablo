@@ -620,7 +620,7 @@ export const ERROR_CODES = {
   // ── validation (400 / 422) ─────────────────────────────────────────
   write_options_invalid: client(
     'validation',
-    'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.'
+    'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `claim`) failed validation against the write-options schema.'
   ),
   write_payload_invalid: client(
     'validation',
@@ -1093,6 +1093,54 @@ export const ERROR_CODES = {
     502,
     true,
     'The signed Data Source returned a failure without a more specific code. Inspect the `ablo dev --local` process or deployed endpoint logs, then retry with the same idempotency key.'
+  ),
+  source_id_missing: wire(
+    'auth',
+    401,
+    false,
+    'The signed Data Source request did not include its webhook id. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.'
+  ),
+  source_api_key_missing: wire(
+    'auth',
+    401,
+    false,
+    'The Data Source handler has no signing key configured. Configure it with the signing key from the current Data Source registration.'
+  ),
+  source_timestamp_missing: wire(
+    'auth',
+    401,
+    false,
+    'The signed Data Source request did not include its webhook timestamp. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.'
+  ),
+  source_timestamp_invalid: wire(
+    'auth',
+    401,
+    false,
+    'The signed Data Source request carried an invalid webhook timestamp.'
+  ),
+  source_timestamp_expired: wire(
+    'auth',
+    401,
+    false,
+    'The signed Data Source request fell outside the allowed clock-skew window. Synchronize the endpoint host clock, then retry.'
+  ),
+  source_signature_missing: wire(
+    'auth',
+    401,
+    false,
+    'The signed Data Source request did not include its webhook signature. Check that the request reaches the handler without an intermediary removing Standard Webhooks headers.'
+  ),
+  source_signature_invalid: wire(
+    'auth',
+    401,
+    false,
+    'The Data Source rejected Ablo\'s signature. Configure the endpoint or localhost connector with the signing key from the current Data Source registration.'
+  ),
+  source_forbidden: wire(
+    'permission',
+    403,
+    false,
+    'The Data Source key is not allowed to perform this operation.'
   ),
   source_connector_not_attached: wire(
     'transport',
@@ -1774,14 +1822,13 @@ export const ERROR_CODES = {
 } as const satisfies Record<string, ErrorCodeSpec>;
 
 /**
- * The type of a valid error code: any key registered in {@link ERROR_CODES},
- * plus the dynamic `policy:${reason}` family, where a conflict-policy rejection
- * names its reason inline. The {@link AbloError} constructor accepts only this
+ * The type of a valid error code: any key registered in {@link ERROR_CODES}.
+ * The {@link AbloError} constructor accepts only this
  * type, so a typo or an unregistered code is a compile-time error. Only the
  * boundary that parses an incoming response casts an arbitrary string to this
  * type, which preserves forward compatibility with a newer server.
  */
-export type ErrorCode = keyof typeof ERROR_CODES | `policy:${string}`;
+export type ErrorCode = keyof typeof ERROR_CODES;
 
 /** The subset of {@link ErrorCode} values that cross the network — the codes
  *  that make up the API contract, from which the HTTP and tool-calling
@@ -1790,14 +1837,13 @@ export type WireErrorCode = {
   [K in keyof typeof ERROR_CODES]: (typeof ERROR_CODES)[K]['surface'] extends 'wire' ? K : never;
 }[keyof typeof ERROR_CODES];
 
-/** Looks up the {@link ErrorCodeSpec} for a code. Returns `undefined` for the
- *  dynamic `policy:*` family and for any newer code this client does not yet
- *  recognize. */
+/** Looks up the {@link ErrorCodeSpec} for a code. Returns `undefined` for a
+ * newer code this client does not yet recognize. */
 export function errorCodeSpec(code: string): ErrorCodeSpec | undefined {
   return (ERROR_CODES as Record<string, ErrorCodeSpec>)[code];
 }
 
-/** Reports whether a code is marked retryable. Unknown and dynamic codes
+/** Reports whether a code is marked retryable. Unknown codes
  *  default to non-retryable, so an unrecognized failure is never retried
  *  automatically. */
 export function isRetryableCode(code: string): boolean {
@@ -1816,7 +1862,7 @@ export function isRetryableCode(code: string): boolean {
  *   - remaining `auth` category → `auth_blocked` (the credential-type 401s)
  *   - anything else, or unknown → `none`
  *
- * An unknown code, a dynamic `policy:*` code, or a code this client predates
+ * An unknown code or a code this client predates
  * (no spec) defaults to `none`, the same safe default as {@link isRetryableCode}:
  * an unrecognized code is never treated as a credential expiry or a sign-out.
  */

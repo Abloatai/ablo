@@ -172,12 +172,13 @@ prepare_release() {
     scripts/typesafety/public-surface-baseline.json
   git commit -q -m "release(ablo): $new_version"
 
-  # The changelog page carries the release date, and that date is read off the
-  # `release(ablo): x.y.z` commit — which did not exist when step 2 generated
-  # the page. So the page was written undated, and the moment the commit landed
-  # the generator could date it, leaving `check:docs-site` reporting a page as
-  # stale on every release. Regenerate now that the commit exists and fold the
-  # result into it, so the page ships carrying the date it keeps.
+  # This is where the release date is stamped, and it is the ONLY place. Step 2
+  # wrote the changelog page undated: the `release(ablo): x.y.z` commit did not
+  # exist yet and npm has never heard of this version, so no source could answer.
+  # Now the commit exists, so regenerate and fold the result back into it. The
+  # generator treats a date already on a page as final, which is what makes this
+  # a stamp rather than a guess: the instant written here is the one the page
+  # keeps through the publish, the mirror, and every later build.
   npm run build:docs --workspace=@abloatai/ablo >/dev/null
   if ! git diff --quiet -- docs/ablo; then
     git add docs/ablo

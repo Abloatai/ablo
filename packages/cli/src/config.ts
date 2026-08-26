@@ -20,8 +20,11 @@
  * project always resolves the matching one, or none, which surfaces as a precise
  * error rather than a silent push to the wrong project.
  *
- * `ABLO_MANAGEMENT_KEY` overrides project/branch administration.
- * `ABLO_API_KEY` is reserved for data-plane runtime and deployment credentials.
+ * `ABLO_API_KEY` is the single explicit credential input. Its prefix and
+ * server-side grant decide which operations it may perform: an `mk_` value can
+ * drive project/branch administration, while runtime commands use branch-bound
+ * `sk_`/`rk_` values. The CLI's stored login remains the normal interactive
+ * source of management authority.
  * Legacy `sandbox`/`production` slots remain readable during the cutover.
  *
  * The store's location resolves from `$ABLO_CONFIG_DIR`, then
@@ -475,12 +478,12 @@ export function resolveOrgKey(modeOverride?: Mode): string | undefined {
 }
 
 /**
- * Resolve project control-plane authority. Runtime `ABLO_API_KEY` is
- * intentionally ignored so a branch data credential can never become a
- * management credential through CLI fallback.
+ * Resolve project control-plane authority. The one explicit credential slot is
+ * capability-dispatched: only an `mk_` value can override the stored login, so
+ * an exported runtime key does not hide usable management authority.
  */
 export function resolveManagementKey(): string | undefined {
-  if (process.env.ABLO_MANAGEMENT_KEY) return process.env.ABLO_MANAGEMENT_KEY;
+  if (process.env.ABLO_API_KEY?.startsWith('mk_')) return process.env.ABLO_API_KEY;
   const cfg = readConfig();
   if (!cfg) return undefined;
   const entry = cfg.profiles[activeProfileName(cfg)]?.management;
@@ -495,7 +498,7 @@ export function resolveManagementKey(): string | undefined {
  * falling back across profiles cannot redirect data or branch lifecycle work.
  */
 export function resolveOrgManagementKey(options: { readonly persistConfigMigrations?: boolean } = {}): string | undefined {
-  if (process.env.ABLO_MANAGEMENT_KEY) return process.env.ABLO_MANAGEMENT_KEY;
+  if (process.env.ABLO_API_KEY?.startsWith('mk_')) return process.env.ABLO_API_KEY;
   const cfg = readConfig({ persistMigrations: options.persistConfigMigrations });
   if (!cfg) return undefined;
   const profiles = [...new Set([

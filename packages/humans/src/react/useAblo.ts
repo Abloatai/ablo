@@ -7,7 +7,7 @@ import type { ModelClaim } from '@abloatai/transaction/coordination';
 import {
   getModelClientMeta,
   type ModelOperations,
-} from '../local/client/createModelProxy.js';
+} from '../local/client/createModelOperations.js';
 import { Model } from '../local/Model.js';
 import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
 import type { ResolveSchema } from '@abloatai/transaction/types/global';
@@ -138,7 +138,7 @@ function snapshotValue<T>(value: T): T {
  * // With the Register augmentation (recommended):
  * const ablo = useAblo();
  * if (!ablo) return <Loading />;
- * const doc = await ablo.records.get({ id }); // async server read
+ * const doc = await ablo.records.get({ id }); // observational async server read
  *
  * // Reactive selector (a synchronous local snapshot). The selector's reads
  * // are typed as snapshot rows — data fields + computeds, no relation

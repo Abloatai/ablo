@@ -13,11 +13,11 @@
  *       status: z.enum(['todo', 'doing', 'done']).default('todo'),
  *       workspaceId: z.string().optional(),
  *     }, {
- *       workspace: relation.belongsTo('workspaces', 'workspaceId'),
+ *       relations: { workspace: relation.belongsTo('workspaces', 'workspaceId') },
  *     }),
  *   });
  *
- *   type Item = InferModel<typeof schema, 'items'>;
+ *   type Item = Model<typeof schema, 'items'>;
  */
 
 import { z } from 'zod';
@@ -231,6 +231,13 @@ export const baseFieldsSchema = z.object({
 /**
  * The universal model field names. Audit and application metadata is declared
  * by the application or carried by the commit record, never injected here.
+ *
+ * This is the runtime spelling of {@link baseFieldsSchema}, and the one every
+ * consumer outside this package derives from: the CLI's adopt rule, the MCP
+ * schema linter, and the docs that tell an author which names not to declare.
+ * It is exported from `@abloatai/transaction/schema` for exactly that reason —
+ * when this list last moved (0.52.0, five names down to one) three hand-written
+ * copies stayed behind and went on rejecting correct schemas for five releases.
  */
 export const BASE_FIELDS = [
   'id',
@@ -238,6 +245,18 @@ export const BASE_FIELDS = [
 
 /** The base fields type — pure data columns. */
 export type BaseModelFields = z.infer<typeof baseFieldsSchema>;
+
+// Invariant equality (no runtime, no casts): true only when both are mutually
+// assignable. `ExpectTrue`'s constraint is what turns a mismatch into an error
+// at THIS declaration, so the tuple and the schema cannot move apart — in
+// either direction, a name in one and not the other fails to compile.
+type BaseFieldsEqual<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type ExpectTrue<T extends true> = T;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _BaseFieldsExact = ExpectTrue<
+  BaseFieldsEqual<(typeof BASE_FIELDS)[number], keyof BaseModelFields & string>
+>;
 
 /**
  * Methods every model instance carries. These are intersected into
@@ -332,7 +351,8 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
 
 /**
  * Infer the full model type from a schema.
- * Includes base fields (id, createdAt, updatedAt, etc.)
+ * Includes the base fields, which today means `id` alone: audit timestamps are
+ * ordinary declared fields and appear here only when the model declares them.
  *
  * ```ts
  * type Item = InferModel<typeof schema, 'items'>;

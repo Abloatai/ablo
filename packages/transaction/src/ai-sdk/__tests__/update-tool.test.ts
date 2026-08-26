@@ -6,11 +6,11 @@ import {
 } from '../updateTool.js';
 import type {
   ModelUpdateParams,
-} from '../../resources/modelOperations.js';
+} from '../../client/resources/modelOperations.js';
 import type {
   ContentionOptions,
   ModelUpdater,
-} from '@abloatai/transaction/resources/functionalUpdate';
+} from '@abloatai/transaction/client/resources/functionalUpdate';
 import type { HeldClaim } from '@abloatai/transaction/types/streams';
 
 // `ai` ships ESM/TS that Jest can't transform; updateTool only uses

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import ts from 'typescript';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -82,6 +82,52 @@ function withoutOwnImports(text) {
   return out;
 }
 
+/**
+ * The engine's base fields, read out of the module that defines them.
+ *
+ * Every rule below that names a base field derives it from here. The three
+ * copies this replaces — the MCP schema linter, the CLI adopt rule, and the
+ * regex that used to sit in this very file — all still said `id`, `createdAt`,
+ * `updatedAt`, `organizationId`, `createdBy` five releases after 0.52.0 cut the
+ * list to `id`. The copy in THIS file was the worst of them: it forbade doc
+ * examples from declaring `createdAt`, which by then was the correct thing to
+ * do, so the gate against drift was itself enforcing the drift.
+ */
+function engineBaseFields() {
+  const source = readFileSync(
+    resolve(repoRoot, 'packages/transaction/src/schema/schema.ts'),
+    'utf8',
+  );
+  const literal = /export const BASE_FIELDS = \[([\s\S]*?)\] as const;/.exec(source);
+  if (!literal) throw new Error('could not read BASE_FIELDS from schema/schema.ts');
+  return [...literal[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+}
+
+const BASE_FIELDS = engineBaseFields();
+
+/**
+ * The tenancy value is server-owned like a base field but is not one: it comes
+ * from a model's `policy`, not its field list. Prose may legitimately group it
+ * with `id`, so it is tolerated wherever a base field is.
+ *
+ * Read from `DEFAULT_ORG_COLUMN` in both spellings a doc may use, rather than
+ * typed out here. A gate written against hand-written copies should not open
+ * with one.
+ */
+function tenancyNames() {
+  const source = readFileSync(
+    resolve(repoRoot, 'packages/transaction/src/schema/tenancy.ts'),
+    'utf8',
+  );
+  const literal = /export const DEFAULT_ORG_COLUMN = '([^']+)';/.exec(source);
+  if (!literal) throw new Error('could not read DEFAULT_ORG_COLUMN from schema/tenancy.ts');
+  const column = literal[1];
+  const camel = column.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  return [column, camel];
+}
+
+const TENANCY_NAMES = tenancyNames();
+
 const violations = [];
 
 function add(file, message) {
@@ -134,7 +180,7 @@ function checkRemovedReadVerbs(file, key, text) {
     add(
       file,
       `line ${number}: positional \`get\`/\`getAll\`/\`getCount\` were removed in 0.35.0 — ` +
-        `use \`get({ id })\` for authoritative reads or \`local.get(id)\` for snapshots (${line.trim()})`,
+        `use \`get({ id })\` to observe, \`read({ id })\` for decision input, or \`local.get(id)\` for snapshots (${line.trim()})`,
     );
   }
   if (hits.length < allowed) {
@@ -199,13 +245,13 @@ function checkSessionSettingsPage() {
  */
 function checkClaimTargetCoverage() {
   const page = resolve(packageRoot, 'docs/coordination.md');
-  const schemaModule = resolve(repoRoot, 'packages/transaction/src/wire/claims.ts');
+  const schemaModule = resolve(repoRoot, 'packages/transaction/src/claims/contract.ts');
   const source = readFileSync(schemaModule, 'utf8');
   const text = readFileSync(page, 'utf8');
 
   const literal = /export const claimTargetSchema = z\.object\(\{([\s\S]*?)\}\);/.exec(source);
   if (!literal) {
-    add(page, 'could not read claimTargetSchema from wire/claims.ts');
+    add(page, 'could not read claimTargetSchema from claims/contract.ts');
     return;
   }
 
@@ -220,8 +266,162 @@ function checkClaimTargetCoverage() {
   }
 }
 
+/** A model example redeclaring a field the SDK supplies. Derived, not restated. */
+const redeclaresBaseField = new RegExp(`\\b(${BASE_FIELDS.join('|')}):\\s*z\\.`);
+
+/**
+ * Prose that tells a reader which fields they need not declare must name only
+ * fields the engine actually supplies.
+ *
+ * The shape caught here is the one that shipped in five places at once: a
+ * comma-separated run of names including `id`, inside a sentence about them
+ * being reserved, provided, supplied, or not to be declared. `createdAt` in
+ * such a run is not a wording problem — it is an instruction to delete a
+ * field, after which `ablo migrate` provisions no column and the row has no
+ * such value at all. Naming those fields OUTSIDE a reserved claim is fine and
+ * is what the docs should do, so only the claim shape is policed.
+ */
+const RESERVED_CLAIM =
+  /reserved|automatic|supplie[sd]|provide[sd]|inject|do not declare|don't declare|never declare/i;
+const CLAIM_TOKEN = String.raw`\\?\`?[A-Za-z_]\w*\\?\`?`;
+const CLAIM_LIST = new RegExp(`(?:${CLAIM_TOKEN}\\s*,\\s*)+(?:(?:and|or)\\s+)?${CLAIM_TOKEN}`, 'g');
+
+function checkBaseFieldClaims(file, text) {
+  const allowed = new Set([...BASE_FIELDS, ...TENANCY_NAMES]);
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!RESERVED_CLAIM.test(line)) continue;
+    const named = new Set();
+    for (const run of line.matchAll(CLAIM_LIST)) {
+      const names = [...run[0].matchAll(/\b([A-Za-z_]\w*)\b/g)]
+        .map((m) => m[1])
+        .filter((n) => n !== 'and' && n !== 'or');
+      if (!names.includes('id')) continue;
+      for (const n of names) if (!allowed.has(n)) named.add(n);
+    }
+    if (named.size) {
+      add(
+        file,
+        `line ${i + 1}: names ${[...named].map((n) => `\`${n}\``).join(', ')} as supplied by the SDK; ` +
+          `base fields are ${BASE_FIELDS.map((n) => `\`${n}\``).join(', ')} — audit fields are declared by the author`,
+      );
+    }
+  }
+}
+
+/**
+ * Every export the MCP api-surface descriptor names must actually exist.
+ *
+ * That file derives its VERB names from a machine-checked manifest and says so
+ * in its own preamble, then hand-writes the export list eight lines below —
+ * where `InferModel`, a type the SDK has never exported under that name on
+ * this path, sat being handed to agents as fact. Same defect, different
+ * syntax, which is why this checks the property rather than the shape: resolve
+ * each subpath to the source module it really resolves to, collect what it
+ * really exports, and compare.
+ */
+function packageDirsByName() {
+  const dirs = new Map();
+  const root = resolve(repoRoot, 'packages');
+  for (const name of readdirSync(root)) {
+    const manifest = join(root, name, 'package.json');
+    try {
+      dirs.set(JSON.parse(readFileSync(manifest, 'utf8')).name, join(root, name));
+    } catch {
+      /* not a package */
+    }
+  }
+  return dirs;
+}
+
+const PACKAGE_DIRS = packageDirsByName();
+
+/** A bare specifier → the `.ts` its `@ablo/source` condition points at, or null. */
+function resolveSourceEntry(specifier) {
+  const parts = specifier.split('/');
+  const name = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+  const dir = PACKAGE_DIRS.get(name);
+  if (!dir) return null;
+  const sub = specifier.slice(name.length);
+  const key = sub === '' ? '.' : `.${sub}`;
+  const exports = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).exports ?? {};
+  const entry = exports[key]?.['@ablo/source'];
+  return entry ? resolve(dir, entry) : null;
+}
+
+/**
+ * The names a module exports, following `export *` into the workspace.
+ *
+ * Returns null when any `export *` leads somewhere unresolvable (an external
+ * package), because a partial list would report a real export as a phantom.
+ */
+function collectExports(file, seen = new Set()) {
+  if (seen.has(file)) return new Set();
+  seen.add(file);
+  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+  const names = new Set();
+  for (const statement of source.statements) {
+    if (ts.isExportDeclaration(statement)) {
+      if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+        for (const element of statement.exportClause.elements) names.add(element.name.text);
+        continue;
+      }
+      // `export * from '…'` — follow it, or give up rather than guess.
+      const spec = statement.moduleSpecifier?.text;
+      if (!spec) continue;
+      const target = spec.startsWith('.')
+        ? resolve(dirname(file), spec.replace(/\.js$/, '.ts'))
+        : resolveSourceEntry(spec);
+      if (!target) return null;
+      const nested = collectExports(target, seen);
+      if (!nested) return null;
+      for (const name of nested) names.add(name);
+      continue;
+    }
+    const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
+    if (!modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    if (ts.isVariableStatement(statement)) {
+      for (const decl of statement.declarationList.declarations) {
+        if (ts.isIdentifier(decl.name)) names.add(decl.name.text);
+      }
+    } else if (statement.name && ts.isIdentifier(statement.name)) {
+      names.add(statement.name.text);
+    }
+  }
+  return names;
+}
+
+function checkApiSurfaceExports() {
+  const file = resolve(repoRoot, 'apps/sync-web/src/lib/mcp-ablo/api-surface.ts');
+  const text = readFileSync(file, 'utf8');
+  const marks = [...text.matchAll(/\[(?:PUBLIC_ABLO_PACKAGE|publicAbloSubpath\('([^']+)'\))\]:/g)];
+  if (!marks.length) {
+    add(file, 'could not read API_SURFACES subpath blocks');
+    return;
+  }
+  for (let i = 0; i < marks.length; i++) {
+    const sub = marks[i][1];
+    const segment = text.slice(marks[i].index, marks[i + 1]?.index ?? text.length);
+    const specifier = sub ? `@abloatai/ablo/${sub}` : '@abloatai/ablo';
+    const entry = resolveSourceEntry(specifier);
+    if (!entry) {
+      add(file, `subpath \`${specifier}\` has no @ablo/source entry in packages/ablo/package.json`);
+      continue;
+    }
+    const real = collectExports(entry);
+    if (!real) continue; // an `export *` we cannot follow; do not guess
+    for (const claimed of segment.matchAll(/name: '([A-Za-z0-9_]+)'/g)) {
+      if (!real.has(claimed[1])) {
+        add(file, `\`${specifier}\` does not export \`${claimed[1]}\` — the descriptor names it anyway`);
+      }
+    }
+  }
+}
+
 checkSessionSettingsPage();
 checkClaimTargetCoverage();
+checkApiSurfaceExports();
 
 const docs = publicDocRoots.flatMap((path) => walk(path));
 for (const file of docs) {
@@ -237,10 +437,7 @@ for (const file of docs) {
     add(file, '`push --no-watch` is invalid; use `npx ablo push` or `npx ablo dev --no-watch`');
   }
   if (!isMigration) {
-    for (const { number, line } of linesMatching(
-      text,
-      /\b(id|createdAt|updatedAt|organizationId|createdBy):\s*z\./,
-    )) {
+    for (const { number, line } of linesMatching(text, redeclaresBaseField)) {
       add(file, `line ${number}: model examples must not redeclare SDK system fields (${line.trim()})`);
     }
     for (const { number, line } of linesMatching(text, CLAIM_ACTION_PATTERN)) {
@@ -257,7 +454,10 @@ for (const file of docs) {
     add(file, "`ifClaimed: 'wait'` does not exist; reads use 'return' or 'fail'");
   }
   // The migration note's job is to name what was removed, next to what replaced it.
-  if (!isMigration) checkRemovedReadVerbs(file, rel, text);
+  if (!isMigration) {
+    checkRemovedReadVerbs(file, rel, text);
+    checkBaseFieldClaims(file, text);
+  }
 }
 
 for (const file of mcpPublicSources) {
@@ -282,6 +482,7 @@ for (const file of mcpPublicSources) {
     add(file, 'MCP public claim examples must use `queue`, not boolean `wait`');
   }
   checkRemovedReadVerbs(file, relative(repoRoot, file), text);
+  checkBaseFieldClaims(file, text);
 }
 
 if (violations.length) {

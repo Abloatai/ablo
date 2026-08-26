@@ -22,8 +22,8 @@
 
 import type { ResolveClaimMeta } from '@abloatai/transaction/types/global';
 import type { Claim, ClaimTarget, HeldClaim } from '@abloatai/transaction/types/streams';
-import type { ClaimTargetOptions } from '@abloatai/transaction/resources/modelOperations';
-import type { ClaimCreateOptions } from '@abloatai/transaction/resources/httpResources';
+import type { ClaimTargetOptions } from '@abloatai/transaction/client/resources/modelOperations';
+import type { ClaimCreateOptions } from '@abloatai/transaction/client/resources/httpResources';
 type Identical<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
   (<T>() => T extends B ? 1 : 2) ? true : false;
@@ -32,7 +32,7 @@ type Identical<A, B> =
 // below type-checks the SDK's own paths and not only its published types. They
 // used to compile because nothing anywhere registered a `ClaimMeta`; this is
 // what says they still compile when something does.
-import type { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import type { createHttpTransport } from '@abloatai/transaction/transport/http';
 
 /**
  * The shape a program would register. An `interface` on purpose: it is the

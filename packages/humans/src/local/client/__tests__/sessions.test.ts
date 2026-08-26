@@ -196,6 +196,7 @@ describe('ablo.sessions.create', () => {
 
     await ablo.sessions.create({
       agent: { id: 'agent_7' },
+      onBehalfOf: { user: { id: 'user_42' } },
       // Typed off the schema's model names; serialized to `${typename}.${op}`.
       can: { chats: ['read', 'update'] },
     });
@@ -206,6 +207,7 @@ describe('ablo.sessions.create', () => {
     expect(mintCall.body).toMatchObject({
       participantKind: 'agent',
       participantId: 'agent_7',
+      onBehalfOf: { user: { id: 'user_42' } },
       // The schema key the developer wrote (`chats`) is translated to the
       // lowercased wire TYPENAME (`typename: 'Chat'` → `chat.*`) — the
       // canonical alias the Hub gates on (see sessionMint's `modelTypenames`;

@@ -10,6 +10,7 @@
  *                                         also served at `/apis.json`
  *   - public/.well-known/api-onboarding   the API Onboarding Descriptor
  *                                         (apicommons.org/onboarding)
+ *   - public/.well-known/api-catalog      the RFC 9727 API catalog Linkset
  *
  * Run this after `generate:openapi`: the index quotes the published contract's
  * title, description, and host, so it reads that file rather than rebuilding
@@ -20,9 +21,11 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, relative, resolve } from 'node:path';
 import {
+  API_CATALOG_PATH,
   APIS_JSON_PATH,
   ONBOARDING_PATH,
   parsePublishedOpenApi,
+  renderApiCatalog,
   renderApisJson,
   renderOnboardingDescriptor,
 } from './discovery-docs-lib.mts';
@@ -55,6 +58,7 @@ const openapi = parsePublishedOpenApi(
 const outputs = [
   { path: APIS_JSON_PATH, rendered: renderApisJson(openapi, landingPromise()) },
   { path: ONBOARDING_PATH, rendered: renderOnboardingDescriptor(openapi) },
+  { path: API_CATALOG_PATH, rendered: renderApiCatalog(openapi) },
 ] as const;
 
 const check = process.argv.includes('--check');

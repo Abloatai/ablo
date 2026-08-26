@@ -15,12 +15,9 @@ import { z } from 'zod';
 // schema module to keep this file's runtime dependencies limited to Zod.
 import {
   commitOperationSchema as coordinationCommitOperationSchema,
-  MAX_READ_SET_ENTRIES,
   readDependencyListSchema,
-  readSetProjectionEntryCount,
-  trackDependencyListSchema,
 } from '../coordination/schema.js';
-import type { MutationResultMessageWire } from './commit.js';
+import type { MutationResultMessageWire } from '../commit/contract.js';
 
 // ── Client → Server ────────────────────────────────────────────────────────
 
@@ -31,13 +28,10 @@ import type { MutationResultMessageWire } from './commit.js';
  * Both commit transports — the WebSocket `commit` frame and the HTTP
  * `/v1/commits` endpoint — run this check
  * on every operation before it is applied, so a malformed operation is rejected
- * at the edge. It builds on the shared coordination schema, widening `bypass`
- * to also accept `null`. The TypeScript type is inferred from this schema so
- * the runtime and compile-time contracts have one definition site.
+ * at the edge. The TypeScript type is inferred from the shared coordination
+ * schema so runtime and compile-time contracts have one definition site.
  */
-export const wireCommitOperationSchema = coordinationCommitOperationSchema.extend({
-  bypass: z.boolean().nullish(),
-});
+export const wireCommitOperationSchema = coordinationCommitOperationSchema;
 export type WireCommitOperation = z.infer<typeof wireCommitOperationSchema>;
 
 /**
@@ -59,10 +53,6 @@ export const commitPayloadSchema = z.object({
   operations: z.array(wireCommitOperationSchema),
   clientTxId: z.string(),
   reads: readDependencyListSchema.nullish(),
-  track: trackDependencyListSchema.nullish(),
-}).refine((value) => readSetProjectionEntryCount(value) <= MAX_READ_SET_ENTRIES, {
-  path: ['reads'],
-  message: `reads and track may contain at most ${MAX_READ_SET_ENTRIES} entries combined`,
 });
 
 /** A client-to-server frame that asks the server to commit a batch atomically. */
@@ -76,7 +66,7 @@ export type CommitMessage = z.infer<typeof commitMessageSchema>;
 
 /**
  * The server's acknowledgement of a {@link CommitMessage}. Runtime shape and
- * TypeScript type are both owned by `wire/commit.ts`; HTTP, WebSocket, and
+ * TypeScript type are both owned by `commit/contract.ts`; HTTP, WebSocket, and
  * cached replay no longer maintain parallel receipt declarations.
  */
 export type MutationResultMessage = MutationResultMessageWire;

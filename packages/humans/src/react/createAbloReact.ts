@@ -36,7 +36,7 @@ import {
   type UseAbloModelResult,
 } from './useAblo.js';
 import type { AbloClient as Ablo } from '../client.js';
-import type { ModelOperations } from '../local/client/createModelProxy.js';
+import type { ModelOperations } from '../local/client/createModelOperations.js';
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
 
 /** What a binding returns: the provider and the hook, with `S` fixed. */

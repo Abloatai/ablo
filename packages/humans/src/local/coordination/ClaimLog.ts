@@ -6,11 +6,11 @@
  * without leaking bootstrap, storage, or WebSocket vocabulary into the core.
  */
 
-import { ClaimLog as CoordinationClaimLog } from '@abloatai/transaction/coordination/trace';
+import { ClaimLog as CoordinationClaimLog } from '@abloatai/transaction/claims';
 import type { ObservabilityProvider } from '../interfaces/index.js';
 
-export { formatClaim, formatConflict } from '@abloatai/transaction/coordination/trace';
-export type { ClaimLogEntry } from '@abloatai/transaction/coordination/trace';
+export { formatClaim, formatConflict } from '@abloatai/transaction/claims';
+export type { ClaimLogEntry } from '@abloatai/transaction/claims';
 
 export class ClaimLog extends CoordinationClaimLog implements ObservabilityProvider {
   // Client-lifecycle hooks the claim log has no notion of. Every body below is

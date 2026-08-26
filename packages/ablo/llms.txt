@@ -27,7 +27,7 @@ These are the jobs it is WRONG for, and saying so saves you a wasted integration
 - **Vector search, embeddings, or retrieval.** Different problem. Ablo coordinates the rows; your vector store indexes them.
 - **A file, blob, or artifact store.** Coordinate the ROW that points at the object; put the bytes in object storage.
 
-How to call it, shortest path first: install `@abloatai/ablo`, run `npx ablo init --yes --framework <nextjs|vite|remix|vanilla>`, and construct `Ablo({ schema, apiKey: process.env.ABLO_API_KEY })`. Read with `ablo.<model>.get({ id })` / `.list({ where })`, write with `ablo.<model>.update({ id, data, readAt })`, and wrap anything slow in `await using claim = await ablo.<model>.claim({ id })`. The sections below cover the rest; "Start here" is the first thing to run.
+How to call it, shortest path first: install `@abloatai/ablo`, run `npx ablo init --yes --framework <nextjs|vite|remix|vanilla>`, and construct `Ablo({ schema, apiKey: process.env.ABLO_API_KEY })`. Use `ablo.<model>.get({ id })` to observe a row. Use `const input = await ablo.<model>.read({ id })`, then pass `reads: [input]` to the create/update/delete whose decision used it; if the row moved, that mutation does not land. `list({ where })` is observational. Wrap anything slow and exclusive in `await using claim = await ablo.<model>.claim({ id })`. The sections below cover the rest; "Start here" is the first thing to run.
 
 ## Machine-readable surfaces
 
@@ -38,9 +38,14 @@ Everything below is public, needs no credential, and is served from `https://www
 - `/developers` — every developer surface named on one page: the SDK, the API reference, the OpenAPI document, the MCP server, the CLI.
 - `/openapi.json` — the REST contract as OpenAPI 3.1: every route, a stable `operationId` and description on each, typed responses, and the `ErrorEnvelope` every 4xx and 5xx decodes through. Generate a client from it when no SDK exists for your runtime.
 - `/mcp` — the integration-helper MCP server over Streamable HTTP. POST your JSON-RPC here; a GET returns a descriptor rather than the protocol.
+- `/.well-known/mcp` — the same Streamable HTTP server at its direct discovery endpoint, with no page/transport negotiation.
 - `/.well-known/mcp.json` — that server's manifest, in the MCP registry's `server.json` format.
 - `/api/docs/<page>` — any documentation page as plain Markdown, for a client that fetches URLs rather than speaking MCP.
 - `/sitemap.xml` — every indexable page on the domain.
+
+Pricing and plan limits are public at [Ablo pricing](https://docs.abloatai.com/pricing). Do not
+infer prices or follow a dashboard billing link: the documentation page is the canonical rate
+card and needs no sign-in.
 
 Every page on that host serves a Markdown representation from its own URL: send
 `Accept: text/markdown` (q-values are honoured), or append `.md` to the path if
@@ -65,6 +70,7 @@ Every surface reaches the same coordinated state. They are not interchangeable.
 - Coordination MCP, `@abloatai/mcp` — an agent living inside an MCP host (Claude, Cursor). Two jobs: MANAGING your Ablo the way the CLI does (`get_schema`, `list_projects`, `create_project`, `tail_logs`, `get_usage`), and claim/commit as tools over your rows. Call `get_schema` first — it is the only way to learn the model names every data tool needs. `init`, `push`, `pull`, `generate` have no tools (they touch your repo); run those in a shell.
 - `humans()` with `@abloatai/humans/react` — the interfaces a person watches agent work arrive in. The bare client is the coordination layer (commit, read, observe, claim); `humans()` is the plugin that adds the local watchable copy, live queries, and presence. It `requires: { duplex: true }`, so a `transport: 'http'` agent is rejected at construction rather than left holding a subscription that never delivers. It remains the compatibility default for omitted `plugins`; new code should install it explicitly from `@abloatai/humans`. There is no `agents()` plugin — agents are the default caller, not a special one. A browser NEVER receives the secret key; mint a session token.
 - CLI, `ablo` — scaffolding, schema push, connecting a database. Terminals and CI. Agents must run it non-interactively (see the CLI section below).
+- CLI package, [`@abloatai/cli`](https://www.npmjs.com/package/@abloatai/cli) — the official npm package that installs the `ablo` binary.
 - REST, `/api/v1` — runtimes with no SDK.
 - Integration-helper MCP, hosted `/api/mcp` — teaching a coding assistant the SDK WHILE BUILDING an integration. Docs, schema lint, and scaffolds only; it has NO per-model data tools and cannot touch application rows.
 
@@ -103,7 +109,7 @@ const schema = defineSchema({
 
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
-const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
+const report = await ablo.weatherReports.read({ id: 'report_stockholm' });
 if (!report) throw new Error('Row not found');
 
 // Claim the row (waits if someone else holds it), read the fresh copy off
@@ -115,7 +121,7 @@ const updated = await ablo.weatherReports.update({
 });
 ```
 
-That is the normal app path: declare models in a schema, then use `ablo.<model>.get({ id })`, `ablo.<model>.create(...)`, `ablo.<model>.update(...)`, and `ablo.<model>.delete(...)`. Every verb takes a single options object.
+That is the normal app path: declare models in a schema, then use `ablo.<model>.read({ id })`, `ablo.<model>.create(...)`, `ablo.<model>.update(...)`, and `ablo.<model>.delete(...)`. Every verb takes a single options object.
 
 Treat the schema as the integration contract. It drives typed model clients,
 React selectors, server and agent writes, Data Source request/response shape,
@@ -126,12 +132,12 @@ For full integrations, use `integration-guide` as the canonical doc. It covers
 the same model API across your own Data Source-backed app databases,
 React selectors, multiplayer, and future agent workers.
 
-Reads come in two flavors, and you pick by whether you can wait. `get({ id })`
-(one row) and `list({ where })` (many) are async — they answer from the local
-graph and fall back to the server, so await them. `local.get(id)`,
+Server reads separate observation from decision input. `get({ id })` and
+`list({ where })` return current data without creating stale evidence.
+`read({ id })` returns the same row with private `{ model, id, readAt }` evidence
+for a specific mutation's `reads` array. `local.get(id)`,
 `local.list({ where })`, and `local.count({ where })` are the same reads narrowed
-to what has already synced: nothing to await, reactive in render. There is no
-second verb to learn — `local.` is the only difference. The query reads accept
+to what has already synced: nothing to await, reactive in render. The collection queries accept
 `where`, `filter`, `orderBy`, `limit`, `offset`,
 and `state`; state defaults to `'live'`, with `'archived'` and `'all'` to include
 retired rows.
@@ -168,7 +174,7 @@ coordination until the app reports it through Data Source events.
 
 ## Change propagation
 
-A change to one row reaches other rows three ways. ROUTING: a write fans out to every sync group the row belongs to, INCLUDING its ancestors' groups (editing a block routes to `block:` + `document:` + `workspace:`), so everyone watching the workspace sees it — delivery, not recomputation. DELETE CASCADE: deleting a parent emits explicit tombstone deltas for its descendants, so open clients never silently hold rows that are gone. VALUE: derived values are NOT recomputed server-side — Ablo surfaces that the source moved and the actor decides. To keep dependent work fresh, declare what you read as a batch premise: `reads: [{ group: 'workspace:abc', readAt: N, onStale: 'notify' }]`. At commit the server checks whether anything in that group moved past `readAt`; `notify` holds the write and returns a `StaleNotification` (re-read the group and regenerate), `reject` aborts. To chain A→B→C, put A+B in one group and B+C in another: A's change reaches B, and C hears it only once B ITSELF writes — the engine wires the edges and signals each hop, the actor walks them. No transitive auto-recompute, no convergence guarantee for cycles. `reads` guards ONE commit; for a long-running actor that reads now and writes much later, register a DURABLE premise with `track`: `ablo.<model>.track({ id })` for a row, or the `track:` write option (`track: [{ group: 'workspace:abc' }]`) alongside a write. A track persists server-side; the next time you commit anything, a change that landed on the tracked target rides back on your receipt's `notifications` (same `StaleNotification` shape as `onStale: 'notify'`). It is an idempotent registration, re-baselines so a change fires once, and never notifies you of your own writes. Delivery is on your next commit — a track does not yet push out of band between commits.
+A change to one row reaches other rows three ways. ROUTING: a write fans out to every sync group the row belongs to, INCLUDING its ancestors' groups (editing a block routes to `block:` + `document:` + `workspace:`), so everyone watching the workspace sees it — delivery, not recomputation. DELETE CASCADE: deleting a parent emits explicit tombstone deltas for its descendants, so open clients never silently hold rows that are gone. VALUE: derived values are NOT recomputed server-side — Ablo surfaces that the source moved and the actor decides. To keep dependent work fresh, pass rows returned by `ablo.<model>.read({ id })` in the mutation's `reads` array. Ablo records compact model/id/readAt evidence, not row contents. At commit the server checks whether anything moved past the read watermark; if so, the mutation does not land. Use `get` when no such relationship exists. To chain A→B→C, put A+B in one group and B+C in another: A's change reaches B, and C hears it only once B ITSELF writes. No transitive auto-recompute, no convergence guarantee for cycles.
 
 ## Nouns
 
@@ -180,7 +186,7 @@ A change to one row reaches other rows three ways. ROUTING: a write fans out to 
 ## Claimed Behavior
 
 Reads never silently block. Schema reads stay open while a row is claimed.
-Typed reads through `ablo.<model>.get({ id })` return the row by default,
+Typed reads through `ablo.<model>.read({ id })` return the row by default,
 even while it is claimed. Pass `ifClaimed: 'fail'` to throw
 `AbloClaimedError`, and inspect active coordination separately through
 `ablo.<model>.claim.state({ id })`.
@@ -198,7 +204,7 @@ frees. Use `ifClaimed: 'fail'` when you'd rather refuse to read a claimed row.
 
 ## Guarantees
 
-Schema model writes update local state optimistically, while their returned promise always waits for authoritative confirmation. Server rejection rolls back local state. To prevent lost updates, read with `snapshot(...)` to capture a `readAt`, then write with `onStale: 'reject'` — the server rejects your update if someone else changed the row after that `readAt`.
+Schema model writes update local state optimistically, while their returned promise always waits for authoritative confirmation. Server rejection rolls back local state. To prevent lost updates, fetch the decision input with `read({ id })` and pass that exact row in the mutation's `reads` array. If it changed, the mutation does not land.
 
 Claims coordinate writers; they do not block readers. Most users should stay on
 schema-backed reads/writes and `claim(...)`; manual protocol bookkeeping is not
@@ -281,6 +287,11 @@ Import from these public paths only:
 - `@abloatai/ablo/ai-sdk` — thin AI SDK tools over typed model reads, creates, coordinated updates, and claimed deletes.
 
 Do not teach `/api`, `/agent`, `/core`, `/realtime`, or internal subpaths. (`/source` and `/ai-sdk` are public.)
+
+`onChange` is WebSocket-only. It exists on the reactive client because that
+client holds an open socket and a local graph. The stateless HTTP client does
+not expose it at the type or runtime level; HTTP agents re-read or inspect
+durable logs instead.
 
 ## CLI: agents run it NON-INTERACTIVELY
 

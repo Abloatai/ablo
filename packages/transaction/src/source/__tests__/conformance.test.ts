@@ -5,7 +5,7 @@
  */
 
 import { memoryDataSource } from '../adapters/memory.js';
-import { runDataSourceTests } from '../conformance.js';
+import { runDataSourceTests } from '../adapters/conformance.js';
 
 describe('memoryDataSource conformance', () => {
   runDataSourceTests(memoryDataSource, it);

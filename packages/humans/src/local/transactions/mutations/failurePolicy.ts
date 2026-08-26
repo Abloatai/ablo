@@ -25,7 +25,7 @@ export function isDefinitiveRejection(error: Error): boolean {
   return status !== undefined && status >= 400 && status < 500 && status !== 429;
 }
 
-export interface ConflictPolicyContext {
+export interface ConflictResolutionContext {
   readonly config: Pick<MutationQueueConfig, 'conflictResolution'>;
   readonly store: MutationStore;
   readonly rollbackOptimistic: (transaction: QueuedMutation, reason: string) => Promise<void>;
@@ -34,7 +34,7 @@ export interface ConflictPolicyContext {
 }
 
 export async function handleConflict(
-  ctx: ConflictPolicyContext,
+  ctx: ConflictResolutionContext,
   transaction: QueuedMutation,
   serverData: MutationInput,
 ): Promise<void> {

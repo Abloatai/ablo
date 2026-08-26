@@ -110,12 +110,12 @@ migrations — your migration tool stays in charge of the shape of your database
 Ablo only writes rows into tables you already have, through a role scoped to
 exactly that.
 
-> **Just trying Ablo?** You don't need a database to start. Pass an `apiKey` only,
-> and Ablo keeps your rows in its own log so you can build the whole app today.
-> `ablo dev` gives each Git branch its own isolated plane.
-> Keep it hosted with no database, or point that branch at a separate/local
-> Postgres. Connect your production root (below) when you're ready for its
-> database to be the system of record.
+> **Just trying Ablo?** Start on a throwaway Postgres rather than your production
+> one. `ablo dev` gives each Git branch its own isolated plane, so point that
+> branch at a separate or local database, build against it, and connect your
+> production root (below) when you're ready for its database to be the system of
+> record. A branch with nothing connected refuses a schema push, which is the
+> first thing you'll hit if you skip this.
 
 Connecting sets up two capabilities on your Postgres: **logical replication**, so
 Ablo can read and confirm, and a **scoped DML role**, so Ablo can write. `ablo
@@ -474,6 +474,12 @@ The outbox automatically observes writes made through Ablo. A write made
 directly by other application code is visible only if that code writes the same
 outbox record in its transaction. Native WAL observation sees both Ablo and
 external writes.
+
+Endpoint events use a versioned envelope. Version 2 freezes `syncGroups` in the
+writing transaction; version 1 is retained only to decode events written by an
+older adapter during a rolling upgrade. Poll requests keep `cursor` (where to
+read) separate from `acknowledgedThrough` (what Ablo has durably accepted), and
+the built-in adapters prune acknowledged rows in bounded batches.
 
 ## Next steps
 

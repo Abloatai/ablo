@@ -37,7 +37,7 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: "http" 
 // `get` resolves to the row, or `undefined` when none matches.
 const open = await ablo.records.list({ where: { status: "todo" } });
 
-const record = await ablo.records.get({ id: open[0].id });
+const record = await ablo.records.read({ id: open[0].id });
 if (!record) throw new Error("record not found");
 
 console.log(record.title);
@@ -45,9 +45,11 @@ await ablo.records.update({ id: record.id, data: { status: "done" } });
 ```
 
 It exposes `get` / `list` / `create` / `update` / `delete`, plus `commits`
-and `claim`. It does **not** expose stateful-only `local` reads or `onChange`
-subscriptions. Those need a live connection, so with `transport: 'http'` they
-are compile errors rather than runtime surprises.
+and `claim`. It does **not** expose stateful-only `local` reads or model
+`onChange` subscriptions. Those need a WebSocket, so with `transport: 'http'`
+they are compile errors. `context().onChange` is separate: while its listener
+is active, it holds one HTTP response open until the context changes or the
+listener stops.
 
 ## Managed scoped agents
 
@@ -61,7 +63,7 @@ model output or an HTTP request body. A serverless handler normally creates and
 disposes one child per invocation:
 
 ```ts
-const run = await control.runs.get({ id: verifiedRunId });
+const run = await control.runs.read({ id: verifiedRunId });
 if (!run) throw new Error('run not found');
 
 const agent = await control.agents.create({
@@ -207,19 +209,21 @@ default caller here, not a bolt-on.
 
 ```text
 something happens ──▶ your agent (HTTP, no socket)
-  (a job, a webhook,     read context (list/get)
+  (a job, a webhook,     read context (list/get/read)
    a queue message)      claim → work → commit
                          done — no held connection
 ```
 
-Because it holds nothing open, an agent is a **stateless worker**: deploys and
-restarts are free, and you scale by adding workers. A long-running fleet of idle
-agents costs nothing on the live plane — that capacity stays for humans.
+Without `context().onChange`, an agent holds nothing open and remains a
+**stateless worker**: deploys and restarts are free, and you scale by adding
+workers. Each active context listener is explicit connection capacity and must
+be stopped when its work ends.
 
 ## What stays on the live (human) plane
 
-`onChange` (live subscriptions) and the `local` reads (local synced-pool
-reads) require a WebSocket and a local store — they're for interactive UIs, not
-stateless agents. An agent reacts to an external trigger (a job/queue/webhook),
-then reads with `list`/`get`. See [client behavior](/client-behavior) for
-the full surface and [guarantees](/guarantees) for the coordination semantics.
+Model `onChange` and `local` reads require a WebSocket and a local store —
+they're for interactive UIs. An HTTP agent normally reacts to an external
+trigger, then reads with `list`/`get`. For costly work, `context().onChange` can
+stop that one run early while the final write still uses `context().reads`.
+See [client behavior](/client-behavior) for the full surface and
+[guarantees](/guarantees) for the coordination semantics.

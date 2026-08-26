@@ -80,7 +80,7 @@ When handing this to a coding agent, give it a concrete target:
 ```txt
 Add Ablo to this app for one model your agents edit.
 Run npx ablo dev and use its branch-bound key. Declare schema, add the Ablo client, replace
-one write with ablo.<model>.update(..., { readAt, onStale: 'reject' }), and add a smoke test for two concurrent writers.
+one decision read with ablo.<model>.read(...), pass that row in the write's reads array, and add a smoke test for two concurrent writers.
 ```
 
 ## 1. Declare A Schema
@@ -96,9 +96,9 @@ import { defineSchema, model, z } from '@abloatai/ablo/schema';
 export const schema = defineSchema(
   {
     weatherReports: model({
-      // Reserved fields (id, createdAt, updatedAt, organizationId, createdBy)
-      // are SDK-provided automatically — never declare them. Declare only your
-      // own fields.
+      // `id` is the only field the SDK supplies; never declare it. Audit
+      // fields are ordinary fields: declare `createdAt` / `updatedAt` /
+      // `createdBy` here if you want columns for them.
       projectId: z.string(),
       location: z.string(),
       status: z.enum(['pending', 'ready']),
@@ -161,7 +161,7 @@ falsy flag. See `packages/transaction/src/schema/model.ts` for the full option s
 Trusted runtimes can use `ABLO_API_KEY`.
 
 ```ts
-// src/ablo.ts
+// src/client/ablo.ts
 import Ablo from '@abloatai/ablo';
 import { schema } from './ablo/schema';
 
@@ -179,7 +179,7 @@ client now).
 
 ```tsx
 // src/ablo-client.ts
-import Ablo from '@abloatai/ablo';
+import { Ablo } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
 // The browser never holds the API key. The client mints a short-lived token
@@ -259,7 +259,7 @@ refreshes before expiry.
 ## 3. Read State
 
 Reads come in two flavors, and you pick based on whether you can wait.
-`get({ id })` and `list({ where })` hit the server (and hydrate the local
+`get({ id })`, `read({ id })`, and `list({ where })` hit the server (and hydrate the local
 store) — they're async, so you `await` them. `local.get(id)`,
 `local.list({ where })`, and `local.count({ where })` read the already-synced local
 graph synchronously, so they're the ones you call in render — and the ones you
@@ -271,7 +271,7 @@ and waits.
 ```ts
 await ablo.ready();
 
-const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
+const report = await ablo.weatherReports.read({ id: 'report_stockholm' });
 if (!report) throw new Error('report not found');
 ```
 
@@ -321,17 +321,17 @@ For simple writes:
 await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' } });
 ```
 
-For writes based on state the user or agent already read, snapshot first and
-reject stale updates:
+For writes based on current state, use a decision read and pass the exact row
+to the mutation:
 
 ```ts
-const snap = ablo.snapshot({ weatherReports: 'report_stockholm' });
+const report = await ablo.weatherReports.read({ id: 'report_stockholm' });
+if (!report) throw new Error('report not found');
 
 await ablo.weatherReports.update({
-  id: 'report_stockholm',
+  id: report.id,
   data: { status: 'ready' },
-  readAt: snap.stamp,
-  onStale: 'reject',
+  reads: [report],
 });
 ```
 
@@ -484,12 +484,12 @@ const completeReport = tool({
     forecast: z.string(),
   }),
   execute: async ({ reportId, forecast }) => {
-    const snap = ablo.snapshot({ weatherReports: reportId });
+    const report = await ablo.weatherReports.read({ id: reportId });
+    if (!report) throw new Error('report not found');
     return ablo.weatherReports.update({
       id: reportId,
       data: { status: 'ready', forecast },
-      readAt: snap.stamp,
-      onStale: 'reject',
+      reads: [report],
     });
   },
 });
@@ -532,7 +532,7 @@ that guarantee as eventual completion with repair—not atomicity.
 | `persistence: 'indexeddb'`                | Durable browser cache that survives reloads, for apps that need it. |
 | `durableWrites: { store, namespace? }`     | Recover unacknowledged worker writes after a process restart.      |
 | `claim` / `claim.state` / `claim.queue`          | Show active work and coordinate before a write.                   |
-| `snapshot` + `readAt`                     | Reject writes based on stale state.                               |
+| `read` + `reads`                          | Reject writes based on stale state.                               |
 | `mutable`, `readOnly`, `field`, `indexed` | Advanced schema and read tuning.                                  |
 
 The first integration should not need most of these. Start with schema and
@@ -543,7 +543,8 @@ them.
 
 | Method                                 | Use it for                                                                       |
 | -------------------------------------- | -------------------------------------------------------------------------------- |
-| `get({ id })`                     | Async read of one row from the server (await it).                                |
+| `get({ id })`                      | Observe one row from the server (await it).                                      |
+| `read({ id })`                     | Read one decision input to carry in a mutation's `reads` array.                  |
 | `list({ where })`                      | Async read of many rows from the server (await it).                              |
 | `listAll({ where, maxPages?, signal? })` | Explicit bounded traversal of every matching page; filter before collecting.   |
 | `local.get(id)`                   | Synchronous local read of one synced row (use in render).                        |

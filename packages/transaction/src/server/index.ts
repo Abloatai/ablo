@@ -26,7 +26,7 @@ export {
   commitExecutionResultSchema,
   commitRecordSchema,
   type CommitRecord,
-} from '../wire/commit.js';
+} from '../commit/contract.js';
 export { storageModeSchema, type StorageMode } from './storageMode.js';
 export type {
   ColumnOverride,

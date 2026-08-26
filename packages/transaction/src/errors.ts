@@ -271,11 +271,35 @@ export class AbloStaleContextError extends AbloError {
         readonly id: string;
         readonly observedSyncId: number;
       }[];
+      details?: Readonly<Record<string, unknown>>;
     },
   ) {
-    super(message, options);
-    if (options?.readAt !== undefined) this.readAt = options.readAt;
-    if (options?.conflicts !== undefined) this.conflicts = options.conflicts;
+    const detailedReadAt = options?.details?.readAt;
+    const detailedConflicts = options?.details?.conflicts;
+    const readAt =
+      options?.readAt ?? (typeof detailedReadAt === 'number' ? detailedReadAt : undefined);
+    const conflicts =
+      options?.conflicts ??
+      (Array.isArray(detailedConflicts)
+        ? detailedConflicts.filter(
+            (item): item is { model: string; id: string; observedSyncId: number } =>
+              typeof item === 'object' &&
+              item !== null &&
+              typeof (item as { model?: unknown }).model === 'string' &&
+              typeof (item as { id?: unknown }).id === 'string' &&
+              typeof (item as { observedSyncId?: unknown }).observedSyncId === 'number',
+          )
+        : undefined);
+    super(message, {
+      ...options,
+      details: {
+        ...(options?.details ?? {}),
+        ...(readAt !== undefined ? { readAt } : {}),
+        ...(conflicts !== undefined ? { conflicts } : {}),
+      },
+    });
+    if (readAt !== undefined) this.readAt = readAt;
+    if (conflicts !== undefined) this.conflicts = conflicts;
   }
 }
 
@@ -378,7 +402,7 @@ export function formatClaimedErrorMessage(args: {
   readonly targetLabel: string;
   readonly heldBy?: string;
   readonly claim?: ClaimErrorClaim;
-  readonly policyReason?: string;
+  readonly detail?: string;
   readonly fallback?: string;
 }): string {
   const holder = claimActor(args.claim, args.heldBy);
@@ -393,10 +417,10 @@ export function formatClaimedErrorMessage(args: {
   const descriptionPart = description ? `: ${description}` : '';
   const expiresPart =
     expiresIn !== undefined ? ` - expires in ${expiresIn}s` : '';
-  const policyPart = args.policyReason
-    ? ` Policy reason: ${args.policyReason}.`
+  const detailPart = args.detail
+    ? ` ${args.detail}.`
     : '';
-  return `Claimed by ${actor}${descriptionPart}${expiresPart} on ${args.targetLabel}.${policyPart}`;
+  return `Claimed by ${actor}${descriptionPart}${expiresPart} on ${args.targetLabel}.${detailPart}`;
 }
 
 /**
@@ -629,7 +653,7 @@ const OptionalWireStringSchema = z.preprocess(
 /**
  * The one definition of the {@link RequiredCapability} wire shape. Every
  * boundary that carries a denial's capability detail — the error body parsed
- * here, and the rejected commit receipt in `wire/commit.ts` — composes this
+ * here, and the rejected commit receipt in `commit/contract.ts` — composes this
  * schema rather than restating the fields, so a new member cannot reach one
  * boundary and miss the other.
  *
@@ -657,7 +681,6 @@ const NestedErrorShapeSchema = z
     field: OptionalWireStringSchema,
     requiredCapability: requiredCapabilityWireSchema.optional().catch(undefined),
     heldBy: OptionalWireStringSchema,
-    policyReason: OptionalWireStringSchema,
     heldByClaim: wireClaimSummarySchema.optional().catch(undefined),
     claims: z.array(wireClaimSummarySchema).optional().catch(undefined),
   })
@@ -683,7 +706,6 @@ const ErrorBodyShapeSchema = z
     message: OptionalWireStringSchema,
     requiredCapability: requiredCapabilityWireSchema.optional().catch(undefined),
     heldBy: OptionalWireStringSchema,
-    policyReason: OptionalWireStringSchema,
     heldByClaim: wireClaimSummarySchema.optional().catch(undefined),
     claims: z.array(wireClaimSummarySchema).optional().catch(undefined),
   })

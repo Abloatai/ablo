@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { globalRuntime } from "../context.js";
 import type { RuntimeContext } from "../RuntimeContext.js";
 import { AbloValidationError } from "@abloatai/transaction/errors";
-import { syncDeltaWireCoreSchema } from '@abloatai/transaction/wire/delta';
+import { syncDeltaWireCoreSchema } from '@abloatai/transaction/observation';
 
 // ─── Server Delta Schema ─────────────────────────────────────────────────────
 

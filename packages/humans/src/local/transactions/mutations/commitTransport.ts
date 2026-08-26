@@ -1,6 +1,6 @@
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { MutationExecutor } from '../../interfaces/index.js';
-import type { ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
+import type { ReadDependency } from '@abloatai/transaction/coordination/schema';
 import {
   AbloConnectionError,
   AbloError,
@@ -9,7 +9,7 @@ import {
 import {
   mutationCommitResultSchema,
   type MutationCommitResult,
-} from '@abloatai/transaction/wire/commit';
+} from '@abloatai/transaction/commit';
 import {
   createDurableCommitEnvelope,
   commitEnvelopeRecordId,
@@ -17,7 +17,7 @@ import {
   type CommitOutboxScope,
   type DurableCommitEnvelope,
   type DurableCommitOperation,
-} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+} from '@abloatai/transaction/commit';
 import type { DurableWriteStore } from './durableWriteStore.js';
 
 export interface CommitTransportContext {
@@ -39,7 +39,6 @@ export interface SealDurableCommitInput {
   sourceMutationIds?: string[];
   commitOptions?: {
     reads?: readonly ReadDependency[] | null;
-    track?: readonly TrackDependency[] | null;
   };
   createdAt: number;
   sealedAt: number;
@@ -62,9 +61,6 @@ export async function sealDurableCommit(
     commitOptions: {
       ...(input.commitOptions?.reads !== undefined
         ? { reads: input.commitOptions.reads === null ? null : [...input.commitOptions.reads] }
-        : {}),
-      ...(input.commitOptions?.track !== undefined
-        ? { track: input.commitOptions.track === null ? null : [...input.commitOptions.track] }
         : {}),
     },
     ...(ctx.commitOutboxScope ? { scope: ctx.commitOutboxScope } : {}),

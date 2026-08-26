@@ -42,6 +42,13 @@ Ablo prevents a non-holder from writing through another participant's claim by
 default. It does not infer that every plain update is a read-modify-write
 operation; use the guarded forms when lost-update protection matters.
 
+Direct SQL remains outside that enforcement path. If an existing application
+service writes the same row directly, keep its database constraints and locks
+as the final integrity boundary and route every participating caller through
+one named operation. Ablo can select one worker before expensive work begins;
+the existing service must still re-read, validate, and commit authoritatively.
+See [Coordinate an existing database operation](/coordination#coordinate-an-existing-database-operation).
+
 ## Three kinds of action
 
 Sort any action you're about to take into one of these, and the right move

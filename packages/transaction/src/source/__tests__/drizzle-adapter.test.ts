@@ -125,13 +125,13 @@ describe('drizzleDataSource', () => {
       'ablo_idempotency_request_hash',
       'ablo_idempotency_permanent_retention',
       'ablo_outbox',
-      'ablo_outbox_correlation',
-      'ablo_outbox_sync_groups',
+      'ablo_outbox_add_correlation',
+      'ablo_outbox_add_event_version_and_sync_groups',
     ]);
-    const migration = adapter.migrations().find((entry) => entry.name === 'ablo_outbox_sync_groups');
-    expect(migration?.up).toContain(
-      'verify the previous release consumed them, then purge those rows',
-    );
+    const migration = adapter.migrations().find((entry) =>
+      entry.name === 'ablo_outbox_add_event_version_and_sync_groups');
+    expect(migration?.up).toContain('ADD COLUMN IF NOT EXISTS sync_groups TEXT[]');
+    expect(migration?.up).not.toContain('SET NOT NULL');
     expect(migration?.up).not.toContain("DEFAULT '{}'");
   });
 
@@ -153,6 +153,8 @@ describe('drizzleDataSource', () => {
     expect(result.rows).toEqual([{ id: 't1', title: 'A', operatorId: 'op1' }]);
     expect(db.txCount).toBe(1); // ran inside ONE transaction
     expect(db.executeCalls).toBe(4); // check + insert + outbox + idempotency
+    expect(db.sqls.find((query) => query.includes('INSERT INTO ablo_outbox')))
+      .toContain('event_version');
   });
 
   it('emits the requested WAL echo inside the write transaction', async () => {
@@ -245,6 +247,7 @@ describe('drizzleDataSource', () => {
             entity_id: 't1',
             type: 'CREATE',
             data: { id: 't1', title: 'A' },
+            sync_groups: ['item:t1'],
             organization_id: null,
             client_tx_id: null,
             correlation_id: 'corr1',
@@ -266,6 +269,43 @@ describe('drizzleDataSource', () => {
       cursor: '1',
     });
     expect(page.nextCursor).toBe('1');
+  });
+
+  it('prunes only through Ablo’s acknowledged cursor before reading the next page', async () => {
+    const db = new FakeDrizzle([
+      [],
+      [{
+        cursor: 8, id: 'tx2:0', model: 'item', entity_id: 't2', type: 'CREATE',
+        data: { id: 't2' }, sync_groups: ['item:t2'],
+      }],
+    ]);
+    const adapter = drizzleDataSource(db, schema);
+    await adapter.acknowledgeEvents('7');
+    const page = await adapter.events('7', 100);
+    expect(db.sqls[0]).toContain('DELETE FROM ablo_outbox');
+    expect(db.sqls[0]).toContain('WHERE cursor <=');
+    expect(db.sqls[0]).toContain('LIMIT');
+    expect(db.sqls[1]).toContain('WHERE cursor >');
+    expect(page.nextCursor).toBe('8');
+  });
+
+  it('decodes a route-less historical row explicitly as event version 1', async () => {
+    const db = new FakeDrizzle([[{
+      cursor: 1, id: 'legacy:0', model: 'item', entity_id: 't1', type: 'DELETE',
+      data: null, sync_groups: null,
+    }]]);
+    const page = await drizzleDataSource(db, schema).events(null, 100);
+    expect(page.events[0]).toMatchObject({ version: 1, id: 'legacy:0' });
+    expect(page.events[0]?.syncGroups).toBeUndefined();
+  });
+
+  it('rejects a malformed version-2 row without durable routes', async () => {
+    const db = new FakeDrizzle([[{
+      cursor: 1, id: 'broken:0', model: 'item', entity_id: 't1', type: 'DELETE',
+      data: null, event_version: 2, sync_groups: null,
+    }]]);
+    await expect(drizzleDataSource(db, schema).events(null, 100))
+      .rejects.toThrow(/version 2 but has no durable sync_groups/);
   });
 
   it('throws for a model not in the schema (no silent wrong-table write)', async () => {

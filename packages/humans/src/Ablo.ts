@@ -224,7 +224,7 @@ export function Ablo<const S extends SchemaRecord>(
 //
 // One default import, with types hung underneath via namespace dots:
 // `import { Ablo } from "@abloatai/humans"` gets the factory, its return type, and
-// every type a typical consumer references (`Ablo.Peer`, `Ablo.Snapshot<S, K>`,
+// every type a typical consumer references (`Ablo.Peer`,
 // and so on) — all purely type-level, with zero runtime cost.
 //
 // The types still live in their canonical homes (`types/streams`, `principal`,
@@ -233,7 +233,6 @@ export function Ablo<const S extends SchemaRecord>(
 
 import type * as _Streams from '@abloatai/transaction/types/streams';
 import type * as _Participants from './local/sync/participants.js';
-import type * as _Policy from '@abloatai/transaction/policy/types';
 import type * as _Mutators from './local/mutators/defineMutators.js';
 import type * as _Tx from './local/mutators/Transaction.js';
 import type * as _Undo from './local/mutators/UndoManager.js';
@@ -291,12 +290,6 @@ export namespace Ablo {
   // socketless worker, the failed beat IS the loss notification.
   export type ClaimHeartbeat = _Streams.ClaimHeartbeat;
   export type ClaimHeartbeatOptions = _Streams.ClaimHeartbeatOptions;
-
-  // ── Singletons (flat — no cohort) ─────────────────────────────────
-  export type Snapshot<
-    TSchema extends _SchemaTypes.Schema = _SchemaTypes.Schema,
-    K extends keyof TSchema['models'] = keyof TSchema['models'],
-  > = _Streams.Snapshot<TSchema, K>;
 
   // ── Auth (sub-namespace — actor attribution) ──────────────────────
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -359,17 +352,6 @@ export namespace Ablo {
     export type InferModelNames<S extends _SchemaTypes.Schema> = _SchemaTypes.InferModelNames<S>;
   }
 
-  // ── Conflict (type + sub-namespace via declaration merge) ─────────
-  export type Conflict = _Policy.Conflict;
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  export namespace Conflict {
-    export type Kind = _Policy.ConflictKind;
-    export type Operation = _Policy.ConflictOperation;
-    export type Decision = _Policy.ConflictDecision;
-    export type Policy = _Policy.ConflictPolicy;
-    export type Axis = _Policy.ConflictAxis;
-  }
-
   // ── Commit (sub-namespace — write-side cohort) ────────────────────
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Commit {
@@ -389,11 +371,11 @@ export namespace Ablo {
     export type CreateOptions = import('./local/client/resourceTypes.js').ClaimCreateOptions;
     export type WaitOptions = import('./local/client/resourceTypes.js').ClaimWaitOptions;
     export type ContentionOptions =
-      import('@abloatai/transaction/resources/modelOperations').ClaimContentionOptions;
+      import('@abloatai/transaction/client/resources/modelOperations').ClaimContentionOptions;
     export type AttemptEvent =
-      import('@abloatai/transaction/resources/modelOperations').ClaimAttemptEvent;
+      import('@abloatai/transaction/client/resources/modelOperations').ClaimAttemptEvent;
     export type QueueView =
-      import('@abloatai/transaction/resources/modelOperations').ClaimQueueView;
+      import('@abloatai/transaction/client/resources/modelOperations').ClaimQueueView;
     export type Client = import('./local/client/resourceTypes.js').ClaimResource;
   }
 
@@ -402,18 +384,18 @@ export namespace Ablo {
   export namespace Model {
     export type Target = import('./local/client/resourceTypes.js').ModelTarget;
     export type Claim = import('./local/client/resourceTypes.js').ModelClaim;
-    export type Operations<T, CreateInput = T> = import('./local/client/createModelProxy.js').ModelOperations<
+    export type Operations<T, CreateInput = T> = import('./local/client/createModelOperations.js').ModelOperations<
       T,
       CreateInput
     >;
     export type ClaimOptions<T = Record<string, unknown>> =
-      import('./local/client/createModelProxy.js').ClaimOptions<T>;
+      import('./local/client/createModelOperations.js').ClaimOptions<T>;
     export type ClaimParams<T = Record<string, unknown>> =
-      import('./local/client/createModelProxy.js').ClaimParams<T>;
+      import('./local/client/createModelOperations.js').ClaimParams<T>;
     export type ClaimLookupParams<T = Record<string, unknown>> =
-      import('./local/client/createModelProxy.js').ClaimLookupParams<T>;
+      import('./local/client/createModelOperations.js').ClaimLookupParams<T>;
     export type ClaimReorderParams<T = Record<string, unknown>> =
-      import('./local/client/createModelProxy.js').ClaimReorderParams<T>;
+      import('./local/client/createModelOperations.js').ClaimReorderParams<T>;
     export type MutationOptions = import('./local/client/resourceTypes.js').ModelMutationOptions;
   }
 

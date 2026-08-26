@@ -5,27 +5,27 @@ sidebar:
   icon: receipt
 ---
 
-Pricing version: `2026-07-31`.
+Pricing version: `2026-08-24`.
 
 You pay a monthly floor, or your metered usage, whichever is greater. Usage is charged **against** the floor rather than added to it, so an organization on Scale that sends nothing pays the floor, and one that sends four times the floor pays four times the floor. There is no separate subscription line.
 
 ## Tiers
 
-| | Monthly | Operations included | Per day | Connections | Storage |
+| | Monthly | Operations included | Per day | Connections | Audit storage included |
 | --- | --- | --- | --- | --- | --- |
 | **Free** | $0 | 100K | 10K | 25 | 1 GiB |
-| **Scale** | $20 | 10M | No limit | 1,000 | 50 GiB |
-| **Enterprise** | From $2,000 | Committed | No limit | Committed | Committed |
+| **Scale** | $250 | 50M | No limit | 1,000 | 50 GiB |
+| **Enterprise** | Custom pricing | Committed | No limit | Committed | Committed |
 
-**Free.** Build against the real engine without a card.
+**Free.** Free for early-stage teams building against the real engine.
 
-**Scale.** Production traffic, metered above a monthly floor.
+**Scale.** Built for scaling teams with production traffic.
 
-**Enterprise.** Committed volume, private networking, and an uptime guarantee.
+**Enterprise.** Custom infrastructure, security, and support for critical workloads.
 
-On Free, 100K operations is a hard stop: requests past it are refused rather than billed, so there is no way to run up a bill without a card. On every paid tier the figure is what the floor already covers at the rate card below, and operations past it are metered.
+On Free, 100K operations are included. With billing enabled, usage above that allowance continues at the published rate; without billing, requests stop at the allowance. On every plan with a paid floor, the included figure is what the floor already covers.
 
-The daily figure on Free is a burst guard rather than an allowance. A month of operations is a short burst for one agent running flat out, so a monthly cap alone would let a runaway loop spend it in an afternoon. The daily figure is what spreads the month over at least 10 days. Paid tiers have no daily limit, because they are metered rather than stopped.
+For organizations without billing enabled, the daily figure on Free is a burst guard rather than an allowance. It spreads the free month over at least 10 days. Enabling billing unlocks pay-as-you-go usage above the free allowance.
 
 | Included | Free | Scale | Enterprise |
 | --- | --- | --- | --- |
@@ -54,29 +54,27 @@ Two rules decide whether a request is counted at all:
 
 ## Rate card
 
-Rates are marginal. Crossing a band reprices the operations above it and leaves the ones below it alone.
+Scale uses one flat operation rate. The rate does not change as usage grows.
 
 | Monthly operations | Per million |
 | --- | --- |
-| First 50M | $2.00 |
-| 50M to 500M | $1.20 |
-| Above 500M | $0.60 |
+| All operations | $5.00 |
 
 ## What a month costs
 
-| Monthly operations | Scale |
-| --- | --- |
-| 100K | $20 |
-| 1M | $20 |
-| 50M | $100 |
-| 500M | $640 |
-| 1B | $940 |
+| Monthly operations | Free | Scale |
+| --- | --- | --- |
+| 100K | $0 | $250 |
+| 1M | $4.50 | $250 |
+| 50M | $249.50 | $250 |
+| 500M | $2,499.50 | $2,500 |
+| 1B | $4,999.50 | $5,000 |
 
-Enterprise is priced in the contract, starting at $2,000 a month, with committed volume, limits, and an uptime guarantee.
+Enterprise uses custom pricing with committed volume, negotiated limits, and an uptime guarantee.
 
-## Quoted but not billed
+## Audit storage and connections
 
-Storage is a ceiling on each tier, not a meter. Concurrent connections are a cap, not a meter: a held socket is a reservation, so it is bounded rather than charged for. Neither appears on an invoice.
+Free includes 1 GiB and Scale includes 50 GiB of audit-log storage. With billing enabled, both charge $1 per additional GiB-month. Enterprise storage is contract-priced. Concurrent connections remain a cap, not a meter.
 
 ## Watching usage
 

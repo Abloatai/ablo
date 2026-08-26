@@ -299,12 +299,12 @@ async function main() {
   // Triage the urgent one to the top. We write based on the version we just
   // read (\`readAt\`), so if a human edits the same row at the same moment the
   // write is rejected instead of silently clobbering them.
-  const snap = ablo.snapshot({ records: urgent.id });
+  const current = await ablo.records.read({ id: urgent.id });
+  if (!current) throw new Error('urgent record was not found');
   await ablo.records.update({
     id: urgent.id,
     data: { priority: 10 },
-    readAt: snap.stamp,
-    onStale: 'reject',
+    reads: [current],
   });
   console.log('prioritized:', urgent.title);
 

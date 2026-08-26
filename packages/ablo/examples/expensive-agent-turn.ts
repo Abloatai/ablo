@@ -49,7 +49,7 @@ try {
   if (!durable) throw new Error(`Commit ${commitId} was not retained`);
   console.log({
     identity: ablo.identity,
-    readSet: durable.readSet,
+    reads: durable.reads,
     attempts: durable.attempts,
     claims: durable.claims,
     authority: durable.authority,

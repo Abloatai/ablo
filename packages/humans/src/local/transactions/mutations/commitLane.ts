@@ -1,13 +1,13 @@
 import type { RuntimeContext } from '../../RuntimeContext.js';
-import type { ReadDependency, TrackDependency, OnStaleMode, StaleNotification } from '@abloatai/transaction/coordination/schema';
+import type { ReadDependency } from '@abloatai/transaction/coordination/schema';
 import type {
   CommitOperationResult,
   MutationCommitResult,
-} from '@abloatai/transaction/wire/commit';
+} from '@abloatai/transaction/commit';
 import type {
   DurableCommitEnvelope,
   DurableCommitOperation,
-} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
+} from '@abloatai/transaction/commit';
 import type { SealDurableCommitInput } from './commitTransport.js';
 import { transientRetryDelayMs } from './failureHandling.js';
 
@@ -21,10 +21,8 @@ export interface CommitTransaction {
     input?: Record<string, unknown>;
     transactionId?: string;
     readAt?: number | null;
-    onStale?: OnStaleMode | null;
   }[];
   reads?: ReadDependency[] | null;
-  track?: TrackDependency[] | null;
   status: 'pending' | 'executing' | 'awaiting_delta' | 'completed' | 'failed';
   createdAt: number;
   attempts: number;
@@ -50,7 +48,6 @@ export interface CommitLaneContext {
     retryBackoff: { baseMs: number; capMs: number };
   };
   readonly commitLane: CommitTransaction[];
-  readonly commitNotifications: Map<string, StaleNotification[]>;
   readonly commitMissingIds: Map<string, string[]>;
   readonly commitProcessing: boolean;
   readonly setCommitProcessing: (value: boolean) => void;
@@ -72,7 +69,6 @@ export interface CommitLaneContext {
 
 export interface CommitReceiptContext {
   readonly commitStore: Map<string, CommitTransaction>;
-  readonly commitNotifications: Map<string, StaleNotification[]>;
   readonly commitMissingIds: Map<string, string[]>;
   readonly replicationLagErrors: Map<string, Error>;
   readonly on: (event: string, listener: (payload: object) => void) => void;
@@ -84,16 +80,9 @@ export function waitForCommitReceipt(
   clientTxId: string,
 ): Promise<{
   lastSyncId: number;
-  notifications?: StaleNotification[];
   missingIds?: string[];
   operationResults?: CommitOperationResult[];
 }> {
-  const drainNotifications = (): StaleNotification[] | undefined => {
-    const notifications = ctx.commitNotifications.get(clientTxId);
-    if (!notifications) return undefined;
-    ctx.commitNotifications.delete(clientTxId);
-    return notifications.length > 0 ? notifications : undefined;
-  };
   const drainMissingIds = (): string[] | undefined => {
     const ids = ctx.commitMissingIds.get(clientTxId);
     if (!ids) return undefined;
@@ -104,7 +93,6 @@ export function waitForCommitReceipt(
     const missingIds = drainMissingIds();
     return {
       lastSyncId,
-      notifications: drainNotifications(),
       ...(transaction.operationResults
         ? { operationResults: transaction.operationResults }
         : {}),
@@ -157,7 +145,6 @@ export async function processCommitLane(ctx: CommitLaneContext): Promise<void> {
           sourceMutationIds: tx.sourceMutationIds,
           commitOptions: {
             ...(tx.reads ? { reads: tx.reads } : {}),
-            ...(tx.track ? { track: tx.track } : {}),
           },
           createdAt: tx.createdAt,
           sealedAt: tx.sealedAt,
@@ -170,7 +157,6 @@ export async function processCommitLane(ctx: CommitLaneContext): Promise<void> {
         tx.durableEnvelope = await ctx.persistDurableCommitAcceptance(durableEnvelope, result);
         tx.lastSyncId = result.lastSyncId;
         if (result.operationResults?.length) tx.operationResults = [...result.operationResults];
-        if (result.notifications?.length) ctx.commitNotifications.set(tx.id, result.notifications);
         if (result.missingIds?.length) ctx.commitMissingIds.set(tx.id, result.missingIds);
         ctx.commitLane.shift();
         if (result.status === 'queued') {

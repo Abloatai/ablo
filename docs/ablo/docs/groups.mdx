@@ -20,30 +20,28 @@ block `C`. Between those steps someone else edits `A`. The agent is now building
 `C` on a premise that has moved — and nothing about writing `C` looks wrong in
 isolation. That is stale context, and it is the thing sync groups let you catch.
 
-The recipe is one field on the commit: declare the group you read as a premise,
-and say what should happen if it moved.
+The recipe is one field on the commit: declare the group you read as a premise.
 
 ```ts
 // The agent read everything under workspace:abc to compose this write.
 await ablo.blocks.update({
   id: 'block-C',
   data: { text: revised },
-  reads: [{ group: 'workspace:abc', readAt: watermark, onStale: 'notify' }],
+  reads: [{ group: 'workspace:abc', readAt: watermark }],
 });
 ```
 
 At commit, inside the write transaction, the engine asks a single question: *did
 any delta routed to `workspace:abc` land after `watermark`?* If nothing moved, the
-write applies. If something moved, `onStale` decides — `notify` holds the write
-and hands the agent a `StaleNotification` naming the group, so it re-reads
-`workspace:abc` and regenerates; `reject` aborts the batch with a `409`. The agent
-never persists work built on a premise it can no longer see.
+write applies. If something moved, Ablo rejects the batch with a `409`, so the
+agent can re-read `workspace:abc`, regenerate, and submit a fresh guarded
+write. The agent never persists work built on a premise it can no longer see.
 
 ---
 
 ## How you hear about it
 
-Four channels carry "something changed", and they answer four different
+Three channels carry "something changed", and they answer three different
 questions. Pick by the question you have.
 
 ```ts
@@ -55,10 +53,9 @@ await using room = await ablo.records.join(documentIds, { ttl: '5m' });
 room.peers;
 
 // Stop this write if the thing I read moved while I composed it.
-await ablo.blocks.update({ id, data, reads: [{ group: 'workspace:abc', readAt, onStale: 'notify' }] });
-
-// Tell me later if this moves, even though I am not writing now.
-await ablo.records.track({ id: 's-1' });
+const record = await ablo.records.read({ id: 's-1' });
+if (!record) throw new Error('Record not found');
+await ablo.blocks.update({ id, data, reads: [record] });
 ```
 
 | Question | Channel | Arrives |
@@ -66,29 +63,12 @@ await ablo.records.track({ id: 's-1' });
 | What do the rows say right now? | `onChange` | As deltas land, on the socket |
 | Who else is working here? | `join`, then `room.peers` and `room.claims` | As participants come and go, on the socket |
 | Did the premise for **this** write move? | `reads` on the write | On that write's receipt, before it applies |
-| Has anything I read moved since? | `track` | On your next commit's receipt |
-| Stop me writing if it has | `track` with `onStale: 'reject'` | Refuses that commit, at the chokepoint |
-
-Two distinctions do most of the work here.
-
-**`join` is about people; `track` is about data.** Both open a subscription and
-both are scoped by sync group, which is why they look alike. `join` reports
-participants: who is present, what they are doing, which rows they hold. `track`
-reports the rows themselves: something you said you cared about moved, here is
-the watermark to re-read it at. A tool that wants to avoid duplicating a peer's
-work needs `join`. A tool whose output goes stale when its inputs change needs
-`track`.
-
-**`reads` guards one write; `track` outlives it.** They speak the same
-vocabulary and produce the same `StaleNotification`. A `reads` entry is checked
-once, at the commit that carried it, and discarded. A `track` is persisted and
-re-checked against every delta after it, so a long-running actor hears about a
-change that landed while it was thinking, on the next commit it makes.
 
 `onChange` and `join` need a live socket, so they are available on the default
-WebSocket client. `reads` and `track` ride the commit, so they reach a socketless
-actor over HTTP too, which is what makes them the notification path for agents
-and workers.
+WebSocket client. `reads` rides the commit, so it reaches a socketless actor over
+HTTP too. The row returned by `read` privately carries its model, id, and
+watermark; passing that row in `reads` is enough to protect a later write. Ablo
+does not retain the row contents as read evidence.
 
 ---
 
@@ -161,13 +141,12 @@ Two consequences worth designing around:
 ## Declaring the batch premise
 
 `reads[]` declares what the commit was based on. Each entry is a premise, and
-each governs the *whole* commit: if one goes stale, its disposition applies to
-every write in the batch, not just one operation. You choose the granularity per
-entry.
+each governs the *whole* commit: if one goes stale, every write in the batch
+rejects. You choose the granularity per entry.
 
 ```ts
 reads: [
-  { group: 'workspace:abc', readAt: N, onStale: 'notify' },      // did anything in the workspace move?
+  { group: 'workspace:abc', readAt: N },                         // did anything in the workspace move?
   { model: 'Document', id: 's-1', readAt: N, fields: ['title'] }, // did this row (this field) move?
 ]
 ```
@@ -178,108 +157,9 @@ literal: this object, optionally these fields. A row premise with `fields`
 conflicts only on real field overlap, so two actors editing disjoint fields of
 the same row don't collide.
 
-`onStale` has three settings, defaulting to `reject`:
-
-- **`notify`** holds every write in the batch and returns a `StaleNotification`.
-  For a group premise it carries the group name and the new watermark
-  (`observedSyncId`); re-read the group at that point and regenerate. This is the
-  setting a chain wants — the actor gets the truth and resolves it.
-- **`reject`** aborts the batch with a `stale_context` error (`409`). The right
-  default when there is nothing to reconcile and the write should simply not
-  land.
-- **`overwrite`** skips the check and lets the write land — last-write-wins, the
-  explicit escape hatch.
-
----
-
-## Staying subscribed across commits: `track`
-
-A batch premise guards a single commit: you state what you read, the engine
-checks it, the premise is gone. That fits an actor that reads and writes in one
-breath. It does not fit a long-running one — an agent that reads a row now,
-works for a few minutes, and writes much later. By the time it commits, the
-premise it would have declared is stale, and there was no commit in between on
-which to hear that the ground had shifted.
-
-`track` is the durable half of the same idea. Register what you are watching and
-it persists on the server; the next time you commit anything, a change that
-landed on the tracked target since you registered rides back on your receipt —
-the same `StaleNotification` an `onStale: 'notify'` premise would have handed
-you, arriving on the write you were going to make anyway.
-
-```ts
-// Register interest and walk away — no write required.
-await ablo.records.track({ id: 's-1' });
-
-// …minutes of other work later, on your next commit…
-const res = await ablo.blocks.update({ id: 'block-C', data: { text: revised } });
-res.notifications; // populated if s-1 moved under you in the meantime
-```
-
-The target is a row (`{ id }` on the model verb) or a sync group (as a write
-option, below). A track is an idempotent registration: calling it again refreshes
-the same subscription rather than stacking duplicates, and once a change fires the
-track re-baselines, so the same change notifies once. Your own writes to a target
-you track never notify you — the signal is about what *others* did.
-
-You can also register a track as part of a write you are already making, the
-persisted companion to `reads`:
-
-```ts
-await ablo.records.update({
-  id: 's-1',
-  data: { title: revised },
-  reads: [{ group: 'workspace:abc', readAt: N, onStale: 'notify' }], // guards THIS commit
-  track: [{ group: 'workspace:abc' }],                               // and keeps watching after it
-});
-```
-
-So `reads` is the premise for the commit in hand; `track` is a standing
-subscription that outlives it. Both speak the same notification vocabulary.
-Delivery is on your next commit's receipt; a track does not yet push out of band
-between commits.
-
-### Reporting, or gating: `onStale`
-
-A track says what a moved belief should do to your **next write**. Same enum the
-`reads` premise carries, minus the one mode that cannot apply:
-
-```ts
-await ablo.records.track({ id: 's-1' });                        // notify (default)
-await ablo.records.track({ id: 's-1', onStale: 'reject' });     // gate
-```
-
-- **`notify`** — the change rides your next receipt and the commit proceeds. You
-  decide what it means.
-- **`reject`** — your next commit is **refused** while that belief is stale, even
-  if it writes an unrelated row. The gate is on what you *know*, not on what you
-  are touching.
-
-`reject` is for an actor that must not act on a stale picture — an agent that
-read a row, reasoned for minutes, and is about to write based on what it
-believed. Ablo enforces it at the commit chokepoint, so it is a guarantee rather
-than a convention: the write cannot land.
-
-The gate takes a key. It does **not** reopen on its own, because an agent that
-retried blindly would land exactly the write `reject` was asked to prevent. You
-re-read, then re-register the track to say so:
-
-```ts
-try {
-  await ablo.records.update({ id, data });
-} catch (err) {
-  if (err.code === 'stale_context') {
-    const fresh = await ablo.records.get({ id: 's-1' });   // read
-    await ablo.records.track({ id: 's-1', onStale: 'reject' }); // acknowledge
-    await ablo.records.update({ id, data: reconsider(fresh) });     // now it lands
-  }
-}
-```
-
-A track-only call is never gated, so acknowledging is always reachable.
-
-`overwrite` is not offered: it means "apply my write anyway", and a track guards
-no write of its own to apply.
+Any stale premise aborts the batch with `stale_context` (`409`). Re-read and
+regenerate if the work is still relevant. Omit `reads` only when the write is
+intentionally unconditional.
 
 ---
 

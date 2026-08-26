@@ -24,8 +24,8 @@
  */
 
 import { z } from 'zod';
-import { commitReceiptSchema } from './commit.js';
-import { clientSyncDeltaSchema } from './delta.js';
+import { commitReceiptSchema } from '../commit/contract.js';
+import { clientSyncDeltaSchema } from '../observation/contract.js';
 import {
   claimAcquiredSchema,
   claimExpiredSchema,
@@ -106,7 +106,7 @@ export const WS_INBOUND_FRAMES = {
   // ── Commit ─────────────────────────────────────────────────────────────
   mutation_result: {
     validation: 'handler',
-    where: 'handleMutationResult — it lifts the frame\'s notifications and missingIds alongside the payload before this can parse',
+    where: 'handleMutationResult — it validates missingIds alongside the payload before this can parse',
     checkedBy: commitReceiptSchema,
   },
 

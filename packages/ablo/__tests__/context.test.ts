@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import Ablo from '../src/index.js';
 import { Ablo as ReactiveAblo } from '../src/client.js';
-import { context } from '../src/context.js';
+import { context } from '../src/context/index.js';
 import { contextMessage } from '../src/ai-sdk.js';
 import { defineSchema, model, z } from '../src/schema.js';
 import {
@@ -66,12 +66,6 @@ describe('context()', () => {
       evidence: { citation: 'page 4' },
     });
     expect(assembled.reads).toEqual([]);
-    expect(assembled.cursor).toBeNull();
-    expect(assembled.sources).toEqual([
-      { key: 'memory', kind: 'value', guarantee: 'informational', cursor: null },
-      { key: 'search', kind: 'value', guarantee: 'informational', cursor: null },
-      { key: 'evidence', kind: 'value', guarantee: 'informational', cursor: null },
-    ]);
   });
 
   it('collects exact reads, preserves a context model, and rejects a stale write', async () => {
@@ -104,7 +98,7 @@ describe('context()', () => {
       },
     });
 
-    const briefRead = ablo.context.get({ id: 'context-1' });
+    const briefRead = ablo.context.read({ id: 'context-1' });
     const assembled = await context({
       ablo,
       data: {
@@ -119,11 +113,6 @@ describe('context()', () => {
     });
     expect(assembled.data.brief).toBe(await briefRead);
     expect(assembled.reads).toEqual([assembled.data.brief]);
-    expect(assembled.cursor).toBe(17);
-    expect(assembled.sources).toEqual([
-      { key: 'brief', kind: 'ablo', guarantee: 'guardable', cursor: 17 },
-      { key: 'memory', kind: 'value', guarantee: 'informational', cursor: null },
-    ]);
 
     await expect(ablo.records.update({
       id: 'record-1',
@@ -135,7 +124,7 @@ describe('context()', () => {
     });
   });
 
-  it('deduplicates reads, advances the cursor, and reports mixed provenance honestly', async () => {
+  it('deduplicates reads nested alongside application values', async () => {
     const ablo = Ablo({
       schema,
       apiKey: 'sk_context_mixed',
@@ -156,8 +145,8 @@ describe('context()', () => {
         })));
       },
     });
-    const earlier = await ablo.context.get({ id: 'context-1' });
-    const later = await ablo.context.get({ id: 'context-2' });
+    const earlier = await ablo.context.read({ id: 'context-1' });
+    const later = await ablo.context.read({ id: 'context-2' });
 
     const assembled = await context({
       ablo,
@@ -168,14 +157,97 @@ describe('context()', () => {
     });
 
     expect(assembled.reads).toEqual([earlier, later]);
-    expect(assembled.cursor).toBe(23);
-    expect(assembled.sources).toEqual([
-      { key: 'primary', kind: 'ablo', guarantee: 'guardable', cursor: 17 },
-      { key: 'bundle', kind: 'mixed', guarantee: 'partial', cursor: 23 },
-    ]);
   });
 
-  it('retains evidence for every row in an authoritative list', async () => {
+  it('shares one subscription and reports the existing stale-context error once', async () => {
+    let subscriptions = 0;
+    const ablo = Ablo({
+      schema,
+      apiKey: 'sk_context_change',
+      baseURL: 'https://api.example.test',
+      fetch: (input, init) => {
+        const url = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        if (path.endsWith('/models/context/context-1')) {
+          return Promise.resolve(response(modelReadResponse({
+            model: 'context',
+            id: 'context-1',
+            data: { id: 'context-1', title: 'Current' },
+            stamp: 17,
+          })));
+        }
+        if (path.endsWith('/auth/identity')) {
+          return Promise.resolve(response({
+            participantKind: 'agent',
+            participantId: 'agent-context-change',
+            accountScope: 'org-context-change',
+            projectId: 'project-context-change',
+            branchId: 'branch-context-change',
+            branchRoot: false,
+            syncGroups: ['org:org-context-change'],
+            deliveryPartition: { index: 0, count: 2 },
+            authority: {
+              organizationId: 'org-context-change',
+              projectId: 'project-context-change',
+              branchId: 'branch-context-change',
+              syncGroups: ['org:org-context-change'],
+              operations: ['context.read'],
+              participantKind: 'agent',
+              participantId: 'agent-context-change',
+              deliveryPartition: { index: 0, count: 2 },
+            },
+            userMeta: {},
+          }));
+        }
+        if (path.endsWith('/v1/subscriptions') && init?.method === 'POST') {
+          subscriptions += 1;
+          expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+          expect(new Headers(init.headers).get('accept')).toBe('text/event-stream');
+          expect(JSON.parse(String(init.body))).toEqual({
+            reads: [{ model: 'context', id: 'context-1', readAt: 17 }],
+          });
+          return Promise.resolve(new Response(
+            'event: stale_context\n' +
+              'data: {"type":"AbloStaleContextError","code":"stale_context","message":"Context changed after read.","readAt":17,"conflicts":[{"model":"context","id":"context-1","observedSyncId":23}]}\n\n',
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          ));
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      },
+    });
+    const current = await context({
+      ablo,
+      data: { brief: ablo.context.read({ id: 'context-1' }) },
+    });
+    const first = new Promise<unknown>((resolve) => current.onChange(resolve));
+    const second = new Promise<unknown>((resolve) => current.onChange(resolve));
+
+    await expect(first).resolves.toMatchObject({
+      code: 'stale_context',
+      readAt: 17,
+      conflicts: [{ model: 'context', id: 'context-1', observedSyncId: 23 }],
+    });
+    await expect(second).resolves.toMatchObject({ code: 'stale_context' });
+    expect(subscriptions).toBe(1);
+  });
+
+  it('opens no subscription when the context contains no reads', async () => {
+    const ablo = Ablo({
+      schema,
+      apiKey: 'sk_context_no_reads',
+      baseURL: 'https://api.example.test',
+      fetch: () => Promise.reject(new Error('no reads must open no subscription')),
+    });
+    const current = await context({ ablo, data: { note: 'plain value' } });
+    const stop = current.onChange(() => {
+      throw new Error('a context without reads cannot become stale');
+    });
+    stop();
+  });
+
+  it('treats list results as observational until rows are deliberately read', async () => {
     const rows = [
       { id: 'context-1', title: 'One' },
       { id: 'context-2', title: 'Two' },
@@ -196,10 +268,7 @@ describe('context()', () => {
       data: { briefs: ablo.context.list() },
     });
 
-    expect(assembled.reads).toEqual(assembled.data.briefs);
-    expect(assembled.sources).toEqual([
-      { key: 'briefs', kind: 'ablo', guarantee: 'guardable', cursor: 29 },
-    ]);
+    expect(assembled.reads).toEqual([]);
   });
 
   it('does not accept cloned or cross-client rows as authoritative evidence', async () => {
@@ -221,7 +290,7 @@ describe('context()', () => {
       baseURL: 'https://api.example.test',
       fetch,
     });
-    const row = await first.context.get({ id: 'context-1' });
+    const row = await first.context.read({ id: 'context-1' });
     if (!row) throw new Error('Expected context row');
 
     const cloned = await context({ ablo: first, data: { row: { ...row } } });
@@ -229,8 +298,6 @@ describe('context()', () => {
 
     expect(cloned.reads).toEqual([]);
     expect(foreign.reads).toEqual([]);
-    expect(cloned.sources[0]).toMatchObject({ kind: 'value', guarantee: 'informational' });
-    expect(foreign.sources[0]).toMatchObject({ kind: 'value', guarantee: 'informational' });
   });
 
   it('fails the whole assembly when a requested nested value rejects', async () => {

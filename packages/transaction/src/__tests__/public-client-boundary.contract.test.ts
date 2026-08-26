@@ -35,8 +35,12 @@ type _BatchReceiptHasNoWireObject = Expect<
   Equal<'object' extends keyof BatchReceipt ? true : false, false>
 >;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-type _NamespacedModelOperationsHasRetrieve = Expect<
-  Equal<'retrieve' extends keyof ModelOperations ? true : false, true>
+type _NamespacedModelOperationsHasRead = Expect<
+  Equal<'read' extends keyof ModelOperations ? true : false, true>
+>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _NamespacedModelOperationsHasGet = Expect<
+  Equal<'get' extends keyof ModelOperations ? true : false, true>
 >;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _NamespacedHeldClaimHasRelease = Expect<

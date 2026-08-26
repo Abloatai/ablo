@@ -11,6 +11,7 @@
  * with it, because there is nowhere to type a bill by hand.
  */
 import {
+  AUDIT_LOG_STORAGE_USD_PER_GIB_MONTH,
   BILLABLE_METER_EVENTS,
   ERROR_CODES,
   METER_EVENT_AXIS,
@@ -68,6 +69,7 @@ function bracketBand(index: number): string {
   const bracket = OPS_RATE_CARD[index];
   if (bracket === undefined) return '';
   const floor = index === 0 ? 0 : OPS_RATE_CARD[index - 1]?.throughOps ?? 0;
+  if (index === 0 && bracket.throughOps === null) return 'All operations';
   if (bracket.throughOps === null) return `Above ${formatOps(floor)}`;
   if (floor === 0) return `First ${formatOps(bracket.throughOps)}`;
   return `${formatOps(floor)} to ${formatOps(bracket.throughOps)}`;
@@ -83,14 +85,15 @@ function exampleVolumes(): number[] {
     (c): c is number => c !== null,
   );
   const last = ceilings[ceilings.length - 1] ?? 1_000_000;
-  return [1_000_000, ...ceilings, last * 2];
+  return ceilings.length === 0
+    ? [1_000_000, 50_000_000, 500_000_000, 1_000_000_000]
+    : [1_000_000, ...ceilings, last * 2];
 }
 
 /** What a tier bills at a volume, including the case where the tier refuses it. */
 function billCell(tier: PlanTier, ops: number): string {
   const plan = PLANS[tier];
   if (plan.contractPriced) return 'Contract';
-  if (plan.hardCapOps !== null && ops > plan.hardCapOps) return 'Over the cap';
   const bill = monthlyBillUsd(tier, ops);
   return bill === null ? 'Contract' : formatUsd(bill);
 }
@@ -104,13 +107,11 @@ function floorCell(tier: PlanTier): string {
   const plan = PLANS[tier];
   if (plan.monthlyMinimumUsd === null) return 'Contract';
   if (plan.monthlyMinimumUsd === 0) return formatUsd(0);
-  return plan.contractPriced
-    ? `From ${formatUsd(plan.monthlyMinimumUsd)}`
-    : formatUsd(plan.monthlyMinimumUsd);
+  return plan.contractPriced ? 'Custom pricing' : formatUsd(plan.monthlyMinimumUsd);
 }
 
 function meteredTiers(): PlanTier[] {
-  return PLAN_ORDER.filter((tier) => PLANS[tier].hardCapOps === null && !PLANS[tier].contractPriced);
+  return PLAN_ORDER.filter((tier) => !PLANS[tier].contractPriced);
 }
 
 export function renderPricingMdx(): string {
@@ -137,7 +138,7 @@ export function renderPricingMdx(): string {
 
   push('## Tiers');
   push('');
-  push('| | Monthly | Operations included | Per day | Connections | Storage |');
+  push('| | Monthly | Operations included | Per day | Connections | Audit storage included |');
   push('| --- | --- | --- | --- | --- | --- |');
   for (const tier of PLAN_ORDER) {
     const plan = PLANS[tier];
@@ -159,13 +160,13 @@ export function renderPricingMdx(): string {
   push(
     `On ${PLANS.free.label}, ${formatOps(
       PLANS.free.hardCapOps ?? 0,
-    )} operations is a hard stop: requests past it are refused rather than billed, so there is no way to run up a bill without a card. On every paid tier the figure is what the floor already covers at the rate card below, and operations past it are metered.`,
+    )} operations are included. With billing enabled, usage above that allowance continues at the published rate; without billing, requests stop at the allowance. On every plan with a paid floor, the included figure is what the floor already covers.`,
   );
   push('');
   push(
-    `The daily figure on ${PLANS.free.label} is a burst guard rather than an allowance. A month of operations is a short burst for one agent running flat out, so a monthly cap alone would let a runaway loop spend it in an afternoon. The daily figure is what spreads the month over at least ${Math.ceil(
+    `For organizations without billing enabled, the daily figure on ${PLANS.free.label} is a burst guard rather than an allowance. It spreads the free month over at least ${Math.ceil(
       (PLANS.free.hardCapOps ?? 0) / (PLANS.free.hardCapOpsPerDay ?? 1),
-    )} days. Paid tiers have no daily limit, because they are metered rather than stopped.`,
+    )} days. Enabling billing unlocks pay-as-you-go usage above the free allowance.`,
   );
   push('');
 
@@ -218,9 +219,7 @@ export function renderPricingMdx(): string {
 
   push('## Rate card');
   push('');
-  push(
-    'Rates are marginal. Crossing a band reprices the operations above it and leaves the ones below it alone.',
-  );
+  push('Scale uses one flat operation rate. The rate does not change as usage grows.');
   push('');
   push('| Monthly operations | Per million |');
   push('| --- | --- |');
@@ -247,16 +246,14 @@ export function renderPricingMdx(): string {
   }
   push('');
   push(
-    `${PLANS.enterprise.label} is priced in the contract, starting at ${formatUsd(
-      PLANS.enterprise.monthlyMinimumUsd ?? 0,
-    )} a month, with committed volume, limits, and an uptime guarantee.`,
+    `${PLANS.enterprise.label} uses custom pricing with committed volume, negotiated limits, and an uptime guarantee.`,
   );
   push('');
 
-  push('## Quoted but not billed');
+  push('## Audit storage and connections');
   push('');
   push(
-    'Storage is a ceiling on each tier, not a meter. Concurrent connections are a cap, not a meter: a held socket is a reservation, so it is bounded rather than charged for. Neither appears on an invoice.',
+    `${PLANS.free.label} includes ${PLANS.free.storageGib} GiB and ${PLANS.scale.label} includes ${PLANS.scale.storageGib} GiB of audit-log storage. With billing enabled, both charge ${formatUsd(AUDIT_LOG_STORAGE_USD_PER_GIB_MONTH)} per additional GiB-month. Enterprise storage is contract-priced. Concurrent connections remain a cap, not a meter.`,
   );
   push('');
 
@@ -291,6 +288,9 @@ export function renderPricingJson(): string {
     version: PRICING_VERSION,
     currency: 'USD',
     billing: 'monthly floor or metered usage, whichever is greater',
+    auditLogStorage: {
+      scaleUsdPerAdditionalGibMonth: AUDIT_LOG_STORAGE_USD_PER_GIB_MONTH,
+    },
     meters: (meterEventSchema.options as readonly MeterEvent[]).map((event) => ({
       event,
       label: METER_EVENT_LABEL[event],
@@ -306,7 +306,7 @@ export function renderPricingJson(): string {
         tier,
         label: plan.label,
         summary: plan.summary,
-        monthlyMinimumUsd: plan.monthlyMinimumUsd,
+        monthlyMinimumUsd: plan.contractPriced ? null : plan.monthlyMinimumUsd,
         contractPriced: plan.contractPriced,
         hardCapOps: plan.hardCapOps,
         hardCapOpsPerDay: plan.hardCapOpsPerDay,
@@ -321,9 +321,7 @@ export function renderPricingJson(): string {
       billUsd: Object.fromEntries(
         meteredTiers().map((tier) => [
           tier,
-          PLANS[tier].hardCapOps !== null && ops > (PLANS[tier].hardCapOps ?? 0)
-            ? null
-            : monthlyBillUsd(tier, ops),
+          monthlyBillUsd(tier, ops),
         ]),
       ),
     })),

@@ -1,8 +1,11 @@
 {
   "$generated": "packages/ablo/scripts/generate-pricing-docs.mts",
-  "version": "2026-07-31",
+  "version": "2026-08-24",
   "currency": "USD",
   "billing": "monthly floor or metered usage, whichever is greater",
+  "auditLogStorage": {
+    "scaleUsdPerAdditionalGibMonth": 1
+  },
   "meters": [
     {
       "event": "api.commit_ops",
@@ -27,23 +30,15 @@
   ],
   "rateCard": [
     {
-      "throughOps": 50000000,
-      "usdPerMillionOps": 2
-    },
-    {
-      "throughOps": 500000000,
-      "usdPerMillionOps": 1.2
-    },
-    {
       "throughOps": null,
-      "usdPerMillionOps": 0.6
+      "usdPerMillionOps": 5
     }
   ],
   "tiers": [
     {
       "tier": "free",
       "label": "Free",
-      "summary": "Build against the real engine without a card.",
+      "summary": "Free for early-stage teams building against the real engine.",
       "monthlyMinimumUsd": 0,
       "contractPriced": false,
       "hardCapOps": 100000,
@@ -56,12 +51,12 @@
     {
       "tier": "scale",
       "label": "Scale",
-      "summary": "Production traffic, metered above a monthly floor.",
-      "monthlyMinimumUsd": 20,
+      "summary": "Built for scaling teams with production traffic.",
+      "monthlyMinimumUsd": 250,
       "contractPriced": false,
       "hardCapOps": null,
       "hardCapOpsPerDay": null,
-      "monthlyOpsAllowance": 10000000,
+      "monthlyOpsAllowance": 50000000,
       "maxConcurrentConnections": 1000,
       "storageGib": 50,
       "features": [
@@ -71,8 +66,8 @@
     {
       "tier": "enterprise",
       "label": "Enterprise",
-      "summary": "Committed volume, private networking, and an uptime guarantee.",
-      "monthlyMinimumUsd": 2000,
+      "summary": "Custom infrastructure, security, and support for critical workloads.",
+      "monthlyMinimumUsd": null,
       "contractPriced": true,
       "hardCapOps": null,
       "hardCapOpsPerDay": null,
@@ -92,25 +87,29 @@
     {
       "ops": 1000000,
       "billUsd": {
-        "scale": 20
+        "free": 4.5,
+        "scale": 250
       }
     },
     {
       "ops": 50000000,
       "billUsd": {
-        "scale": 100
+        "free": 249.5,
+        "scale": 250
       }
     },
     {
       "ops": 500000000,
       "billUsd": {
-        "scale": 640
+        "free": 2499.5,
+        "scale": 2500
       }
     },
     {
       "ops": 1000000000,
       "billUsd": {
-        "scale": 940
+        "free": 4999.5,
+        "scale": 5000
       }
     }
   ]

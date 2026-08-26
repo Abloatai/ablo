@@ -1,4 +1,5 @@
 import type { Config } from 'jest';
+import { transactionSourceModuleMapper } from '../transaction/sourceModuleMapper.mjs';
 
 const config: Config = {
   // The CLI is a terminal process — node environment, no DOM polyfills.
@@ -31,14 +32,10 @@ const config: Config = {
 
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
-    // Workspace packages resolve to their src — jest's runtime resolver does
-    // not follow the `@ablo/source` export condition, so map them explicitly,
-    // mirroring tsc. Directory barrels need their own line: the generic
-    // pattern appends `.ts` and cannot land on an `index.ts`.
-    '^@abloatai/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks|docs)$':
-      '<rootDir>/../transaction/src/$1/index.ts',
-    '^@abloatai/transaction/(.*)$': '<rootDir>/../transaction/src/$1.ts',
-    '^@abloatai/transaction$': '<rootDir>/../transaction/src/index.ts',
+    // @abloatai/transaction (the extracted confirmation core, ADR 0013) resolves
+    // to its src — jest's resolver does not follow the `@ablo/source` export
+    // condition, so every subpath is derived from that package's own exports.
+    ...transactionSourceModuleMapper(),
   },
 
   testTimeout: 10000,

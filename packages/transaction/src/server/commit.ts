@@ -13,11 +13,11 @@
  * commit time and the shape of a stored or broadcast delta share one definition
  * rather than being kept in step by hand.
  */
-import type { ParticipantKind, ConfirmationState } from '../log/syncDeltaRow.js';
-import type { ParticipantRef } from '../wire/delta.js';
-import type { CommitExecutionResultInput } from '../wire/commit.js';
-import type { CommitOperationResult } from '../wire/commit.js';
-import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
+import type { ParticipantKind, ConfirmationState } from '../observation/persistence/syncDeltaRow.js';
+import type { ParticipantRef } from '../observation/contract.js';
+import type { CommitExecutionResultInput } from '../commit/contract.js';
+import type { CommitOperationResult } from '../commit/contract.js';
+import type { ReadDependency } from '../coordination/schema.js';
 import type { EffectiveAuthority } from '../auth/capability.js';
 
 export interface CommitContext {
@@ -81,18 +81,10 @@ export interface CommitContext {
   /**
    * The premise for the whole batch. The committer declares the rows or groups
    * it read to form this batch; the engine checks that none of them changed since
-   * each entry's `readAt` timestamp and applies that entry's `onStale` disposition
-   * across the batch. This differs from the per-operation `readAt` guard, which
+   * each entry's `readAt` timestamp and rejects the batch if one moved. This differs from the per-operation `readAt` guard, which
    * validates only the rows being written. Omit it to check the write targets alone.
    */
   reads?: ReadDependency[] | null;
-  /**
-   * Durable premises to persist for this commit's participant. Each entry is
-   * kept in `track_dependencies` and re-checked against every future delta; a
-   * later match opens a `StaleNotification` delivered out of band. Distinct
-   * from `reads`, which is checked once here and discarded.
-   */
-  track?: TrackDependency[] | null;
 }
 
 /**

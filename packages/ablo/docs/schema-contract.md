@@ -51,26 +51,27 @@ The model key (`weatherReports`) becomes the client namespace
 contract. You should not create a parallel string-keyed write path for the same
 data.
 
-### Reserved fields
+### The one field you don't declare
 
-The SDK provides these on every row automatically — do **not** declare them in
-your `model(...)` fields:
+`id` is supplied on every row, so leave it out of your `model(...)` fields. That
+is the whole list.
 
-- `id`
-- `createdAt`
-- `updatedAt`
-- `organizationId`
-- `createdBy`
+Two things look like framework territory and are not. **Audit fields are yours to
+declare and yours to fill.** Add `createdAt`, `updatedAt` or `createdBy` and
+`ablo migrate` gives each a column, which your own write or a database default
+then populates; Ablo records who changed what in its transaction log and does not
+write these columns for you. Omit them and no column is created at all; the model
+still reads and writes, it just orders and attributes its history less precisely.
 
-Declare only your own fields; the reserved ones are still present on the row and
-readable, you just don't author them.
+**The tenancy column** (`organizationId` by default) comes from the model's
+`policy` rather than its field list, so you neither declare it nor lose it.
 
 ## Reads and writes
 
 Use async reads when the row may not be local:
 
 ```ts
-const report = await ablo.weatherReports.get({ id: reportId });
+const report = await ablo.weatherReports.read({ id: reportId });
 const ready = await ablo.weatherReports.list({ where: { status: 'ready' } });
 ```
 
@@ -123,8 +124,8 @@ session route, never a raw API key.
 - Keep direct database writes out of the coordinated path unless they are reported
   back through Data Source events.
 - Use `claim` for slow read -> think -> write spans.
-- Use `readAt` + `onStale: 'reject'` when a write must fail if the row changed
-  after it was read.
+- Use `read` and pass its exact row in `reads` when a write must fail if the row
+  changed after it was read.
 
 For the shortest runnable path, start with [Quickstart](./quickstart.md). For a
 production app, continue with [Integration Guide](./integration-guide.md).

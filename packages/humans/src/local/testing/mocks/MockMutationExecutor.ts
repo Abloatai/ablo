@@ -12,7 +12,6 @@ import type {
   MutationOptions,
   MutationCommitResult as CommitResult,
 } from '../../interfaces/index.js';
-import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
 import { AbloError } from '@abloatai/transaction/errors';
 
 export interface CapturedMutation {
@@ -37,8 +36,6 @@ export interface MockMutationExecutorOptions {
   status?: CommitResult['status'];
   /** Optional server-issued source/WAL correlation returned with queued receipts. */
   correlationId?: string;
-  /** Optional stale-context notifications returned with each commit. */
-  notifications?: StaleNotification[];
   /** Optional zero-row target ids returned with each commit. */
   missingIds?: string[];
 }
@@ -53,7 +50,6 @@ export class MockMutationExecutor implements MutationExecutor {
   private _latencyMs: number;
   private _status: CommitResult['status'];
   private _correlationId: string | undefined;
-  private _notifications: StaleNotification[] | undefined;
   private _missingIds: string[] | undefined;
 
   /** Per-method failure overrides: method name → error */
@@ -68,7 +64,6 @@ export class MockMutationExecutor implements MutationExecutor {
     this._latencyMs = options.latencyMs ?? 0;
     this._status = options.status ?? 'confirmed';
     this._correlationId = options.correlationId;
-    this._notifications = options.notifications;
     this._missingIds = options.missingIds;
   }
 
@@ -94,11 +89,6 @@ export class MockMutationExecutor implements MutationExecutor {
   /** Sets the opaque source/WAL correlation returned by subsequent commits. */
   setCorrelationId(correlationId: string | undefined): void {
     this._correlationId = correlationId;
-  }
-
-  /** Sets stale-context notifications returned by subsequent commit calls. */
-  setNotifications(notifications: StaleNotification[] | undefined): void {
-    this._notifications = notifications;
   }
 
   /** Sets zero-row target ids returned by subsequent commit calls. */
@@ -148,7 +138,6 @@ export class MockMutationExecutor implements MutationExecutor {
     this._latencyMs = options?.latencyMs ?? 0;
     this._status = options?.status ?? 'confirmed';
     this._correlationId = options?.correlationId;
-    this._notifications = options?.notifications;
     this._missingIds = options?.missingIds;
     this._failureOverrides.clear();
     this._responseOverrides.clear();
@@ -178,7 +167,6 @@ export class MockMutationExecutor implements MutationExecutor {
         statusAt,
         lastSyncId: 0,
         correlationId: this._correlationId,
-        ...(this._notifications ? { notifications: this._notifications } : {}),
         ...(this._missingIds ? { missingIds: this._missingIds } : {}),
       };
     }
@@ -187,7 +175,6 @@ export class MockMutationExecutor implements MutationExecutor {
       statusAt,
       lastSyncId: syncId,
       ...(this._correlationId ? { correlationId: this._correlationId } : {}),
-      ...(this._notifications ? { notifications: this._notifications } : {}),
       ...(this._missingIds ? { missingIds: this._missingIds } : {}),
     };
   }

@@ -1,7 +1,7 @@
 import type {
   DurableWriteStore,
-} from '@abloatai/transaction/durableWrites';
-import type { PendingWrite } from '@abloatai/transaction/transactions/confirmation/pendingWrite';
+} from '@abloatai/transaction/commit';
+import type { PendingWrite } from '@abloatai/transaction/commit';
 
 export interface CommitOutboxDatabase {
   sealTransactionRecord(

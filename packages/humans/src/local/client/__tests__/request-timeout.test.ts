@@ -7,7 +7,7 @@
  * registered `wait_for_timeout` code. A caller-initiated abort is NOT
  * mislabeled as a timeout — it propagates unchanged.
  */
-import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { createHttpTransport } from '@abloatai/transaction/transport/http';
 import { AbloConnectionError, isRetryableCode } from '@abloatai/transaction/errors';
 import { modelReadResponse } from '@abloatai/transaction/testing/fixtures/httpResponses';
 
@@ -44,7 +44,7 @@ describe('HTTP transport request deadline', () => {
 
     let caught: unknown;
     try {
-      await docs.retrieve({ id: 'doc-1' });
+      await docs.read({ id: 'doc-1' });
     } catch (error) {
       caught = error;
     }
@@ -90,7 +90,7 @@ describe('HTTP transport request deadline', () => {
       timeoutMs: 25,
     }).model('documents');
 
-    const read = await docs.retrieve({ id: 'doc-3' });
+    const read = await docs.read({ id: 'doc-3' });
     expect(read.data).toEqual({ id: 'doc-3' });
   });
 });

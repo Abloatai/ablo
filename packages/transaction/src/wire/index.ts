@@ -33,19 +33,19 @@ export type { ListEnvelope } from './listEnvelope.js';
 
 // The `GET /v1/logs` feed — the two arms, their envelope, and the cursor that
 // carries a position in each.
-export { claimEventSchema } from './claimEvent.js';
-export type { ClaimEvent } from './claimEvent.js';
+export { claimEventSchema } from '../claims/eventContract.js';
+export type { ClaimEvent } from '../claims/eventContract.js';
 export {
   feedEventSchema,
   logListResponseSchema,
   logQuerySchema,
-} from './feedEvent.js';
-export type { FeedEvent, LogListResponse, LogQuery } from './feedEvent.js';
+} from '../observation/feedContract.js';
+export type { FeedEvent, LogListResponse, LogQuery } from '../observation/feedContract.js';
 
 // The same feed's delivery verdict — how much of what it recorded could reach
 // anyone. Read by `ablo doctor`.
-export { logDeliveryResponseSchema, deliverySampleSchema } from './deltaDelivery.js';
-export type { LogDeliveryResponse, DeliverySample } from './deltaDelivery.js';
+export { logDeliveryResponseSchema, deliverySampleSchema } from '../observation/deliveryContract.js';
+export type { LogDeliveryResponse, DeliverySample } from '../observation/deliveryContract.js';
 export {
   feedCursorSchema,
   parseFeedCursor,
@@ -54,8 +54,8 @@ export {
   FEED_CURSOR_START,
   FEED_CURSOR_FORMAT,
   FEED_CURSOR_EXAMPLE,
-} from './feedCursor.js';
-export type { FeedCursor } from './feedCursor.js';
+} from '../observation/cursor.js';
+export type { FeedCursor } from '../observation/cursor.js';
 export { bootstrapReasonSchema } from './bootstrapReason.js';
 export type { BootstrapReason } from './bootstrapReason.js';
 
@@ -133,7 +133,7 @@ export {
   commitRecordWhereSchema,
   commitRecordListOptionsSchema,
   commitRecordListSchema,
-} from './commit.js';
+} from '../commit/contract.js';
 export type {
   ModelOperationAction,
   CommitOperationBody,
@@ -159,7 +159,7 @@ export type {
   CommitAck,
   MutationCommitResultInput,
   MutationCommitResult,
-} from './commit.js';
+} from '../commit/contract.js';
 export {
   effectiveAuthoritySchema,
 } from '../auth/capability.js';
@@ -179,7 +179,7 @@ export {
   clientSyncDeltaSchema,
   serverSyncDeltaSchema,
   deltaSchema,
-} from './delta.js';
+} from '../observation/contract.js';
 export type {
   ParticipantKind,
   ConfirmationState,
@@ -190,7 +190,7 @@ export type {
   ClientSyncDelta,
   ServerSyncDelta,
   Delta,
-} from './delta.js';
+} from '../observation/contract.js';
 
 // The error surface a wire consumer needs to throw, classify, and serialize.
 export {
@@ -258,7 +258,7 @@ export {
   claimReorderRequestSchema,
   claimReorderReplySchema,
   claimReleaseReplySchema,
-} from './claims.js';
+} from '../claims/contract.js';
 export type {
   ClaimTargetBody,
   ClaimRequest,
@@ -275,7 +275,12 @@ export type {
   ClaimReorderRequest,
   ClaimReorderReply,
   ClaimReleaseReply,
-} from './claims.js';
+} from '../claims/contract.js';
+
+// Where those routes live. The paths are contract in the same sense the bodies
+// are: a caller that builds one by hand is restating a shape the server owns.
+export { CLAIM_ROUTES, claimOnModelPath, claimHeartbeatOnModelPath, claimReorderOnModelPath, claimByIdPath, claimHeartbeatByIdPath } from '../claims/routes.js';
+export type { ClaimRouteTarget } from '../claims/routes.js';
 
 // The model read routes' responses — the envelope around a row, which is
 // protocol, around `data`, which is the caller's schema.
@@ -316,7 +321,6 @@ export {
   projectListResponseSchema,
   provisionedKeySchema,
   provisionKeyResponseSchema,
-  conflictAxisWireSchema,
   schemaModelResponseSchema,
   schemaReadResponseSchema,
   logOpSchema,
