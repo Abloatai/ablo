@@ -1,5 +1,16 @@
 # @abloatai/humans
 
+## 0.59.0
+
+### Patch Changes
+
+- Prevent schemas that declare `updatedAt` from recursively treating the automatic timestamp stamp as another model edit.
+- Report runtime schema drift at field level, including whether fields exist only in the client, only in the active schema, or changed type or optionality.
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @abloatai/transaction@0.59.0
+
 ## 0.58.0
 
 ### Minor Changes

@@ -115,6 +115,14 @@ const firstCoordinatedCommit = event(
   z.strictObject({ coordinationEvidenceClass: shortToken })
 );
 
+const actorCoordinatedCommitActivated = event(
+  'actor_coordinated_commit_activated',
+  z.strictObject({
+    coordinationEvidenceClass: shortToken,
+    actorKind: z.enum(['user', 'agent', 'system']),
+  })
+);
+
 const coordinatedCommitSucceeded = event(
   'coordinated_commit_succeeded',
   z.strictObject({ coordinationEvidenceClass: shortToken })
@@ -169,6 +177,7 @@ export const productEventSchema = z.discriminatedUnion('eventName', [
   schemaPushSucceeded,
   firstConfirmedCommit,
   firstCoordinatedCommit,
+  actorCoordinatedCommitActivated,
   coordinatedCommitSucceeded,
   coordinationIntervention,
   githubAcquisitionSnapshotCollected,

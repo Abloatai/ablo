@@ -14,13 +14,14 @@ releases remain compatible within the same minor line.
 2. Read the changelog entries between your installed and target versions.
 3. Use the documentation bundled with the target package while changing code.
 4. Run type-checks and tests before updating a production branch.
-5. Push schema changes deliberately after reviewing the generated diff.
+5. Run the three-state deployment plan, then push the exact reviewed plan.
 
 ```bash
 npm install @abloatai/ablo@0.48
 npx ablo docs
 npx ablo docs api
-npx ablo check
+npx ablo plan
+npx ablo plan --json
 ```
 
 `npx ablo docs` is version-matched to the installed package. Prefer it during an
@@ -44,17 +45,21 @@ types and server-confirmed identity instead.
 
 ## Schema and database safety
 
-An SDK upgrade and a database migration are separate operations.
+An SDK upgrade and a database migration are separate operations coordinated by
+one deployment plan.
 
-- `ablo push` updates Ablo's typed schema contract. It does not run application
-  DDL or drop your tables.
-- `ablo check` compares the contract with the connected database without
-  changing it.
+- `ablo plan` compares source, the active Ablo artifact, and PostgreSQL without
+  changing any of them. Its fingerprint pins all three observations.
+- `ablo push` consumes that reviewed fingerprint and refuses if any state moved.
+- `ablo check` is the database-compatibility view of the same plan.
 - Your ORM or migration tool remains responsible for tables, columns,
   constraints, and application data migrations.
 
 When both need to change, deploy the database migration in a backwards-compatible
 form first, push the compatible Ablo schema, then remove old application paths.
+For a live rename or required-field change, keep expand, dual-write, resumable
+backfill, verification, switch, and contract as explicit gates. Contract is a
+later, separately approved deployment—not the tail of expand.
 
 ## If an upgrade fails
 

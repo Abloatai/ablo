@@ -1,5 +1,5 @@
 import { parseDevArgs } from '../dev';
-import { parseCheckArgs } from '../check';
+import { parsePlanArgs } from '../plan/index';
 
 describe('parseDevArgs', () => {
   it('defaults to ONE-SHOT (watch is opt-in — `push` is the honest default)', () => {
@@ -28,22 +28,24 @@ describe('parseDevArgs', () => {
   });
 });
 
-describe('parseCheckArgs', () => {
+describe('parsePlanArgs', () => {
   it('applies defaults', () => {
-    expect(parseCheckArgs([])).toEqual({
+    expect(parsePlanArgs([])).toEqual({
       schemaPath: 'ablo/schema.ts',
       exportName: 'schema',
       appSchema: 'public',
+      json: false,
     });
   });
   it('parses flags', () => {
-    expect(parseCheckArgs(['--schema', 's.ts', '--export', 'x', '--app-schema', 'app_1'])).toEqual({
+    expect(parsePlanArgs(['--schema', 's.ts', '--export', 'x', '--app-schema', 'app_1'])).toEqual({
       schemaPath: 's.ts',
       exportName: 'x',
       appSchema: 'app_1',
+      json: false,
     });
   });
   it('throws on unknown flag', () => {
-    expect(() => parseCheckArgs(['--bogus'])).toThrow(/unknown flag/);
+    expect(() => parsePlanArgs(['--bogus'])).toThrow(/unknown flag/);
   });
 });

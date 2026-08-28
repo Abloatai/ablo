@@ -34,6 +34,9 @@ import {
 } from '@abloatai/transaction/schema';
 import { adapterTableMigrations } from '@abloatai/transaction/source';
 import { loadSchema } from './push';
+import { resolveRuntimeApiKeyReadOnly } from './config';
+import { createDeploymentPlan } from './plan/index';
+import { renderDeploymentPlan } from './plan/render';
 
 /**
  * Usage text for `ablo migrate --help`. Kept beside the parser (and exported so
@@ -262,6 +265,43 @@ export async function migrate(argv: readonly string[]): Promise<void> {
   const args = parseMigrateArgs(argv);
 
   const schema = await loadSchema(args.schemaPath, args.exportName);
+  const dbUrl = readProjectAdminDatabaseUrl();
+  if (!dbUrl) {
+    throw new AbloValidationError(
+      `No ${ADMIN_URL_VAR} found (checked process env, .env.local, .env). Set it to plan or apply this migration.`,
+      { code: 'cli_database_url_missing' },
+    );
+  }
+  const apiKey = resolveRuntimeApiKeyReadOnly().key;
+  if (!apiKey) {
+    throw new AbloValidationError('No ABLO_API_KEY found. Migration must consume the same active-plane deployment plan.', {
+      code: 'cli_api_key_missing',
+    });
+  }
+  const deployment = await createDeploymentPlan({
+    schema,
+    schemaPath: args.schemaPath,
+    appSchema: args.targetSchema,
+    apiKey,
+    databaseUrl: dbUrl,
+  });
+  const unresolved = deployment.findings.filter((finding) => {
+    if (finding.severity !== 'blocker' && finding.severity !== 'error') return false;
+    if (finding.direction === 'active_to_database') return false;
+    // This command owns only the physical projection. Source→active gates are
+    // carried in the plan for ordering, but are resolved by push after the
+    // backwards-compatible database expansion succeeds.
+    if (finding.direction === 'source_to_active') return finding.category === 'policy_intent';
+    if (finding.direction !== 'source_to_database') return true;
+    return !(finding.code === 'missing_table' || (finding.code === 'missing_column' && finding.field));
+  });
+  if (unresolved.length > 0) {
+    renderDeploymentPlan(deployment);
+    throw new AbloValidationError(
+      `Migration cannot execute ${unresolved.length} blocker(s) in deployment plan ${deployment.fingerprint}.`,
+      { code: 'incompatible_change' },
+    );
+  }
   const plan = planFor(schema, args.targetSchema);
   const sql = [
     ...plan.statements,
@@ -279,6 +319,7 @@ export async function migrate(argv: readonly string[]): Promise<void> {
   }
 
   if (args.dryRun) {
+    renderDeploymentPlan(deployment);
     console.log('\n' + sql + '\n');
     return;
   }
@@ -288,14 +329,6 @@ export async function migrate(argv: readonly string[]): Promise<void> {
   // command has no framework to load those files for it, so it reads them
   // directly — otherwise it would miss a DATABASE_URL that lives only in
   // `.env.local`, which is a common place to keep it.
-  const dbUrl = readProjectAdminDatabaseUrl();
-  if (!dbUrl) {
-    throw new AbloValidationError(
-      `No ${ADMIN_URL_VAR} found (checked process env, .env.local, .env). Set it to apply, or use --dry-run to preview.`,
-      { code: 'cli_database_url_missing' },
-    );
-  }
-
   // `ablo migrate` provisions tables and nothing more: it does not create roles,
   // enable row-level security, or rewrite DATABASE_URL. It runs the DDL as the
   // role you supply, like any migration tool, so securing the connection with a
@@ -312,8 +345,26 @@ export async function migrate(argv: readonly string[]): Promise<void> {
       quiet: interactive,
       onStatement: (done, total) => progress?.message(`Applying schema — ${done} of ${total} statements`),
     });
+    const verification = await createDeploymentPlan({
+      schema,
+      schemaPath: args.schemaPath,
+      appSchema: args.targetSchema,
+      apiKey,
+      databaseUrl: dbUrl,
+    });
+    const physicalBlockers = verification.findings.filter(
+      (finding) => finding.direction === 'source_to_database' &&
+        (finding.severity === 'blocker' || finding.severity === 'error'),
+    );
+    if (physicalBlockers.length > 0) {
+      renderDeploymentPlan(verification);
+      throw new AbloValidationError(
+        `Migration applied but physical verification still has ${physicalBlockers.length} blocker(s).`,
+        { code: 'migration_failed' },
+      );
+    }
     if (progress) progress.stop(`Migration complete (${totalStatements} statements)`, 0);
-    else console.log(`  ${pc.green('✓')} Migration complete`);
+    else console.log(`  ${pc.green('✓')} Migration complete and verified (${verification.fingerprint})`);
   } catch (err) {
     progress?.stop('Migration failed', 1);
     // Say what went wrong. A statement that fails is already logged with its

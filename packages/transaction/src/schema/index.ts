@@ -262,6 +262,11 @@ export {
   type BlockerCode,
 } from './diff.js';
 
+// One source/active/database deployment skeleton. CLI check/plan/push/migrate,
+// server activation, and runtime drift project this contract instead of
+// maintaining lateral planners.
+export * from './deployment/index.js';
+
 // Schema → TypeScript type emission.
 export { generateTypes } from './generate.js';
 

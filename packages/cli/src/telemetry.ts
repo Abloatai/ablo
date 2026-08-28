@@ -15,7 +15,7 @@ import {
 } from '@ablo/product-analytics';
 import { cliArchitecture, cliOs, cliVersion } from './cliEnvironment';
 import { apiBaseUrl } from './controlPlane';
-import { configDir } from './config';
+import { configDir, resolveRuntimeApiKey } from './config';
 
 const TELEMETRY_FILE_VERSION = 1 as const;
 const MAX_QUEUED_EVENTS = 50;
@@ -160,11 +160,15 @@ async function flushOnce(options: FlushTelemetryOptions): Promise<void> {
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS);
   let response: Response;
   try {
+    const apiKey = telemetryApiKey();
     response = await (options.fetchImpl ?? fetch)(
       `${(options.baseUrl ?? apiBaseUrl()).replace(/\/+$/, '')}/api/v1/analytics/events`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+        },
         body: JSON.stringify({ anonymousId: state.anonymousId, events: batch }),
         signal: controller.signal,
       }
@@ -188,6 +192,14 @@ async function flushOnce(options: FlushTelemetryOptions): Promise<void> {
       ...current,
       queue: current.queue.filter((event) => !delivered.has(event.producerEventId)),
     });
+  }
+}
+
+function telemetryApiKey(): string | undefined {
+  try {
+    return resolveRuntimeApiKey().key;
+  } catch {
+    return undefined;
   }
 }
 

@@ -436,6 +436,8 @@ export interface RuntimeConfig {
    * Advisory, like the hashes above.
    */
   expectedModelHashes?: Readonly<Record<string, string>>;
+  /** Field shapes paired with expectedModelHashes so drift can name direction, not just a model. */
+  expectedModelShapes?: Readonly<Record<string, Readonly<Record<string, { readonly type: string; readonly isOptional: boolean }>>>>;
 }
 
 // ─────────────────────────────────────────────

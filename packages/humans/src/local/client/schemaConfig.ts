@@ -185,6 +185,9 @@ export function deriveConfigFromSchema(schema: Schema): RuntimeConfig {
     expectedModelHashes: Object.fromEntries(
       Object.entries(toSchemaJSON(schema).models).map(([key, model]) => [key, modelHash(model)]),
     ),
+    expectedModelShapes: Object.fromEntries(
+      Object.entries(toSchemaJSON(schema).models).map(([key, model]) => [key, Object.fromEntries(Object.entries(model.fields).map(([field, meta]) => [field, { type: meta.type, isOptional: meta.isOptional }]))]),
+    ),
     // For a projection (`selectModels`/`omitModels`), also carry the full source
     // schema's hash. The drift check accepts a server match on either hash, so a
     // subset client stays quiet against a server running its full source schema.

@@ -24,13 +24,16 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { confirm, text, isCancel, cancel } from '@clack/prompts';
-import { serializeSchema, schemaHash, type Schema } from '@abloatai/transaction/schema';
+import { serializeSchema, schemaHash, type DatabaseSnapshot, type DeploymentManifest, type Schema, type SchemaDeploymentPlan } from '@abloatai/transaction/schema';
 import { apiBaseUrl } from './controlPlane';
 import { ambientEnvKeyNote, resolveMutationApiKey, type ResolvedKeySource } from './config';
 import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 import { brand } from './theme';
 import { renderCliError } from './renderError';
 import { flushProductAnalytics, trackCliSchemaPushAttempted } from './telemetry';
+import { readProjectAdminDatabaseUrl } from './dbRole';
+import { createDeploymentPlanBundle, loadDeploymentManifest } from './plan/index';
+import { renderDeploymentPlan } from './plan/render';
 
 export interface PushArgs {
   schemaPath: string;
@@ -47,6 +50,7 @@ export interface PushArgs {
   /** Compute and print the plan — target, model diff, and git state — then exit
    *  without applying anything, so you can preview a deploy before running it. */
   dryRun: boolean;
+  manifestPath?: string;
 }
 
 /** Coerce a `--backfill` literal: `true`/`false` → boolean, numeric → number,
@@ -78,6 +82,7 @@ export const PUSH_USAGE = `  ablo push — upload a schema to one confirmed bran
     --force               Allow destructive schema changes
     --rename old:new      Record a model rename
     --backfill m.f=value  Seed existing rows for a new required field
+    --manifest <path>     Pin explicit lifecycle gates to plan and apply
 
   The server confirms the key's project and branch. Current keys do not encode
   live/test state, and push never guesses a branch from their spelling.`;
@@ -123,7 +128,11 @@ export interface PushResult {
  */
 export async function pushSchema(
   schema: Schema,
-  args: Pick<PushArgs, 'url' | 'apiKey' | 'force' | 'renames' | 'backfills'>,
+  args: Pick<PushArgs, 'url' | 'apiKey' | 'force' | 'renames' | 'backfills'> & {
+    readonly database?: DatabaseSnapshot | null;
+    readonly manifest?: DeploymentManifest;
+    readonly plan?: SchemaDeploymentPlan;
+  },
 ): Promise<PushResult> {
   trackCliSchemaPushAttempted();
   void flushProductAnalytics();
@@ -139,6 +148,9 @@ export async function pushSchema(
       force: args.force,
       renames: args.renames,
       backfills: args.backfills,
+      ...(args.database ? { database: args.database } : {}),
+      ...(args.manifest ? { manifest: args.manifest } : {}),
+      ...(args.plan ? { plan: args.plan } : {}),
     }),
   });
   const bodyText = await res.text();
@@ -162,6 +174,7 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
   let yes = false;
   let dryRun = false;
   let envFile: string | undefined;
+  let manifestPath: string | undefined;
   const renames: { from: string; to: string }[] = [];
   const backfills: { model: string; field: string; value: string | number | boolean }[] = [];
 
@@ -182,6 +195,9 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
         break;
       case '--force':
         force = true;
+        break;
+      case '--manifest':
+        manifestPath = argv[++i];
         break;
       case '--yes':
       case '-y':
@@ -239,6 +255,7 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
     backfills,
     yes,
     dryRun,
+    ...(manifestPath ? { manifestPath } : {}),
   };
 }
 
@@ -335,70 +352,6 @@ function schemaGitState(schemaPath: string): { dirty: boolean; untracked: boolea
 }
 
 /** A model in the deployed schema (`GET /api/schema`). */
-interface RemoteModel {
-  key: string;
-}
-interface RemoteSchema {
-  active?: boolean;
-  version?: number;
-  models?: RemoteModel[];
-}
-
-/** Best-effort read of the schema currently active for this key, used only for
- *  the diff preview. Any failure returns null and never blocks the push — the
- *  server still computes the authoritative diff when the schema is applied. */
-async function fetchActiveSchema(url: string, apiKey: string): Promise<RemoteSchema | null> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => { ctrl.abort(); }, 3000);
-  try {
-    const res = await fetch(`${url}/api/schema`, {
-      headers: { authorization: `Bearer ${apiKey}` },
-      signal: ctrl.signal,
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as RemoteSchema;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-/** Model keys from the serialized local schema. */
-function localModels(schema: Schema): Set<string> {
-  const json = JSON.parse(serializeSchema(schema)) as {
-    models: Record<string, unknown>;
-  };
-  return new Set(Object.keys(json.models));
-}
-
-/**
- * Prints models added or removed against the deployed schema.
- * Field-level destructive changes are caught authoritatively by the server when
- * the schema is applied (it returns `warnings` and `unexecutable`); this is the
- * human-readable preview shown beforehand.
- */
-function printPlan(local: Set<string>, remote: RemoteSchema | null): void {
-  if (!remote?.models) {
-    console.log(`  ${pc.dim('plan')}     ${pc.dim('(deployed schema unavailable — the server computes the diff on apply)')}\n`);
-    return;
-  }
-  const remoteKeys = new Set(remote.models.map((model) => model.key));
-
-  const added = [...local].filter((key) => !remoteKeys.has(key));
-  const removed = [...remoteKeys].filter((key) => !local.has(key));
-  const verLabel = remote.version != null ? `v${remote.version}` : 'active';
-
-  if (added.length === 0 && removed.length === 0) {
-    console.log(`  ${pc.dim('plan')}     ${pc.dim(`no model-level changes vs deployed ${verLabel} (any field changes apply on push)`)}\n`);
-    return;
-  }
-  console.log(`  ${pc.dim('plan')}     ${pc.dim(`vs deployed ${verLabel}:`)}`);
-  for (const k of added) console.log(`           ${pc.green(`+ ${k}`)} ${pc.dim('(new model)')}`);
-  for (const k of removed) console.log(`           ${pc.red(`- ${k}`)} ${pc.dim('(removed — destructive, needs --force)')}`);
-  console.log('');
-}
-
 /**
  * Pre-flight gate run after the banner + plan, before the write. Encodes the
  * child/root separation: a child confirms interactively (and proceeds silently
@@ -614,6 +567,7 @@ export async function push(argv: readonly string[]): Promise<void> {
   }
 
   const schema = await loadSchema(args.schemaPath, args.exportName);
+  const manifest = args.manifestPath ? loadDeploymentManifest(args.manifestPath) : undefined;
   const hash = schemaHash(schema);
 
   // Resolve the true target from the key: the server-confirmed org, project, and
@@ -629,9 +583,23 @@ export async function push(argv: readonly string[]): Promise<void> {
     hash,
   });
 
-  // Plan preview — the model-level diff against the deployed schema.
-  const remote = await fetchActiveSchema(args.url, args.apiKey);
-  printPlan(localModels(schema), remote);
+  // The exact same three-state plan drives dry-run and apply. Application-owned
+  // PostgreSQL is inspected locally; hosted storage is observed by the server.
+  const databaseUrl = readProjectAdminDatabaseUrl();
+  const reviewed = await createDeploymentPlanBundle({
+    schema,
+    schemaPath: args.schemaPath,
+    appSchema: 'public',
+    apiKey: args.apiKey,
+    ...(databaseUrl ? { databaseUrl } : {}),
+    url: args.url,
+    renames: args.renames,
+    backfills: args.backfills,
+    force: args.force,
+    ...(manifest ? { manifest } : {}),
+  });
+  if (args.dryRun || reviewed.plan.outcome === 'blocked') renderDeploymentPlan(reviewed.plan);
+  else console.log(`  ${pc.dim('plan')}     ${pc.bold(reviewed.plan.fingerprint)} ${pc.dim(`(${reviewed.plan.outcome})`)}\n`);
 
   // Local-intent-vs-key divergences: the selected project isn't the key's
   // project, or the CLI mode isn't the key's environment. Named in prose so the
@@ -649,12 +617,23 @@ export async function push(argv: readonly string[]): Promise<void> {
     console.log(`  ${pc.dim('○')} dry run — nothing applied. Re-run without ${pc.bold('--dry-run')} to deploy.`);
     return;
   }
+  if (reviewed.plan.outcome === 'blocked') {
+    throw new AbloValidationError(
+      `Schema deployment plan ${reviewed.plan.fingerprint} is blocked; resolve its blocker findings before pushing.`,
+      { code: 'incompatible_change' },
+    );
+  }
 
   // Child/root branch separation + confirmation (exits on refusal). On the
   // production root this requires typing the key's real project name.
   await confirmPush(args, target);
 
-  const { ok: resOk, status, body, bodyText } = await pushSchema(schema, args);
+  const { ok: resOk, status, body, bodyText } = await pushSchema(schema, {
+    ...args,
+    plan: reviewed.plan,
+    database: reviewed.database,
+    ...(manifest ? { manifest } : {}),
+  });
 
   if (resOk) {
     if (body.unchanged) {

@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.58.0",
+  "version": "0.59.0",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -128,6 +128,7 @@
     "prepack": "npm run build && node scripts/strip-source-condition.mjs",
     "postpack": "node scripts/restore-source-condition.mjs",
     "pack:check": "node scripts/pack-check.mjs",
+    "verify:context-package": "node scripts/verify-context-package.mjs",
     "typecheck": "tsc --noEmit && tsc -p typetests/tsconfig.json && tsc -p examples/tsconfig.json",
     "test": "vitest run",
     "generate:errors": "tsx scripts/generate-error-docs.mts",
@@ -155,8 +156,8 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.58.0",
-    "@abloatai/transaction": "^0.58.0",
+    "@abloatai/humans": "^0.59.0",
+    "@abloatai/transaction": "^0.59.0",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

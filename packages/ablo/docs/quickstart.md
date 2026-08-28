@@ -281,6 +281,7 @@ await ablo.weatherReports.update({
     status: 'ready',
     forecast: weather.summary,
   },
+  claim: handle,
 });
 // scope exit releases the claim — no manual release, even if the work threw
 ```
@@ -307,7 +308,11 @@ if (active) {
 }
 
 await using handle = await ablo.weatherReports.claim({ id: 'weather_stockholm' });
-await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });
+await ablo.weatherReports.update({
+  id: handle.data.id,
+  data: { status: 'ready' },
+  claim: handle,
+});
 ```
 
 Use `contention: { mode: 'skip' }` when work should be skipped instead of

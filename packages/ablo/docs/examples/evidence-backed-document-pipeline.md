@@ -1,9 +1,9 @@
----
-title: "Existing Document Pipeline"
-description: "This is an advanced evidence-backed state reference, not the default Ablo integration tutorial. If you are coordinating an operation that already owns its Postgres write, start with the [Agent Integration Decision Guide](../agent-integration-decision-guide.md)."
-sidebar:
-  icon: file-check-2
----
+# Build an evidence-backed document pipeline
+
+> This is an advanced evidence-backed state reference, not the default Ablo
+> integration tutorial. If you are coordinating an operation that already owns
+> its Postgres write, start with the
+> [coordinate existing work guide](../coordinate-existing-work.md).
 
 > Coordinate expensive processing over an application-owned document without taking ownership of uploads or storage.
 
@@ -312,7 +312,7 @@ the target for one participant. Foreign commits are rejected while it is held,
 and a stale or lost holder is fenced at commit time. Workers that must exclude
 one another require distinct participant credentials: clients sharing one
 credential are the same participant and do not exclude each other.
-[Ablo coordination](/coordination) documents the participant and transport
+[Ablo coordination](../coordination.md) documents the participant and transport
 semantics. Lease-based systems must expect work to overlap after pauses or
 expiry and protect correctness at the final write.
 [AWS lease guidance](https://aws.amazon.com/builders-library/leader-election-in-distributed-systems/).
@@ -341,7 +341,7 @@ server's documented organization, participant, and retention scope. Ordinary
 recorded results are retained for 24 hours. It does not make provider calls,
 emails, storage writes, or other external effects idempotent; those systems need
 their own keys and replay policy.
-[Ablo idempotency](/idempotency) is the governing replay contract.
+[Ablo idempotency](../idempotency.md) is the governing replay contract.
 
 Both humans and agents can author annotations. Application authorization still
 decides who may request review and who may sign off; `actorKind` is attribution,
@@ -469,7 +469,7 @@ the connected database transaction boundary, authorization policy, lease store,
 participant credentials, projection-retention policy, and deployment
 configuration.
 
-Run [Hosted coordination conformance](/coordination-conformance) separately
+Run [Hosted coordination conformance](./coordination-conformance.md) separately
 for real delegated identities, heartbeat, exclusion, and process-death expiry.
 Keeping that proof independent prevents this domain example from pushing a
 document schema merely to retest the lease primitive.

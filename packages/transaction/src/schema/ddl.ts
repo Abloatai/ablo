@@ -318,7 +318,9 @@ export function generateProvisionPlan(
     for (const [fieldName, meta] of Object.entries(model.fields)) {
       const col = meta.column ?? camelToSnake(fieldName);
       if (BASE_COLUMNS.has(col) || col === orgCol) continue;
-      statements.push(`ALTER TABLE ${qt} ADD COLUMN IF NOT EXISTS ${q(col)} ${sqlType(meta.type)};`);
+      statements.push(
+        `ALTER TABLE ${qt} ADD COLUMN IF NOT EXISTS ${q(col)} ${sqlType(meta.type)}${meta.isOptional ? '' : ' NOT NULL'};`,
+      );
       if (meta.type === 'enum' && meta.enumValues && meta.enumValues.length > 0) {
         const cname = `${table}_${col}_enum`;
         const allowed = meta.enumValues.map((v) => `'${v.replace(/'/g, "''")}'`).join(', ');

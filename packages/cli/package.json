@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/cli",
-  "version": "0.58.0",
+  "version": "0.59.0",
   "description": "The ablo command line: set up Ablo, connect your database, and push your schema from the terminal.",
   "license": "Apache-2.0",
   "homepage": "https://docs.abloatai.com/cli",
@@ -26,6 +26,11 @@
     "test": "jest",
     "test:quickstart": "node scripts/test-quickstart.mjs",
     "eval:setup": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-setup-agent.ts",
+    "eval:docs:brownfield": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-docs-existing-operation.ts",
+    "eval:docs:discovery": "ABLO_DOCS_EVAL_ACCESS=browsable node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-docs-existing-operation.ts",
+    "eval:docs:discovery:matrix": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-docs-discovery-matrix.ts",
+    "eval:docs:qm": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-docs-qm.ts",
+    "eval:docs:sandcastle": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-docs-sandcastle.ts",
     "eval:setup:qm": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-setup-qm.ts",
     "eval:setup:repositories": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/benchmark-setup-repositories.ts"
   },
@@ -36,10 +41,10 @@
   },
   "dependencies": {
     "@sentry/node": "^10.18.0",
-    "@abloatai/transaction": "^0.58.0",
+    "@abloatai/transaction": "^0.59.0",
     "jiti": "^2.7.0",
     "zod": "^4.4.3",
-    "@abloatai/humans": "^0.58.0"
+    "@abloatai/humans": "^0.59.0"
   },
   "devDependencies": {
     "@ablo/product-analytics": "file:../product-analytics",
@@ -48,6 +53,7 @@
     "@prisma/client": "^7.9.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
+    "ai": "^6.0.116",
     "drizzle-orm": "^0.45.2",
     "jest": "^30.2.0",
     "jest-environment-node": "^30.2.0",

@@ -281,6 +281,12 @@ export const setupEvalVerificationSchema = z.object({
   status: z.enum(['pass', 'fail', 'error']),
   detail: z.string().min(1),
   durationMs: z.number().int().nonnegative(),
+  /** Stable documentation/implementation defects found by a semantic grader. */
+  findings: z.array(z.object({
+    code: z.string().regex(/^[a-z][a-z0-9_]*$/),
+    detail: z.string().min(1),
+    evidencePaths: z.array(z.string().min(1)).default([]),
+  }).strict()).optional(),
 }).strict();
 
 /** Agent-reported review handoff. Evidence only; repository graders remain authoritative. */
@@ -314,10 +320,29 @@ export const setupEvalResultSchema = z.object({
   startedAt: z.iso.datetime(),
   finishedAt: z.iso.datetime(),
   durationMs: z.number().int().nonnegative(),
+  inputs: z.object({
+    recordId: z.string().min(1),
+    skillId: z.string().min(1),
+    skillVersion: z.string().min(1),
+    files: z.array(z.object({
+      path: z.string().min(1),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    }).strict()).min(1),
+  }).strict().optional(),
   agent: z.object({
     status: z.enum(['completed', 'failed', 'timed_out']),
     exitCode: z.number().int().nullable(),
     handoff: setupAgentHandoffSchema.nullable(),
+    telemetry: z.object({
+      documentationLists: z.number().int().nonnegative(),
+      documentationReads: z.array(z.string().min(1)),
+      documentationReadWords: z.number().int().nonnegative().optional(),
+      documentationSearches: z.array(z.string().min(1)),
+      repositoryLists: z.number().int().nonnegative(),
+      repositoryReads: z.array(z.string().min(1)),
+      writes: z.array(z.string().min(1)),
+      checks: z.number().int().nonnegative(),
+    }).strict().optional(),
   }).strict(),
   diff: setupDiffEvaluationSchema,
   verification: z.array(setupEvalVerificationSchema),

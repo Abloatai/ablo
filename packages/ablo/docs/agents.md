@@ -2,6 +2,25 @@
 
 > The stateless participant: wake on a trigger, read, claim, commit, go idle.
 
+## Stateless HTTP reads
+
+Use `get` to read one task row by id and `list` to find matching rows. Agents
+and other stateless workers use the HTTP client directly, without a
+synchronization step or a `.data` wrapper.
+
+```ts
+const task = await ablo.tasks.get({ id: taskId });
+if (!task) throw new Error('task not found');
+console.log(task.title);
+
+const matching = await ablo.tasks.list({ where: { title } });
+if (!matching[0]) throw new Error('task not found');
+console.log(matching[0].title);
+```
+
+These are observational reads. Use `read({ id })` only when a later Ablo write
+depends on that exact version and will pass it through `reads`.
+
 An agent is a **reactive** participant: it wakes on something happening, reads
 what it needs, writes a result, and goes idle. That's a request/response
 workload — so agents talk to Ablo over **plain HTTP**, holding no WebSocket. The
@@ -16,7 +35,7 @@ other*.**
 <Note>
 Agents transact against your **pushed schema**, same as everyone — `ablo.records`
 exists because you defined a `record` model and ran `ablo push`. The key
-authenticates; the [schema](/quickstart) defines what you can call.
+authenticates; the [schema](/installation) defines what you can call.
 </Note>
 
 ## The agent client

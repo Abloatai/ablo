@@ -2,6 +2,9 @@
 
 > Make a retried write safe: the same key never applies the same change twice.
 
+This page owns idempotency for updates and retries, including changed intent
+and the `idempotency_conflict` failure code.
+
 An agent retries. A socket drops mid-commit, a worker restarts, a queue redelivers — and the write
 you already sent arrives again. An idempotency key is how Ablo tells a retry from a new intention.
 

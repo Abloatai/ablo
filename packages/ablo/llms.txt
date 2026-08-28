@@ -1,6 +1,6 @@
 # Ablo
 
-Ablo is collaboration infrastructure for AI agents: one API for agents, apps, and services to claim, change, and confirm the same rows.
+Ablo is coordination infrastructure for agents, applications, services, and people working on shared state.
 
 Here is the problem it solves. Two agents reach for `report_stockholm` at once. One claims the row, does slow work (an LLM call, a fetch, a chain of tools), and commits. The second is neither rejected nor allowed to clobber: it waits in line, is handed the row as it now stands, and proceeds. Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so writers serialize instead of colliding. A person editing that row is simply another holder; the agent waits behind them the same way. And a claim is as narrow as its target: name a `path`, a `range`, or a `field` and two claims on non-overlapping parts of the same row are both granted — region locking within one row, with no queueing between regions.
 

@@ -17,6 +17,66 @@ model or move business policy into resolvers.
 - Existing authentication, migrations, search, files, and workflow execution
   remain in their current owners.
 
+## Minimal named read
+
+Define the Ablo call in one named application operation. The resolver depends
+on that operation, and GraphQL.js owns only the public query shape.
+
+```ts
+import {
+  graphql,
+  GraphQLID,
+  GraphQLNonNull,
+  GraphQLObjectType,
+  GraphQLSchema,
+  GraphQLString,
+} from 'graphql';
+import { ablo } from './ablo/client.js';
+
+type Task = NonNullable<Awaited<ReturnType<typeof ablo.tasks.get>>>;
+
+async function getTask(input: { id: string }): Promise<Task | undefined> {
+  return ablo.tasks.get({ id: input.id });
+}
+
+const taskType = new GraphQLObjectType<Task>({
+  name: 'Task',
+  fields: {
+    title: {
+      type: new GraphQLNonNull(GraphQLString),
+      resolve: (task) => task.title,
+    },
+  },
+});
+
+const schema = new GraphQLSchema({
+  query: new GraphQLObjectType({
+    name: 'Query',
+    fields: {
+      task: {
+        type: taskType,
+        args: { id: { type: new GraphQLNonNull(GraphQLID) } },
+        resolve: (_source, input: { id: string }) => getTask(input),
+      },
+    },
+  }),
+});
+
+const result = await graphql({
+  schema,
+  source: 'query Task($id: ID!) { task(id: $id) { title } }',
+  variableValues: { id: taskId },
+});
+if (result.errors?.[0]) throw result.errors[0];
+const data = result.data as { task?: { title: string } } | undefined;
+if (!data?.task) throw new Error('task not found');
+console.log(data.task.title);
+```
+
+For mutations, keep the same dependency direction: resolver → named domain
+operation → Ablo or the retained application service. Do not pass the Ablo
+client into a generic resolver context and rebuild policy there.
+
 ## File structure
 
 ```text

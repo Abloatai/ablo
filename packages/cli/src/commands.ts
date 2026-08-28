@@ -26,6 +26,8 @@ import { BRANCH_DEV_USAGE } from './branchDev';
 import { WHOAMI_USAGE } from './whoami';
 import { PUSH_USAGE } from './push';
 import { SETUP_USAGE } from './setup/run';
+import { PLAN_USAGE } from './plan/index';
+import { ROLLBACK_USAGE } from './rollback';
 import { brand } from './theme';
 
 /** Headings in the short help — the core loop, in the order you meet it. */
@@ -173,6 +175,29 @@ export const COMMANDS = [
         { run: 'dev', does: 'Prepare an isolated Git branch, push schema, and watch' },
         { run: 'dev --branch <slug>', does: 'Use an explicit branch instead of Git discovery' },
         { run: 'dev --no-watch', does: 'Prepare the branch, push once, and exit' },
+      ],
+    },
+  },
+  {
+    name: 'plan',
+    usage: PLAN_USAGE,
+    core: { group: 'Every day', does: 'Reconcile source, active schema, and PostgreSQL — read-only' },
+    full: {
+      group: 'Your schema',
+      rows: [
+        { run: 'plan', does: 'One ordered source + active schema + PostgreSQL deployment plan' },
+        { run: 'plan --json', does: 'The same fingerprinted plan, machine-readable' },
+      ],
+    },
+  },
+  {
+    name: 'rollback',
+    usage: ROLLBACK_USAGE,
+    full: {
+      group: 'Your schema',
+      rows: [
+        { run: 'rollback --version <n>', does: 'Plan safe reactivation of an earlier schema artifact' },
+        { run: 'rollback --version <n> --apply <plan>', does: 'Apply the exact reviewed reactivation plan' },
       ],
     },
   },

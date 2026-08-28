@@ -127,6 +127,26 @@ delivery closes. The final create, update, or delete must still receive
 `reads: ctx.reads`; that check remains authoritative if delivery races the
 write or is disconnected.
 
+## Retry stale agent work
+
+Use this policy for a long-running turn:
+
+1. Create one operation key before the retry loop.
+2. Build a new context on every attempt.
+3. Use `onChange` to abort the model and cancellable tools.
+4. Still pass `reads: ctx.reads` to the final write.
+5. Retry a stale attempt at most a small fixed number of times.
+
+Automatic retry is safe only before the first external action that cannot be
+canceled. After sending an email, charging a card, or receiving an uncertain
+tool response, look up that action by the same operation key. Do not run it
+again unless that tool explicitly guarantees the retry is safe.
+
+[`examples/stale-context-agent-turn.ts`](../examples/stale-context-agent-turn.ts)
+is the complete copyable loop. Put that function in the application operation
+that owns the write; GraphQL resolvers and route handlers should call it once,
+not add another retry loop.
+
 ## External context
 
 Provider results pass through without an adapter or provider dependency. The

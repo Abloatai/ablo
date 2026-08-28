@@ -1,5 +1,22 @@
 # @abloatai/cli
 
+## 0.59.0
+
+### Minor Changes
+
+- Add one fingerprinted deployment plan that reconciles the source schema, active Ablo schema, and connected PostgreSQL shape. The CLI exposes it through `ablo plan`, projects `ablo check` from the same evidence, adds reviewed rollback, and makes push and migrate consume the shared plan. Push now refuses blocked plans and accepts explicit lifecycle manifests. The underlying deployment contracts are exported from the public schema surface.
+
+### Patch Changes
+
+- Authenticate product-analytics delivery with the active runtime API key when one is available, without writing that key to the CLI telemetry state.
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @abloatai/humans@0.59.0
+  - @abloatai/transaction@0.59.0
+
 ## 0.58.0
 
 ### Minor Changes

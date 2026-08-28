@@ -2,12 +2,21 @@
 
 > Run an Ablo agent with OS-enforced filesystem and network boundaries while its coordinated work remains durable outside the sandbox.
 
+## Choose the write owner first
+
+- If the sandbox reads and writes shared Ablo rows itself, continue with this page.
+- If the sandbox only returns a prepared result and the host process commits
+  through an existing application operation, **stop here and open**
+  [Coordinate existing work](../coordinate-existing-work.md).
+  That guide owns the implementation. Keep the operation, its database
+  transaction, and the existing Ablo wiring.
+
 Anthropic Sandbox Runtime and Ablo own different boundaries:
 
 | Concern | Owner |
 |---|---|
 | Filesystem, network, Unix sockets, process-tree restrictions | Sandbox Runtime |
-| Typed reads and writes, claims, fencing, idempotency, confirmation | Ablo |
+| Typed reads and writes, claims, safe retries, and confirmation | Ablo |
 | Prompts, tools, model calls, and business behavior | Your application |
 | Authentication, branch creation, schema push, and database connection | A trusted host workflow |
 

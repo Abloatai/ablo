@@ -34,10 +34,10 @@ Follow the supplied record contract. Its discovery hints are optional starting p
 ## Workflow
 
 1. Read the record and inspect repository conventions, package scripts, framework layout, ORM/schema, auth, and existing Ablo code.
-2. Run "npx ablo docs agent-integration-decision-guide" first, then "npx ablo docs integration-guide", "npx ablo docs api", and any other installed-version page needed for the detected stack. Do not rely on memory or latest-web documentation.
+2. Read "references/coordinate-existing-work.md" when the supplied bundle contains it; otherwise run "npx ablo docs coordinate-existing-work". Choose its default existing-operation route unless a concrete condition on that page selects another route. Read only the deeper installed-version pages named by the selected route; do not read the full documentation set or rely on memory or latest-web documentation.
 3. Name the existing operation being adapted and record its claim identity, participant credential, decision premises, atomic boundary, persistence owner, failure behavior, and proof. Then map every selected model's meaningful reads and writes. Follow wrappers and call chains; do not stop at discovery hints or grep results.
 4. Reconcile or create the Ablo schema and clients without overwriting application-owned wiring. Declare application fields and their real column names normally. Existing-table ownership, database defaults, and identity generation belong to the reviewed database connection, not the model definition; Ablo does not own customer rows or application migrations.
-5. Adapt independent writes through "ablo.<model>" methods. Use one "ablo.commits.create(...)" call for conditional updates and dependent writes that must remain atomic, and correlate returned rows with the operation "transactionId".
+5. Follow the selected persistence boundary. When the existing service remains authoritative, add coordination around its named operation and preserve its Postgres write. When Ablo owns the selected write path, adapt independent writes through "ablo.<model>" methods. Use one "ablo.commits.create(...)" only for dependent Ablo writes that must remain atomic, and correlate returned rows with the operation "transactionId".
 6. Preserve the caller's trust boundary: browser code uses the existing session/auth flow; trusted server and worker code may use a server client. Never expose a secret key to browser code.
 7. In a Node service, follow the application's existing composition root and shutdown flow. Validate that "ABLO_API_KEY" is present without logging it, create one schema-backed "createTransactionClient(...)" per service or worker authority, await "ready()" before accepting work, and inject the client into stores and workers. Preserve memory-backed test modes. Release held claims in "finally" or with explicit resource management, stop accepting work before shutdown, await active work, then await "dispose()". Do not add hidden global clients or replace the application's signal and exit behavior.
 8. Add or update focused tests for the adapted behavior, including startup failure and shutdown during active work when Node lifecycle wiring changes. Run the application's existing typecheck and relevant test commands when available; do not run broad fix/format commands that rewrite unrelated files.
@@ -46,10 +46,10 @@ Follow the supplied record contract. Its discovery hints are optional starting p
 
 const API_REFERENCE = `# Ablo application API contract
 
-This is a compact orientation for the CLI release that emitted the bundle. The
-installed package's output from "npx ablo docs agent-integration-decision-guide",
-"npx ablo docs api", and "npx ablo docs integration-guide" is authoritative if
-any example differs.
+This is a compact orientation for the CLI release that emitted the bundle. Start
+with "npx ablo docs coordinate-existing-work". The installed package's
+route-specific pages are authoritative if any example differs; do not read
+unrelated pages before implementing the selected operation.
 
 - Construct a schema-backed client with "Ablo({ schema, apiKey })" in trusted runtimes or the installed-version browser/session pattern from "npx ablo docs integration-guide".
 - For a trusted Node service, use one "createTransactionClient({ schema, apiKey })" owned by the existing application lifecycle. Await "ready()" at startup and "dispose()" only after the service has stopped accepting work and active work has settled. Pass the client as a dependency; do not hide it in module-global state.

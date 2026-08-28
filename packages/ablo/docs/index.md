@@ -1,198 +1,79 @@
-# Ablo Docs
+# Introduction
 
-> Collaboration infrastructure for AI agents: one API for agents, apps, and services to claim, change, and confirm the same rows.
+> Coordination infrastructure for agents, applications, services, and people working on shared state
 
-Two agents reach for the same row. One claims it, does slow work — an LLM call,
-a fetch, a chain of tools — and commits. The second is neither rejected nor
-allowed to clobber: it waits in line, is handed the row as it now stands, and
-proceeds. Contention becomes an ordering problem instead of a retry loop.
+Ablo is a framework-agnostic coordination layer for agents, applications,
+services, and people working on shared state. It provides claims, waiting,
+participant identity, stale-work rejection, confirmed writes, and live updates
+through one typed interface. Whether you are adding agents to an existing
+application or building a new multi-user system, Ablo lets you focus on your
+product instead of rebuilding coordination infrastructure.
 
-```ts
-// Take the row. Anyone else who wants it waits, then reads it fresh.
-await using claim = await ablo.reports.claim({ id: reportId });
+Ablo works with your existing database, API, authorization, and business logic,
+while providing a common coordination model across runtimes and frameworks.
 
-await ablo.reports.update({
-  id: claim.data.id,
-  data: { forecast: await generateForecast(claim.data) },
-});
-```
+## Features
 
-Claims do not lock. A lock is held against a caller who may never come back; a
-claim is a durable lease with a wait-line behind it, so you can always ask who
-holds a row and who is queued for it. The write returns a receipt, and a write
-based on a row that has since changed is turned away rather than applied.
-
-## What people build
+Ablo provides a comprehensive set of coordination capabilities and a shared
+model that can be used across agents, services, applications, and human
+interfaces.
 
 <Columns>
-  <Card title="Run agents in parallel" icon="users" href="/coordination">
-    Many agents over one dataset. Claims put them in a line instead of a race.
+  <Card title="Claims and waiting" icon="handshake" href="/coordination">
+    Let one participant perform contested work while others wait, skip, or fail according to an explicit policy.
   </Card>
 
-  <Card title="Hand work between agents" icon="arrow-left-right" href="/agent-messaging">
-    One agent claims, works, releases. The next picks up with the fresh row and a durable note about why.
+  <Card title="Existing PostgreSQL" icon="database" href="/coordinate-existing-work">
+    Keep the authoritative transaction, locks, constraints, and direct SQL paths your application already owns.
   </Card>
 
-  <Card title="Scope what an agent may write" icon="key-round" href="/api-keys">
-    A revocable key bound to one project's models. Attribution comes from the credential, not the call site.
+  <Card title="Participant identity" icon="fingerprint" href="/identity">
+    Give agents, people, and services distinct scoped credentials instead of treating every worker as the same caller.
   </Card>
 
-  <Card title="Confirm what landed" icon="receipt" href="/guarantees">
-    Every write returns a receipt. Nothing is fire-and-forget, and stale writes are rejected.
+  <Card title="Crash recovery" icon="rotate-ccw" href="/guarantees">
+    Expiring leases and heartbeats let later participants proceed when an owner disappears.
   </Card>
 
-  <Card title="Audit every agent action" icon="scroll-text" href="/audit">
-    Trace any committed change back to the key that made it, and to the person who authorized that key.
+  <Card title="Stale-work rejection" icon="shield-check" href="/concurrency-convention">
+    Carry the rows behind a decision into its write and reject the result when those premises changed.
   </Card>
 
-  <Card title="Keep a person in the loop" icon="hand" href="/react">
-    Add the `humans()` plugin and people get presence and live queries. A person's claim is just another holder the agent waits behind.
+  <Card title="Atomic commits" icon="git-merge" href="/api#atomic-commits">
+    Apply several Ablo writes together, with their captured premises, or apply none of them.
+  </Card>
+
+  <Card title="Confirmed writes" icon="receipt" href="/guarantees">
+    Know when a write reached the authoritative database and why a rejected write did not land.
+  </Card>
+
+  <Card title="Humans and agents" icon="users" href="/react">
+    Coordinate stateless HTTP workers with live human interfaces over the same shared state.
+  </Card>
+
+  <Card title="Audit and visibility" icon="scroll-text" href="/audit">
+    Inspect ownership, contention, and committed changes with the responsible participant attached.
   </Card>
 </Columns>
 
-## Using Ablo
+...and more.
 
-<Steps>
-  <Step title="Declare the models agents share">
-    `npx ablo init` scaffolds `ablo/schema.ts`, the typed client, and the type registration.
-    Declare only the models agents coordinate over — your auth, billing, and everything else
-    stay in your own migrations.
+---
 
-    ```bash
-    npx ablo init
-    npx ablo dev
-    ```
+## Get started
 
-    `dev` gives the current Git branch an isolated Ablo branch, wires its temporary key,
-    pushes the schema, and watches for changes. Until the server has your schema, a write to
-    a new model fails with `server_execute_unknown_model`. See
-    [Branch-first development](./branch-development.md).
-  </Step>
+- [Installation](./installation.md) — install Ablo, declare the shared models,
+  and create a client.
+- [Basic usage](./basic-usage.md) — read, write, and coordinate one operation.
+- [Comparison](./comparison.md) — see how Ablo relates to PostgreSQL locks,
+  Redis reservations, queues, workflow engines, and rolling your own.
+- [Choose the Ablo operation](./implement.md) — route an existing use case to
+  the smallest correct implementation.
 
-  <Step title="Connect the database the rows live in">
-    Ablo writes through a scoped role and confirms by tailing your write-ahead log. It runs no
-    DDL and owns no schema — your migration tool stays in charge of the shape of your database.
+## AI resources
 
-    ```bash
-    npx ablo connect
-    ```
-
-    No database yet? Pass an `apiKey` only and Ablo keeps the rows in its own log, so you can
-    build the whole system today and point it at Postgres when you are ready.
-  </Step>
-
-  <Step title="Build with Ablo">
-    You are writing the agent yourself — a worker, a job handler, a tool inside a model loop.
-    Agents hold no socket; the credential is the identity.
-
-    ```ts
-    const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: 'http' });
-    ```
-
-    Read with `list` / `get`, coordinate with `claim`, write with `create` / `update` /
-    `delete`. See [Agents](./agents.md) for the loop and [API Reference](./api.md) for the shape.
-  </Step>
-
-  <Step title="Or point an MCP host at it">
-    The agent is Claude, Cursor, or another MCP host, and you want it operating your data
-    directly. The coordination server exposes the same claim-and-commit loop as tools.
-
-    ```bash
-    claude mcp add ablo -- npx -y @abloatai/mcp
-    ```
-
-    See [Model Context Protocol](./mcp.md) — and read the surface table below before you pick,
-    because Ablo publishes two MCP servers and only one of them is a data plane.
-  </Step>
-</Steps>
-
-## Surfaces
-
-Every surface reaches the same coordinated state. Pick by who is calling.
-
-| Surface | Use it for |
-|---|---|
-| **SDK**: `@abloatai/ablo`, `transport: 'http'` | The agents themselves. Stateless, request/response, nothing held open. The main path. |
-| **Coordination MCP**: `@abloatai/mcp` | An agent living inside an MCP host that needs claim and commit as tools. A data plane. |
-| **`humans()`**: with `@abloatai/ablo/react` | The interfaces a person watches agent work arrive in: presence, live queries, a local copy. |
-| **CLI**: `ablo` | Scaffolding, schema push, connecting a database. Terminals and CI. |
-| **REST**: `/api/v1` | Runtimes with no SDK. |
-| **Integration-helper MCP**: hosted `/api/mcp` | Teaching a coding assistant the SDK while you build. Docs, lint, and scaffolds only. |
-
-The two MCP servers are not interchangeable. The coordination server changes
-your data; the integration-helper server serves documentation and has no
-per-model data tools at all. An agent that edits rows uses the SDK or the
-coordination server — never the helper.
-
-### Where people fit
-
-The bare client is the coordination layer: commit, read, observe, claim. People
-are something you add to it. `humans()` is the plugin that declares the local,
-watchable copy — the offline store, live queries, presence, and the framework
-bindings — and it needs a duplex connection, so a stateless agent cannot install
-it and is told so at construction rather than left with a subscription that never
-delivers.
-
-There is no `agents()` plugin, and the absence is the point: agents are the
-default caller, not a special one.
-
-## Concepts
-
-- [How Ablo Works](./how-it-works.md) — the mental model in one page: you write through Ablo, it lands in your Postgres, the write-ahead log confirms it. **Read this first.**
-- [Coordination](./coordination.md) — `claim`, `claim.state`, and `claim.queue`: who holds a row, and who is waiting.
-- [Concurrency Convention](./concurrency-convention.md) — the precise rule for guarded and unguarded writes.
-- [Guarantees](./guarantees.md) — what a confirmed write, a stale-write rejection, and a claim each promise.
-- [Idempotency](./idempotency.md) — make a retried write safe; what replays, what re-runs, and for how long.
-- [Schema Contract](./schema-contract.md) — one schema becomes typed clients, agent writes, React reads, and the push.
-- [Agents](./agents.md) — the stateless participant: wake, read, claim, commit, idle.
-- [Agent Messaging](./agent-messaging.md) — durable handoffs between agents, linked to the claim they discuss.
-- [Identity & Sync Groups](./identity.md) — who is connecting, and which slice of state they see.
-- [Change Propagation](./groups.md) — how one row's change reaches the actors that depend on it.
-- [Client Behavior](./client-behavior.md) — options, errors, retries, timeouts, and imports.
-
-## Authority
-
-- [Projects](./projects.md) — one organization, many apps; each with its own schema, planes, and keys.
-- [API Keys](./api-keys.md) — the credential that carries an agent's identity and its scopes.
-- [Sessions](./sessions.md) — short-lived scoped credentials your backend mints.
-- [Customer Organizations](./customer-organizations.md) — serve many isolated customer organizations from one schema and backend.
-- [Audit Log](./audit.md) — trace any confirmed write back to the person behind it.
-- [Operating on Your Database](./operating-on-your-database.md) — which actions run freely, which to verify first, and which belong to a human.
-- [Session Settings](./session-settings.md) — point your row-level-security policies at Ablo's writes, by naming the settings they already read.
-
-## Build
-
-- [Agent Integration Decision Guide](./agent-integration-decision-guide.md) — choose identifier or row claims, captured reads, atomic boundaries, persistence ownership, transport, and the smallest proof before opening an example.
-- [TypeScript Library](./libraries/typescript.md) — construct the server client,
-  keep schema ownership beneath one boundary, and select an integration approach.
-- [GraphQL.js over an Existing Backend](./approaches/graphql/graphql-js.md) —
-  keep resolvers thin and call one named Ablo-backed domain operation.
-- [Quickstart](./quickstart.md) — make your first coordinated write.
-- [Integration Guide](./integration-guide.md) — the canonical end-to-end integration.
-- [Integrations](./integrations.md) — long-running records, ingestion, and other application-edge runtimes.
-- [CLI & Migrations](./cli.md) — `init` / `connect` / `push` / `migrate` / `generate`.
-- [Connect Your Database](./data-sources.md) — where rows land when your own database is canonical.
-- [Deployment](./deployment.md) — the database, the keys, and the schema push that take an integration to production.
-- [React](./react.md) — provider, hooks, and reactive reads.
-- [Webhooks](./webhooks.md) — react to confirmed change from outside the SDK.
-- [Debugging & Logs](./debugging.md) — watch claims, queueing, and grants while you build.
-
-## Reference
-
-- [API Reference](./api.md) — model-by-model method shape.
-- [Errors](./errors.md) — the code registry, its categories, and what to do about each.
-- [Upgrade Guide](./migration.md) — upgrade a pinned pre-1.0 SDK safely.
-- [Changelog](../CHANGELOG.md) — what shipped recently.
-
-## Examples
-
-- [AI SDK Tool](./examples/ai-sdk-tool.md) — put Ablo inside a model's tool call.
-- [Agent + Human](./examples/agent-human.md) — yield when a person is holding the same report.
-- [Server Agent](./examples/server-agent.md) — a schema-backed worker.
-- [Existing Python Backend](./examples/existing-python-backend.md) — add coordination without replacing your API server.
-- [Next.js](./examples/nextjs.md) — app-router setup with React bindings.
-
-## More
-
-- [README](../README.md) — product overview and first example.
-- [AGENTS.md](../AGENTS.md) — installation guidance for coding assistants.
+Ablo is designed to be implemented by agents as well as people. Use
+[llms.txt](https://docs.abloatai.com/llms.txt) for the public documentation
+index, or connect an assistant to the [documentation MCP server](./mcp.md). The
+coordination MCP package also ships its agent-facing skill as
+`@abloatai/mcp/skill.md`.

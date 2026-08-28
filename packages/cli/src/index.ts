@@ -52,6 +52,8 @@ import {
 import { parseInitArgs } from './init/options';
 import { runInit } from './init/run';
 import { runSetup } from './setup/run';
+import { plan } from './plan/index';
+import { rollback } from './rollback';
 
 const LOGO = `
   ${brand('ablo')} ${pc.dim('sync engine')}
@@ -65,6 +67,8 @@ const LOGO = `
  */
 const HANDLERS: Readonly<Record<CommandName, (argv: readonly string[]) => Promise<void> | void>> = {
   setup: (argv) => runSetup(argv),
+  plan: async (argv) => { await plan(argv); },
+  rollback: (argv) => rollback(argv),
   init: async (argv) => { await runInit(argv); },
   login: (argv) => login([...argv]),
   logout: () => logout(),

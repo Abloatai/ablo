@@ -1,0 +1,55 @@
+---
+title: "Instrumentation"
+description: "Connect Ablo coordination outcomes and durable activity to the observability tools you already use."
+sidebar:
+  icon: activity
+---
+
+Ablo exposes two complementary signals: process-local coordination events for
+live telemetry, and credential-scoped logs for durable inspection.
+
+## Capture coordination events
+
+Pass an `observability` sink to the package-root client:
+
+```ts
+const ablo = Ablo({
+  schema,
+  observability: {
+    captureClaim: (event) => telemetry.capture('ablo.claim', event),
+    captureConflict: (event) => telemetry.capture('ablo.conflict', event),
+  },
+});
+```
+
+`captureClaim` reports acquisition, queueing, grant, release, loss, and expiry.
+`captureConflict` reports stale dependencies and writes rejected by another
+participant's claim. The sink should return quickly and must not be the
+correctness path for the operation it observes.
+
+## Inspect durable activity
+
+The stateless client exposes `ablo.logs` for authoritative, credential-scoped
+event pages. Use it for audit views, support tooling, and reconciliation rather
+than treating process logs as durable truth.
+
+Access is bounded by the same credential that created the client. Do not copy
+customer-wide logs into a less restricted telemetry destination.
+
+## What to measure
+
+Useful coordination measures include:
+
+- claim acquisition, wait, and hold duration;
+- queue depth and contention outcome;
+- expired or lost claims;
+- stale-context and foreign-claim rejections;
+- retry count and request latency;
+- durable-write backlog and replay outcome.
+
+Alert on sustained changes in rates, not on every expected contention event.
+Queueing and stale-write rejection are often the system preventing duplicate or
+obsolete work, not failures by themselves.
+
+See [Debugging & Logs](/debugging) for local diagnosis and event formatting,
+and [Audit Log](/audit) for stored attribution and verification.

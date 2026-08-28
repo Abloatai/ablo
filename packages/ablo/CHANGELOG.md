@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.59.0
+
+### Schema changes now have one ordered deployment plan
+
+`ablo plan` compares the source schema, the active Ablo schema artifact, and the
+connected PostgreSQL shape without changing any of them. It produces one
+fingerprinted expand, dual-write, backfill, verify, switch, and contract
+sequence, with explicit owners, blockers, and a rollback target:
+
+```sh
+npx ablo plan
+npx ablo plan --json
+```
+
+`ablo check` is now the database-compatibility view of that same plan. `ablo
+push` and `ablo migrate` consume it instead of maintaining separate migration
+judgments, and `ablo rollback` plans or applies a reviewed reactivation of an
+earlier schema artifact. The shared deployment contracts are available through
+`@abloatai/ablo/schema` and `@abloatai/transaction/schema`.
+
+Planning must observe all three states. `ablo plan`, `ablo check`, and `ablo
+migrate` therefore require `ABLO_API_KEY` plus
+`DATABASE_ADMIN_URL`/`DATABASE_URL`; a migration dry run is no longer a
+source-only operation. `ablo push` now refuses a blocked plan and can accept an
+explicit lifecycle manifest with `--manifest <path>`.
+
+Runtime schema-drift warnings now name the affected fields and distinguish
+client-only fields, active-only fields, and changes to type or optionality.
+
+### Declared timestamps no longer recurse during local edits
+
+Schemas can declare `createdAt` and `updatedAt` for typed reads and ordering
+without turning Ablo's automatic timestamp bookkeeping into another model
+edit. Updating an observable field now advances `updatedAt` once, keeps the
+timestamp observable, and excludes system-managed timestamps from the
+user-authored change payload.
+
+### The public client configuration boundary is explicit
+
+The supported `Ablo({ ... })` options are now machine-checked against the
+published reference. The internal `onCommitReceipt` transport callback is no
+longer accepted by the public factory type.
+
+### Connection capacity is selectable from the public pricing model
+
+The pricing API can now select the first tier that accommodates a requested
+connection count. The published Pro allowance increases from 1,000 to 5,000
+concurrent connections.
+
+### CLI telemetry can reach authenticated ingestion
+
+When an Ablo runtime key is available, the CLI uses it only in memory to
+authenticate product-analytics delivery. The key is not written to the local
+telemetry state, and existing telemetry opt-outs continue to apply.
+
+### Version-matched integration guidance is easier to enter
+
+The documentation bundled with `@abloatai/ablo` now starts from installation,
+the operation being coordinated, and whether an existing write boundary must
+be preserved. New focused pages cover basic usage, implementation choices,
+existing-operation coordination, every client option, security,
+instrumentation, comparisons, common questions, and GraphQL.js. `npx ablo
+docs` continues to read this package-local documentation, so the guidance
+matches the installed version.
+
+A new stale-context agent-turn example shows the complete long-running policy:
+abort cancellable work when an exact read moves, rebuild context for a bounded
+retry, retain the authoritative write guard, and reconcile rather than blindly
+replay an irreversible external side effect.
+
 ## 0.58.0
 
 ### Reads now distinguish observation from decision input

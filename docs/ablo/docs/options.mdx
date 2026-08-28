@@ -1,0 +1,175 @@
+---
+title: "Options"
+description: "Every option accepted by the default `Ablo({ ... })` client."
+sidebar:
+  icon: sliders-horizontal
+---
+
+Import `Ablo` from `@abloatai/ablo`. Only `schema` is required. A server can
+usually rely on `ABLO_API_KEY` and keep the constructor small:
+
+```ts
+import Ablo from '@abloatai/ablo';
+import { schema } from './ablo/schema';
+
+export const ablo = Ablo({ schema });
+```
+
+These options configure the stateless HTTP client exported by the package root.
+For a live human interface, use the [React guide](/react).
+
+## schema
+
+The schema created with `defineSchema()`. It gives each declared model a typed
+`ablo.<model>` client. This is the only required option.
+
+## apiKey
+
+A server API key, or an async function that resolves a credential at request
+time. When omitted, Ablo reads `ABLO_API_KEY`.
+
+```ts
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+```
+
+Use a resolver for credentials that rotate. Return `null` when the login has
+ended; throw when credential resolution failed temporarily. Do not pass both
+`apiKey` and `authEndpoint`.
+
+## authEndpoint
+
+A same-origin URL that mints a short-lived credential, or an async credential
+resolver. The client sends a `POST` with cookies included and renews the token
+when needed.
+
+```ts
+const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+```
+
+Use this instead of placing a private API key in browser code.
+
+## authToken
+
+A bearer token the caller already holds. This is mainly for self-hosted or
+custom authentication layers. Hosted applications normally use `apiKey` or
+`authEndpoint`.
+
+## baseURL
+
+Overrides the Ablo API URL. Leave it unset for hosted Ablo. Use it for a private
+deployment, local development proxy, or test server.
+
+```ts
+const ablo = Ablo({ schema, baseURL: 'https://ablo.internal.example' });
+```
+
+Because credentials are sent to this URL, Ablo rejects URLs containing embedded
+credentials, query parameters, or fragments. Plain HTTP is accepted only for
+local hosts.
+
+## dangerouslyAllowBrowser
+
+Allows a credential-bearing client to run in a browser. Defaults to `false`.
+
+Private API keys must not ship to browsers. Prefer `authEndpoint`; enable this
+option only when the browser receives a narrowly scoped session credential or
+all traffic passes through a controlled server proxy.
+
+## fetch
+
+A custom `fetch` implementation for tests, proxies, or runtimes without the
+standard global implementation.
+
+## authTimeoutMs
+
+The deadline in milliseconds for a request to `authEndpoint`. Defaults to
+`10000`. This is separate from `timeoutMs`, which covers ordinary Ablo API
+requests.
+
+## allowCrossOriginAuthEndpoint
+
+Allows `authEndpoint` to use a different origin. Defaults to `false`.
+
+Keep the default unless the credential-minting service intentionally lives on a
+different trusted origin.
+
+## bootstrapBaseUrl
+
+Overrides the URL used for credential exchange and bootstrap. Most applications
+should leave this unset and use `baseURL` for a private or test deployment.
+
+## defaultHeaders
+
+Headers included with every Ablo HTTP request. A `null` value removes a default
+header.
+
+```ts
+const ablo = Ablo({
+  schema,
+  defaultHeaders: { 'x-deployment': 'worker-eu' },
+});
+```
+
+Do not use this option to duplicate the credential header; authentication is
+owned by `apiKey`, `authEndpoint`, or `authToken`.
+
+## defaultQuery
+
+Query parameters included with every Ablo HTTP request. This is primarily for
+proxies and controlled test deployments.
+
+## observability
+
+A sink for claim lifecycle and rejected-write events. It implements
+`captureClaim(event)` and `captureConflict(event)`. Use it to connect Ablo's
+coordination outcomes to the application's existing telemetry.
+
+```ts
+const ablo = Ablo({
+  schema,
+  observability: {
+    captureClaim: (event) => telemetry.capture('ablo.claim', event),
+    captureConflict: (event) => telemetry.capture('ablo.conflict', event),
+  },
+});
+```
+
+## durableWrites
+
+Persists an outbound write before dispatch so a worker can recover an
+unacknowledged `create`, `update`, or `delete` after a crash.
+
+```ts
+const ablo = Ablo({
+  schema,
+  durableWrites: { store, namespace: 'invoice-worker' },
+});
+```
+
+The store must implement `seal()`, `list()`, and `remove()`. `namespace` separates
+deployments or workflow lanes sharing the same authenticated actor. Most clients
+do not need durable writes.
+
+## commitOutbox
+
+Deprecated compatibility name for the durable write store. Use
+`durableWrites: { store }`. Passing both forms is an error.
+
+## commitOutboxScope
+
+Deprecated compatibility scope for `commitOutbox`. Authentication now resolves
+actor identity. Use `durableWrites.namespace` when shared storage needs separate
+workflow or deployment lanes.
+
+## transport
+
+The package-root client uses request/response HTTP. `transport: 'http'` is
+accepted but optional.
+
+Live state, presence, and local reads belong to the reactive client described in
+the [React guide](/react), rather than another value on this option.
+
+## timeoutMs
+
+The deadline in milliseconds for an Ablo HTTP request. Defaults to `30000`. Pass
+`0` only when the surrounding runtime already enforces a deadline.

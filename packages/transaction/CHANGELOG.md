@@ -1,5 +1,13 @@
 # @abloatai/transaction
 
+## 0.59.0
+
+### Minor Changes
+
+- Expose plan selection by requested connection capacity and raise the published Pro concurrent-connection capacity to 5,000.
+- Define the supported public `Ablo(...)` configuration surface explicitly and stop accepting the internal `onCommitReceipt` transport callback through the public factory type.
+- Add one fingerprinted deployment plan that reconciles the source schema, active Ablo schema, and connected PostgreSQL shape. The CLI exposes it through `ablo plan`, projects `ablo check` from the same evidence, adds reviewed rollback, and makes push and migrate consume the shared plan. Push now refuses blocked plans and accepts explicit lifecycle manifests. The underlying deployment contracts are exported from the public schema surface.
+
 ## 0.58.0
 
 ### Minor Changes

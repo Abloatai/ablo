@@ -3,12 +3,12 @@
 </p>
 
 <p align="center">
-  <strong>Collaboration infrastructure for AI agents.</strong>
+  <strong>Coordination infrastructure for agents, applications, services, and people working on shared state.</strong>
 </p>
 
 <p align="center">
   <a href="https://docs.abloatai.com">Docs</a> &nbsp;|&nbsp;
-  <a href="https://docs.abloatai.com/quickstart">Quickstart</a> &nbsp;|&nbsp;
+  <a href="https://docs.abloatai.com/installation">Installation</a> &nbsp;|&nbsp;
   <a href="https://docs.abloatai.com/api">API</a> &nbsp;|&nbsp;
   <a href="https://github.com/Abloatai/ablo">GitHub</a>
 </p>
@@ -22,8 +22,8 @@
 
 ---
 
-Ablo is collaboration infrastructure for AI agents: one API for agents, apps,
-and services to claim, change, and confirm the same rows.
+Ablo is coordination infrastructure for agents, applications, services, and
+people working on shared state.
 
 Every write goes through it, so authority, idempotency, conflicts, ordering,
 and confirmation are enforced in one place. Your Postgres remains the source of

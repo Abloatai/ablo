@@ -293,7 +293,7 @@ export class BootstrapFetcher {
     // network hiccup). Fire-and-forget: never blocks or fails the bootstrap.
     const clientModels = this.runtime.config.expectedModelHashes;
     if (clientModels && Object.keys(clientModels).length > 0) {
-      void this.resolveSemanticDrift(clientModels, clientHash, serverHash, where);
+      void this.resolveSemanticDrift(clientModels, clientHash, serverHash, where, this.runtime.config.expectedModelShapes);
       return;
     }
     this.warnWholeHashDrift(clientHash, serverHash, where);
@@ -306,6 +306,7 @@ export class BootstrapFetcher {
     clientHash: string,
     serverHash: string,
     where: string,
+    clientShapes: NonNullable<typeof this.runtime.config.expectedModelShapes> | undefined,
   ): Promise<void> {
     try {
       const res = await fetch(`${this.options.baseUrl}/schema`, {
@@ -316,13 +317,13 @@ export class BootstrapFetcher {
       const body = (await res.json()) as { models?: unknown };
       const models = Array.isArray(body.models)
         ? body.models.flatMap((m): ServerSchemaModel[] => {
-            const entry = m as { key?: unknown; hash?: unknown };
+            const entry = m as { key?: unknown; hash?: unknown; fields?: unknown };
             return typeof entry.key === 'string'
-              ? [{ key: entry.key, ...(typeof entry.hash === 'string' ? { hash: entry.hash } : {}) }]
+              ? [{ key: entry.key, ...(typeof entry.hash === 'string' ? { hash: entry.hash } : {}), ...(entry.fields && typeof entry.fields === 'object' ? { fields: entry.fields as ServerSchemaModel['fields'] } : {}) }]
               : [];
           })
         : [];
-      const finding = classifySchemaDrift(clientModels, models);
+      const finding = classifySchemaDrift(clientModels, models, clientShapes);
       if (finding.kind === 'aligned') return; // additive server lead — not this client's concern
       if (finding.kind !== 'unknown') {
         this.runtime.logger.warn(describeSchemaDrift(finding, where), {

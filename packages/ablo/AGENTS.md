@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Ablo lets AI agents and humans safely edit the same typed data without clobbering each other. When two of them touch the same row, a "claim" makes one wait for the other instead of overwriting it. This file shows a coding assistant the one safe pattern: read a row, claim it, then write.
+Ablo lets AI agents and humans safely edit the same typed data without clobbering each other. When two of them touch the same row, a "claim" makes one wait for the other instead of overwriting it. For an existing application, first preserve its named operation and persistence boundary; use the schema-backed row pattern below only when that route owns the write.
 
 Claims don't lock. If another writer holds the row, `claim` waits for them and re-reads the fresh row before handing it to you — so two writers serialize instead of clobbering.
 
@@ -8,7 +8,7 @@ Claims don't lock. If another writer holds the row, `claim` waits for them and r
 
 Before choosing among identifier claims, row claims, captured reads, atomic
 commits, existing database writes, and Ablo-routed writes, use the
-[Agent Integration Decision Guide](./docs/agent-integration-decision-guide.md).
+[coordinate existing work guide](./docs/coordinate-existing-work.md).
 It routes existing applications to the smallest relevant example and names the
 test layer that proves each guarantee.
 
@@ -44,7 +44,7 @@ Every model verb takes ONE options object. The common loop:
 1. **Get or read** the row — `get({ id })` observes; `read({ id })` declares that a later mutation depends on this exact version. `list({ where })` is observational. In React render, use `local.get(id)`.
 2. **See who's active** (optional) — `ablo.<model>.claim.state({ id })` (synchronous; never blocks).
 3. **Claim** the row before changing it — `await using claim = await ablo.<model>.claim({ id, description?, ttl? })`. If someone else holds it, this waits for them, then gives you the fresh row on `claim.data`. The claim auto-releases when it goes out of scope (`await using`).
-4. **Write** — pass `reads: [row]` when the decision used a row returned by `read`, or write through the held claim. If the declared read moved, the mutation does not land.
+4. **Write** — pass `reads: [row]` when the decision used a row returned by `read`, or pass `claim` when writing through a held claim. If the declared read moved or the claim was lost, the mutation does not land.
 
 Keep coding assistants on this schema-backed path.
 
@@ -80,6 +80,7 @@ const claimed = claim.data;
 await ablo.weatherReports.update({
   id: claimed.id,
   data: { status: 'ready', forecast: await getForecast(claimed.location) },
+  claim,
 });
 ```
 

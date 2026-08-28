@@ -23,9 +23,9 @@
 import {
   createAbloHttpClient,
   type AbloHttpClient,
-  type AbloHttpClientOptions,
 } from '../transport/http/client.js';
 import type { SchemaRecord } from '../schema/schema.js';
+import type { PublicAbloOptions } from './surface.js';
 import type * as _Streams from '../types/streams.js';
 import type * as _SchemaTypes from '../schema/schema.js';
 import type * as _Global from '../types/global.js';
@@ -40,7 +40,7 @@ import type * as _Http from './resources/httpResources.js';
  * socket carve lands (ADR 0016, follow-up 3a).
  */
 export function Ablo<const S extends SchemaRecord>(
-  options: AbloHttpClientOptions<S> & { transport?: 'http' },
+  options: PublicAbloOptions<S>,
 ): AbloHttpClient<S> {
   return createAbloHttpClient(options);
 }

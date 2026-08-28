@@ -281,7 +281,18 @@ export abstract class Model {
    * Track property changes
    */
   propertyChanged(propertyName: string, oldValue: unknown, newValue: unknown): void {
-    if (oldValue === newValue) return;
+    // `createdAt` and `updatedAt` are server-managed bookkeeping, not
+    // user-authored model changes. In particular, every real field change
+    // advances `updatedAt` below. When a schema explicitly declares that
+    // timestamp, MobX observes the assignment and calls this method again;
+    // treating that callback as another edit recursively stamps `updatedAt`
+    // until the stack overflows. Ignore both timestamps at this boundary so
+    // they remain observable without entering the mutation payload.
+    if (
+      oldValue === newValue ||
+      propertyName === 'createdAt' ||
+      propertyName === 'updatedAt'
+    ) return;
 
     runInAction(() => {
       // Preserve the earliest captured `old` for this field until the entry

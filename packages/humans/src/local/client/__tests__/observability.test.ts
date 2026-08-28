@@ -79,6 +79,14 @@ function registerType(
       optional: true,
     });
   }
+  // Product schemas commonly declare the server timestamps so they can use
+  // them in typed reads and order clauses. The base Model already owns the
+  // actual property; registering it here reproduces that production shape.
+  registry.registerProperty(modelName, 'updatedAt', {
+    type: PropertyType.property,
+    indexed: false,
+    optional: true,
+  });
 }
 
 describe('Dynamic model observability (lazyObservable opt-in)', () => {
@@ -96,6 +104,25 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
 
     expect(reads).toEqual(['Initial', 'Updated']);
     dispose();
+  });
+
+  it('advances a declared updatedAt once without tracking the timestamp as a change', () => {
+    const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
+    setActiveRegistry(registry);
+    const Cls = buildObservableModelClass('TimestampedEntry', true);
+    registerType(registry, 'TimestampedEntry', Cls);
+
+    const initialUpdatedAt = new Date('2026-08-27T10:00:00.000Z');
+    const instance = new Cls({
+      id: 'entry-timestamped',
+      title: 'Initial',
+      updatedAt: initialUpdatedAt,
+    });
+
+    instance.title = 'Updated';
+
+    expect(instance.updatedAt?.getTime()).toBeGreaterThan(initialUpdatedAt.getTime());
+    expect(instance.getChanges()).toEqual({ title: 'Updated' });
   });
 
   it('fires a reaction when a nested property is mutated (deep observability)', () => {

@@ -3,6 +3,6 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "scripts/eval-setup-agent.ts", "scripts/eval-setup-qm-agent.ts", "scripts/benchmark-setup-repositories.ts", "scripts/lib/**/*.ts"],
+  "include": ["src/**/*.ts", "scripts/eval-setup-agent.ts", "scripts/eval-docs-*.ts", "scripts/eval-setup-qm-agent.ts", "scripts/benchmark-setup-repositories.ts", "scripts/lib/**/*.ts"],
   "exclude": ["node_modules", "dist", "src/__tests__"]
 }

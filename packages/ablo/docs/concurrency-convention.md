@@ -2,6 +2,12 @@
 
 > A write either declares what it read or deliberately does not.
 
+Use a captured read when a write must be rejected because an earlier premise
+changed.
+
+Read the authoritative premise, carry
+that exact evidence into the write, and handle the documented failure code.
+
 Ablo does not put a configurable stale mode between your code and a
 commit. The public choice is visible at the call site:
 
@@ -38,6 +44,22 @@ The server validates every declared premise inside the write transaction. If
 one is stale, the entire mutation rejects before any write applies. Re-read,
 recompute, and submit a new mutation when that is the behavior you want.
 
+```ts
+import { AbloStaleContextError } from '@abloatai/ablo';
+
+try {
+  await submitGuardedWrite();
+} catch (error) {
+  if (error instanceof AbloStaleContextError && error.code === 'stale_context') {
+    return rebuildFromFreshReads();
+  }
+  throw error;
+}
+```
+
+`error.type` is the class-name discriminator (`AbloStaleContextError`);
+`error.code` is the wire condition (`stale_context`).
+
 ## Unguarded writes
 
 Use `get` or `list` when you only need to observe, and omit `reads` when the
@@ -70,6 +92,11 @@ side effects inside it.
 A claim protects a target across a slower read → decide → write interval.
 Foreign writers are rejected while the claim is active; contenders that ask
 to queue wait in order. Ordinary reads stay open.
+
+When the final effect remains in an existing application path—such as its API,
+database transaction, filesystem, or Git merge—start with
+[Coordinate existing work](./coordinate-existing-work.md). Use the
+row-backed claim below when the target and final write belong to an Ablo model.
 
 Claims and stale reads answer different questions:
 

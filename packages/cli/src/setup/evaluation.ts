@@ -139,7 +139,7 @@ function modelCallEvidence(
     }
     for (const model of record.selectedModels) {
       const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      if (new RegExp(`\\bablo\\.${escaped}\\.(?:create|update|delete)\\s*\\(`).test(source)) {
+      if (new RegExp(`\\bablo\\.${escaped}\\.(?:claim|create|update|delete)\\s*\\(`).test(source)) {
         found.get(model)!.push(file.path);
       }
     }
@@ -181,7 +181,7 @@ export function evaluateSetupDiff(input: {
     checks: [
       { id: 'application_scope', status: outside.length === 0 ? 'pass' : 'fail', detail: outside.length === 0 ? 'All observed edits stayed inside the selected application root.' : `${outside.length} edit(s) occurred outside the selected application root.`, evidencePaths: outside.map(({ path }) => path) },
       { id: 'environment_values', status: envChanges.length === 0 ? 'pass' : 'fail', detail: envChanges.length === 0 ? 'No protected environment file changed.' : `${envChanges.length} protected environment file(s) changed during agent work.`, evidencePaths: envChanges.map(({ path }) => path) },
-      { id: 'selected_model_calls', status: missingModels.length === 0 ? 'pass' : absenceIsReliable ? 'fail' : 'review', detail: missingModels.length === 0 ? 'Every selected model has at least one observable Ablo mutation call.' : `No Ablo mutation call was observed for: ${missingModels.join(', ')}.`, evidencePaths },
+      { id: 'selected_model_calls', status: missingModels.length === 0 ? 'pass' : absenceIsReliable ? 'fail' : 'review', detail: missingModels.length === 0 ? 'Every selected model has at least one observable Ablo coordination or mutation call.' : `No Ablo coordination or mutation call was observed for: ${missingModels.join(', ')}.`, evidencePaths },
       { id: 'deletions', status: deleted.length === 0 ? 'pass' : 'review', detail: deleted.length === 0 ? 'No pre-existing file was deleted.' : `${deleted.length} pre-existing file deletion(s) require review.`, evidencePaths: deleted.map(({ path }) => path) },
       { id: 'snapshot_coverage', status: truncated ? 'review' : 'pass', detail: truncated ? 'At least one bounded snapshot was truncated; absence claims are not reliable.' : 'Both bounded snapshots covered every eligible file.', evidencePaths: [] },
       { id: 'snapshot_integrity', status: changedSinceSnapshot.length === 0 ? 'pass' : 'review', detail: changedSinceSnapshot.length === 0 ? 'Every inspected source file still matched the after snapshot.' : `${changedSinceSnapshot.length} source file(s) changed or disappeared after the after snapshot.`, evidencePaths: changedSinceSnapshot },

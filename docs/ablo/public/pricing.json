@@ -1,6 +1,6 @@
 {
   "$generated": "packages/ablo/scripts/generate-pricing-docs.mts",
-  "version": "2026-08-24",
+  "version": "2026-08-28",
   "currency": "USD",
   "billing": "monthly floor or metered usage, whichever is greater",
   "auditLogStorage": {
@@ -57,7 +57,7 @@
       "hardCapOps": null,
       "hardCapOpsPerDay": null,
       "monthlyOpsAllowance": 50000000,
-      "maxConcurrentConnections": 1000,
+      "maxConcurrentConnections": 5000,
       "storageGib": 50,
       "features": [
         "auditExport"

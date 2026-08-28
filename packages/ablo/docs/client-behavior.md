@@ -28,20 +28,10 @@ const ablo = Ablo({
 });
 ```
 
-Common options:
-
-| Option | Purpose |
-|---|---|
-| `schema` | Required for typed model clients. |
-| `apiKey` | Bearer credential for trusted server runtimes. Defaults to `ABLO_API_KEY` when available. |
-| `baseURL` | Override the hosted sync endpoint for staging or private deployments. An HTTPS origin, optionally with a path prefix; plain HTTP is accepted for localhost. Your key travels here, so a URL carrying its own credentials, a query, or a fragment is refused at construction. |
-| `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
-| `durableWrites` | Optional crash recovery for unacknowledged agent/worker writes. Independent of the default memory cache; accepts `{ store, namespace? }`. |
-| `transport` | `'websocket'` (default) is the live, stateful client: a persistent socket, a local synced pool, and model `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but ordinary calls are HTTP round trips with no socket. Stateful-only model methods (`local`, model `onChange`, and `join`) are compile errors. A listener added through `context().onChange` holds one HTTP response open only until its context changes or its last listener stops. |
-| `fetch` | Custom fetch implementation for tests or non-standard runtimes. |
-| `defaultHeaders` | Extra headers attached to every HTTP request. |
-| `defaultQuery` | Extra query parameters attached to every HTTP request. |
-| `dangerouslyAllowBrowser` | Required before sending an API key from browser code. Prefer a server route instead. |
+The package-root export is the stateless HTTP client for agents, workers, route
+handlers, and other server operations. See [Options](./options.md) for its exact
+constructor reference. Live state and local reads are added through the
+[React client](./react.md).
 
 Your database connects out of band — through logical replication (`npx ablo
 connect`), or the signed [Data Source](./data-sources.md) endpoint as the
@@ -169,7 +159,9 @@ stream, so they never poll.
 
 ## Errors
 
-All SDK errors extend `AbloError` and carry a stable `type`.
+All SDK errors extend `AbloError`. `type` is the class-name discriminator, such
+as `AbloStaleContextError`; `code` is the wire condition, such as
+`stale_context`. Use `instanceof` in-process and `type` after serialization.
 
 | Error | Typical cause |
 |---|---|

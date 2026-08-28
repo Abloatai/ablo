@@ -488,7 +488,9 @@ describe('read-only setup discovery', () => {
     }
     const skill = bundle.skill.files.find(({ path }) => path === 'SKILL.md')?.content ?? '';
     expect(skill).toContain('Independently explore');
-    expect(skill).toContain('npx ablo docs agent-integration-decision-guide');
+    expect(skill).toContain('npx ablo docs coordinate-existing-work');
+    expect(skill).toContain('do not read the full documentation set');
+    expect(skill).toContain('preserve its Postgres write');
     expect(skill).toContain('Do not run login, branch, connect, push, dev');
     expect(skill).toContain('createTransactionClient(...)');
     expect(skill).toContain('Preserve memory-backed test modes');
@@ -602,6 +604,13 @@ describe('read-only setup discovery', () => {
 
     expect(setupEvalResultSchema.parse(result)).toEqual(result);
     expect(result.outcome).toBe('passed');
+    expect(result.inputs).toEqual(expect.objectContaining({
+      recordId: record.recordId,
+      skillId: 'integrate-ablo',
+      files: expect.arrayContaining([
+        expect.objectContaining({ path: 'SKILL.md', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      ]),
+    }));
     expect(result.diff.changes).toEqual([{ path: 'app/actions.ts', kind: 'modified' }]);
     expect(JSON.stringify(result)).not.toContain('prisma.records.update');
     expect(JSON.stringify(result)).not.toContain('ablo.records.update');

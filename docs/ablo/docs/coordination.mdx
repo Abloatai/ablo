@@ -5,6 +5,20 @@ sidebar:
   icon: handshake
 ---
 
+This page owns row coordination: acquire ownership, proceed from the granted
+state, and release on every exit path.
+
+## Choose the owner first
+
+| Where the result lands | Start here |
+|---|---|
+| Existing application path: API, GraphQL operation, Postgres transaction, filesystem write, or Git branch merge | [Coordinate existing work](/coordinate-existing-work) |
+| Ablo model row, written through the Ablo client | Continue on this page |
+
+If Ablo only decides who may start, use the first row and stop here. The claim
+examples below own Ablo-row writes; they are not the starter for wrapping an
+existing operation.
+
 Ablo gives you several concurrency tools because not every write has the same
 meaning. Choose the narrowest one that matches the operation.
 
@@ -128,18 +142,65 @@ const forecast = await generateForecast(claim.data.location);
 await ablo.reports.update({
   id: claim.data.id,
   data: { forecast, status: 'ready' },
+  claim,
 });
 ```
 
 If another participant already holds the target, `claim` waits its turn and
-then resolves with a fresh row in `claim.data`. Ordinary reads remain open. By
-default, a write from a participant that does not hold the active claim is
-rejected.
+then resolves with a fresh row in `claim.data`. Ordinary reads remain open. Pass
+the handle as `claim` on the write so Ablo can verify that you still own the row
+and that it has not changed since the claim was granted.
 
 Bind claims with `await using` whenever possible. The claim then releases when
 the scope exits, including when the external call or write throws. For runtimes
 without explicit resource management, use `try/finally` and
 `await claim.release()`.
+
+### Handle an expired claim
+
+When heartbeat is unset, the lease ends at its TTL. A delayed write that passes
+the expired handle rejects with `AbloClaimedError` and code `claim_lost`. Do not
+apply the prepared result elsewhere; clean up best-effort, then restart from a
+new claim and its fresh `claim.data`.
+
+```ts
+import { AbloClaimedError } from '@abloatai/ablo';
+
+const claim = await ablo.tasks.claim({ id: taskId, ttl: '2s' });
+try {
+  await new Promise((resolve) => setTimeout(resolve, 2300));
+  await ablo.tasks.update({
+    id: claim.data.id,
+    data: { status: 'done' },
+    claim,
+  });
+} catch (error) {
+  if (error instanceof AbloClaimedError && error.code === 'claim_lost') {
+    console.log(error.code);
+  } else {
+    throw error;
+  }
+} finally {
+  try { await claim.release(); } catch { /* already expired */ }
+}
+```
+
+### Keep a claim alive
+
+Set `ttl` to how quickly another worker should recover if this one stops. If the
+work can take longer, set `heartbeat: true` so Ablo renews the claim:
+
+```ts
+const claim = await ablo.records.claim({
+  id: recordId,
+  ttl: '30s',
+  heartbeat: true,
+});
+```
+
+Leave `heartbeat` out when the claim should expire after the TTL; do not pass
+`false`. If a write returns `claim_lost`, discard that result, claim the row
+again, and restart from the new `claim.data`.
 
 ### One identity per participant
 
@@ -244,100 +305,15 @@ The main methods are:
 | Method | Purpose |
 |---|---|
 | `claim({ id, ...options })` | Read and claim an existing model row; the handle includes fresh row data. |
-| `claim(id, options)` | Claim an identifier in a registered model namespace without reading a row. |
 | `claim.state({ id })` | Read the current holder without blocking. |
 | `claim.queue({ id })` | Read the current wait order. |
 | `claim.release({ id })` | Release early when you do not hold a handle. |
 | `join({ scope })` | Observe presence for a broader scope. |
 
-Choose the overload deliberately:
-
-| Form | Evidence requirement | Typical use |
-|---|---|---|
-| `model.claim({ id })` | The row exists and the caller may read it. | Coordinate work on a synchronized row while using `handle.data`. |
-| `model.claim(id, options)` | The model namespace is registered; no row is read. | Select one participant before calling an existing authoritative service. |
-
-The identifier-only form is row-free, not schema-free. It does not authorize a
-worker or test fixture to push an unrelated model into an inherited production
-schema. Register the namespace through the application's normal schema process,
-or select an already registered namespace whose ownership matches the operation.
-
-## Coordinate an existing database operation
-
-Use this pattern when an application already has a service that protects a
-transition with a Postgres row lock or advisory lock, but slow preparation such
-as OCR, a model call, or another tool currently happens while that database
-lock is held.
-
-Keep the ownership boundary explicit:
-
-| Owner | Responsibility |
-|---|---|
-| Ablo claim | Select one participating worker before expensive work begins. |
-| Application service | Authoritative re-read, transition policy, database lock, idempotency, and commit. |
-| Postgres | Canonical row, constraints, and final integrity boundary. |
-
-The operation runs in this order:
-
-```text
-claim identifier
-  -> prepare expensive result once
-    -> application service re-reads and commits under its database lock
-      -> release claim in finally
-```
-
-Model the service seam as two operations rather than moving database policy
-into a resolver, worker, or agent tool:
-
-```ts
-interface ExistingOperationService<Input, Result, Row> {
-  run(
-    input: Input,
-    prepare: () => Promise<Result>,
-  ): Promise<Row>;
-
-  commitPrepared(
-    input: Input,
-    prepared: Result,
-  ): Promise<Row>;
-}
-```
-
-The existing rollout path calls `run` and preserves current behavior. The
-coordinated path wins the claim, prepares once, then calls `commitPrepared`.
-Both methods stay under the same application-service owner and enforce the same
-authorization and transition rules.
-
-When the transition permits it, implement `commitPrepared` as one SQL statement
-that acquires a transaction-level advisory lock, re-reads the row, validates
-its current state, and updates it. The statement's implicit transaction
-releases the advisory lock automatically. This can remove several sequential
-client/database round trips without replacing the existing database lock.
-
-Do not make any of these substitutions:
-
-- Do not assume a remote Ablo request joins a local Postgres transaction.
-- Do not remove database constraints or locks during the coordination rollout.
-- Do not prepare expensive work speculatively before the claim resolves.
-- Do not assume direct SQL writers obey an Ablo claim. A claim coordinates only
-  callers routed through the participating operation.
-- Do not use a claim as durable workflow state. A lease expires; workflow
-  progress must survive independently.
-
-Measure the old and coordinated paths with the same inputs. Record cold and
-warm claim acquire/release latency, database round-trip latency, database-lock
-duration, end-to-end latency, duplicate work under contention, and recovery
-after worker exit. Keep a per-operation switch to the old path until the new
-path preserves behavior and improves the selected race at production
-percentiles.
-
-For a runnable GraphQL.js implementation and PostgreSQL race/crash proof, see
-[GraphQL.js over an existing backend](/approaches/graphql/graphql-js).
-For a domain-neutral hosted lease proof, see
-[Verify hosted coordination separately](/examples/coordination-conformance).
-For the same operation boundary applied to source-versioned document
-processing, see
-[Process an existing document once](/examples/existing-document-pipeline).
+This page owns row-backed claims: `model.claim({ id })` reads and claims an Ablo
+model row, and the handle carries fresh data. Identifier-only claims before an
+existing authoritative service have a different persistence boundary; use the
+[coordinate-existing-work guide](/coordinate-existing-work) for that form.
 
 ## Choosing correctly
 

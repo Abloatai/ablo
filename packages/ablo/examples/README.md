@@ -48,6 +48,11 @@ rejected locally.
 heartbeating claim, post-grant model input, durable commit inspection, automatic
 release, and a released-claim fencing check.
 
+`stale-context-agent-turn.ts` owns the standard long-running agent policy:
+subscribe to exact-read changes, abort cancellable work, retain the guarded
+write, rebuild context for bounded retries, and reconcile rather than replay
+after an irreversible side effect.
+
 Import the same schema in every runtime. Use `commits.create` only when several
 typed row operations must land atomically; ordinary writes stay on
 `ablo.<model>.create/update/delete`.
@@ -63,6 +68,7 @@ cd packages/ablo
 ABLO_API_KEY=sk_... npx tsx examples/quickstart.ts
 ABLO_API_KEY=sk_... RECORD_ID=record_... npx tsx examples/agent-turn.ts
 ABLO_API_KEY=sk_... JOB_ID=job_... npx tsx examples/expensive-agent-turn.ts
+ABLO_API_KEY=sk_... RECORD_ID=record_... npx tsx examples/stale-context-agent-turn.ts
 ```
 
 ## Data Source (customer-owned database)

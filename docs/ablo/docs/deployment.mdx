@@ -232,6 +232,24 @@ ABLO_API_KEY=sk_… npx ablo webhooks list   # endpoints + delivery health
 place to look when a mirror falls behind. [Webhooks](/webhooks) covers the
 handler, the Standard Webhooks signature, and rolling a secret.
 
+## Multi-stage schema changes
+
+`ablo plan` is the read-only front door for source, active artifact, and
+PostgreSQL together. For a live rename, type transition, or required-field
+change, commit a deployment manifest and pass the same file to plan and push.
+Its gates are `expand`, `dual_write`, `backfill`, `verify`, `switch`, and
+`contract`; each names an owner, resource, dependencies, status, and action.
+
+```bash
+npx ablo plan --manifest ablo/deployment.json
+npx ablo push --manifest ablo/deployment.json --yes
+```
+
+A live manifest cannot combine expand and contract for the same resource.
+Contract belongs in a later manifest with its own recorded `approval`. A
+backfill being finished is not contract evidence; verification and client-drain
+gates must also be satisfied.
+
 ## What to watch once it is live
 
 - **`ablo logs`:** commit activity as it happens, scoped by the key. A
@@ -266,7 +284,7 @@ and what each promises.
    `ablo connect check` all green.
 2. A secret `sk_` in the deploy environment as `ABLO_API_KEY` — never in a
    browser bundle.
-3. `ablo push --yes` in the pipeline, ahead of the code that needs the new models.
+3. `ablo plan` reviewed, followed by fingerprint-gated `ablo push --yes`.
 4. `ablo status --json` gating the deploy on an empty `blockers` array.
 5. Browser clients on a root-bound `pk_` or an `authEndpoint`, not a secret key.
 6. Webhook endpoints registered at their deployed URLs, with the signing secret

@@ -28,6 +28,20 @@ describe('classifySchemaDrift', () => {
     expect(finding).toEqual({ kind: 'changed', models: ['entries'], unpushed: ['items'] });
   });
 
+  it('names field direction when both client and active surfaces expose shape', () => {
+    const finding = classifySchemaDrift(
+      { entries: 'client' },
+      [{ key: 'entries', hash: 'active', fields: { title: { type: 'string', isOptional: false }, status: { type: 'string', isOptional: true } } }],
+      { entries: { title: { type: 'string', isOptional: true }, localOnly: { type: 'number', isOptional: false } } },
+    );
+    expect(finding).toEqual(expect.objectContaining({ kind: 'changed', fields: expect.arrayContaining([
+      expect.objectContaining({ model: 'entries', field: 'title', direction: 'changed' }),
+      expect.objectContaining({ model: 'entries', field: 'status', direction: 'active_only' }),
+      expect.objectContaining({ model: 'entries', field: 'localOnly', direction: 'client_only' }),
+    ]) }));
+    if (finding.kind === 'changed') expect(describeSchemaDrift(finding, 'production')).toContain('entries.title');
+  });
+
   it('unknown when the server surface carries no per-model hashes (older server)', () => {
     const finding = classifySchemaDrift(CLIENT, [{ key: 'items' }, { key: 'entries' }]);
     expect(finding).toEqual({ kind: 'unknown' });

@@ -1,0 +1,87 @@
+---
+title: "Basic Usage"
+description: "Read one task row by id, list matching rows, create and update state, and coordinate work when needed."
+sidebar:
+  icon: play
+---
+
+Assume the configured client from [Installation](/installation) is exported
+from `./ablo/client`.
+
+## Read rows
+
+```ts
+import { ablo } from './ablo/client';
+
+const task = await ablo.tasks.get({ id: taskId });
+if (!task) throw new Error('task not found');
+
+const open = await ablo.tasks.list({ where: { status: 'open' } });
+```
+
+`get` observes one current row. Use `read` instead only when a later Ablo write
+must be rejected if that exact premise changes.
+
+## Write rows
+
+```ts
+const created = await ablo.tasks.create({
+  data: { title: 'Review return', status: 'open' },
+});
+
+await ablo.tasks.update({
+  id: created.id,
+  data: { status: 'done' },
+});
+```
+
+Writes return after Ablo confirms the authoritative result. Your PostgreSQL
+constraints and schema remain in force.
+
+## Coordinate slow work
+
+When the target is an Ablo model row, claim it before the expensive step and
+pass the claim to the final write.
+
+```ts
+await using claim = await ablo.tasks.claim({ id: taskId });
+
+const result = await performExpensiveWork(claim.data);
+
+await ablo.tasks.update({
+  id: claim.data.id,
+  data: { title: result.title, status: 'done' },
+  claim,
+});
+```
+
+A contender follows the chosen wait, skip, or fail policy. Disposal releases
+the claim, and expiry lets another participant recover when the owner
+disappears.
+
+## Preserve an existing write
+
+The claimed target does not have to be an Ablo row. Claim a stable business id
+and keep the final transaction in the application that already owns it.
+
+```ts
+await using lease = await ablo.taskRuns.claim(taskId, {
+  contention: { mode: 'skip' },
+});
+if (!lease) return;
+
+const prepared = await performExpensiveWork(taskId);
+return existingTaskService.commitPrepared(taskId, prepared);
+```
+
+That transaction must still re-read, validate, and commit authoritatively. An
+Ablo claim does not join a transaction in another process.
+
+## Add stronger guarantees when required
+
+- [Concurrency Convention](/concurrency-convention): reject a write when an
+  earlier premise changed.
+- [Atomic commits](/api#atomic-commits): apply several Ablo writes together.
+- [Idempotency](/idempotency): make retrying the same Ablo mutation safe.
+- [Agents](/agents): configure a stateless HTTP worker.
+- [React](/react): add live state and presence for a human interface.

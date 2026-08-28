@@ -25,6 +25,7 @@ describe('CLI product telemetry', () => {
     // GitHub Actions sets `GITHUB_ACTIONS`, not just `CI`, so a subset here
     // leaves collection off exactly where this suite always runs.
     for (const name of TELEMETRY_BLOCKING_ENV) delete process.env[name];
+    delete process.env.ABLO_API_KEY;
     resetTelemetry();
     jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
@@ -33,6 +34,7 @@ describe('CLI product telemetry', () => {
     resetTelemetry();
     jest.restoreAllMocks();
     delete process.env.ABLO_CONFIG_DIR;
+    delete process.env.ABLO_API_KEY;
     rmSync(configDir, { recursive: true, force: true });
   });
 
@@ -60,6 +62,25 @@ describe('CLI product telemetry', () => {
       ],
     });
     expect(telemetryStatus().queuedEvents).toBe(0);
+  });
+
+  it('authenticates delivery with the runtime API key without persisting it', async () => {
+    process.env.ABLO_API_KEY = 'sk_runtime_analytics_test';
+    trackCliInitStarted({ interactive: false });
+    let authorization: string | null = null;
+
+    await flushProductAnalytics({
+      baseUrl: 'https://api.example.test',
+      fetchImpl: (_url, init) => {
+        authorization = new Headers(init?.headers).get('authorization');
+        return Promise.resolve(new Response('{}', { status: 202 }));
+      },
+    });
+
+    expect(authorization).toBe('Bearer sk_runtime_analytics_test');
+    expect(readFileSync(join(configDir, 'telemetry.json'), 'utf8')).not.toContain(
+      'sk_runtime_analytics_test'
+    );
   });
 
   it('honors explicit and environment opt-outs without creating an identity', () => {

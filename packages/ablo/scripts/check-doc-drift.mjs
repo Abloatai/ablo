@@ -266,6 +266,34 @@ function checkClaimTargetCoverage() {
   }
 }
 
+/**
+ * The Options page is an inventory, not a selection of common examples. Its
+ * headings must match the tuple whose equality with the public constructor
+ * type is checked by TypeScript in transaction/client/surface.ts.
+ */
+function checkOptionsPage() {
+  const page = resolve(packageRoot, 'docs/options.md');
+  const surface = resolve(repoRoot, 'packages/transaction/src/client/surface.ts');
+  const source = readFileSync(surface, 'utf8');
+  const text = readFileSync(page, 'utf8');
+  const tuple = /export const PUBLIC_ABLO_OPTION_KEYS = \[([\s\S]*?)\] as const;/.exec(source);
+  if (!tuple) {
+    add(page, 'could not read PUBLIC_ABLO_OPTION_KEYS from transaction client surface');
+    return;
+  }
+  const expected = [...tuple[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+  const documented = [...text.matchAll(/^## ([A-Za-z][A-Za-z0-9]*)$/gm)].map(
+    (match) => match[1],
+  );
+  if (expected.join('\n') !== documented.join('\n')) {
+    add(
+      page,
+      `option headings must exactly match PUBLIC_ABLO_OPTION_KEYS ` +
+        `(expected ${expected.join(', ')}; found ${documented.join(', ')})`,
+    );
+  }
+}
+
 /** A model example redeclaring a field the SDK supplies. Derived, not restated. */
 const redeclaresBaseField = new RegExp(`\\b(${BASE_FIELDS.join('|')}):\\s*z\\.`);
 
@@ -421,6 +449,7 @@ function checkApiSurfaceExports() {
 
 checkSessionSettingsPage();
 checkClaimTargetCoverage();
+checkOptionsPage();
 checkApiSurfaceExports();
 
 const docs = publicDocRoots.flatMap((path) => walk(path));

@@ -46,7 +46,7 @@ export type { MeterEvent, PlanTier, RateBracket };
  * could observe the difference. It is emitted into the generated pricing
  * documentation so a stale copy is identifiable on sight.
  */
-export const PRICING_VERSION = '2026-08-24';
+export const PRICING_VERSION = '2026-08-28';
 
 /**
  * Resolve a stored plan string (`stripe_subscription.plan`) to a tier.
@@ -257,7 +257,7 @@ export const PLANS = z
       hardCapOps: null,
       hardCapOpsPerDay: null,
       storageGib: 50,
-      maxConcurrentConnections: 1_000,
+      maxConcurrentConnections: 5_000,
       contractPriced: false,
       features: ['auditExport'],
     },
@@ -396,4 +396,18 @@ export function dailyOpsCapForTier(tier: PlanTier): number | null {
  */
 export function connectionCapForTier(tier: PlanTier): number | null {
   return PLANS[tier].maxConcurrentConnections;
+}
+
+/**
+ * The first public tier that can reserve the requested connection capacity.
+ * A `null` cap is negotiated capacity, not infinity in the runtime; it is the
+ * commercial catch-all that sends the buyer into an Enterprise capacity plan.
+ */
+export function selectPlanForConnectionCapacity(connections: number): PlanTier {
+  const requested = Number.isFinite(connections) ? Math.max(1, Math.ceil(connections)) : 1;
+  for (const tier of PLAN_ORDER) {
+    const cap = PLANS[tier].maxConcurrentConnections;
+    if (cap === null || requested <= cap) return tier;
+  }
+  return 'enterprise';
 }

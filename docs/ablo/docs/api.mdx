@@ -99,6 +99,49 @@ fallback removed — nothing to await, so they return a value.
 through the server. The `local` reads work off the rows a session has already
 synced, so a cheap re-read needs no round-trip.
 
+## Atomic commits
+
+Use one `ablo.commits.create` when several Ablo model writes must all land or
+none may land. Put every operation in `operations` and every exact row returned
+by `read` that influenced the batch in the top-level `reads` array.
+
+```ts
+import { AbloStaleContextError } from '@abloatai/ablo';
+
+const task = await ablo.tasks.read({ id: taskId });
+if (!task) throw new Error('task not found');
+
+try {
+  await ablo.commits.create({
+    operations: [
+      {
+        action: 'update', model: 'tasks',
+        id: task.id,
+        data: { status: 'done' },
+      },
+      {
+        action: 'create', model: 'tasks',
+        id: markerId,
+        data: { title: 'atomic marker', status: 'done' },
+      },
+    ],
+    reads: [task],
+  });
+} catch (error) {
+  if (error instanceof AbloStaleContextError && error.code === 'stale_context') {
+    console.log(error.code);
+  } else {
+    throw error;
+  }
+}
+```
+
+The server checks the premises and applies the operations in one transaction.
+If any premise is stale or any operation fails, no operation lands. Independent
+model calls are not an atomic batch. External effects and application-owned
+Postgres writes cannot join this commit; keep those in their existing
+transaction or outbox.
+
 ### Reading a whole collection
 
 Prefer a filtered `listAll` when the application truly needs one complete
@@ -255,13 +298,18 @@ const handle = await ablo.weatherReports.claim({
   description: 'editing',
   ttl: '2m',
 });
-await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });
+await ablo.weatherReports.update({
+  id: handle.data.id,
+  data: { status: 'ready' },
+  claim: handle,
+});
 await handle.release();
 ```
 
-Writes go through the normal `ablo.<model>.update({ id, data })`. While you hold
-a claim on `id`, that `update` rejects with `AbloStaleContextError` if the row
-changed underneath you since you took the claim, so you re-read before retrying.
+Writes go through the normal model mutation and pass the held handle as `claim`.
+That explicit handle carries commit-time fencing. If the row changed underneath
+you since you took the claim, the update rejects with `AbloStaleContextError`,
+so you re-read before retrying.
 Call `handle.release()` (or `ablo.weatherReports.claim.release({ id })`) to release
 the claim when your work is done.
 
@@ -310,7 +358,9 @@ rendered as agent tools.
 
 ## Errors
 
-All SDK errors extend `AbloError` and expose a stable `type` string.
+All SDK errors extend `AbloError`. `type` is the class-name discriminator, such
+as `AbloStaleContextError`; `code` is the wire condition, such as
+`stale_context`. Use `instanceof` in-process and `type` after serialization.
 
 | Error | Meaning |
 |---|---|

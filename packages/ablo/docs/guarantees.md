@@ -97,8 +97,9 @@ claim queues fairly behind the holder).
 By default, a held claim rejects writes from other participants to the claimed
 target. Contenders that call `claim` wait their turn; ordinary reads remain
 open. While you hold a claim, the matching
-`ablo.<model>.update({ id, ... })` is rejected with `AbloStaleContextError` if
-the row changed underneath you after your claim point.
+`ablo.<model>.update({ id, ..., claim })` proves ownership at write time and is
+rejected with `AbloStaleContextError` if the row changed underneath you after
+your claim point. Do not omit `claim` from a row-backed claimed write.
 
 ## Agent Runs
 
