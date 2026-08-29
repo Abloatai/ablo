@@ -10,7 +10,6 @@
       "permanent": true
     }
   ],
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- .",
   "rewrites": [
     {
       "source": "/apis.json",

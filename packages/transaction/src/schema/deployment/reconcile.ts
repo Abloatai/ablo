@@ -49,15 +49,89 @@ function stepFinding(step: MigrationStep): DeploymentFinding | null {
   };
 }
 
-export function reconcileSourceToActive(active: SchemaJSON | null, source: SchemaJSON, hints: RenameHints = {}, backfills: readonly BackfillValue[] = []): readonly DeploymentFinding[] {
-  return reconcileSourceToActiveResult(active, source, hints, backfills).findings;
+function databaseSatisfiesRequiredField(
+  signal: MigrationSignal,
+  source: SchemaJSON,
+  database: DatabaseSnapshot | null,
+): boolean {
+  if (!database || (signal.code !== 'required_field_added' && signal.code !== 'made_required') || !signal.field) return false;
+  const model = source.models[signal.model];
+  const field = model?.fields[signal.field];
+  if (!model || !field || field.isOptional) return false;
+  const table = database.tables[model.tableName ?? signal.model];
+  const column = table?.columns[field.column ?? camelToSnake(signal.field)];
+  return column !== undefined &&
+    !column.nullable &&
+    (column.nullCount === undefined || column.nullCount === null || column.nullCount === 0) &&
+    normalizePgType(column.dataType) === sqlType(field.type);
 }
 
-export function reconcileSourceToActiveResult(active: SchemaJSON | null, source: SchemaJSON, hints: RenameHints = {}, backfills: readonly BackfillValue[] = []): { operations: readonly MigrationStep[]; findings: readonly DeploymentFinding[] } {
+function databaseSatisfiesRiskyCast(
+  signal: MigrationSignal,
+  source: SchemaJSON,
+  database: DatabaseSnapshot | null,
+): boolean {
+  if (!database || signal.code !== 'risky_cast' || !signal.field) return false;
+  const model = source.models[signal.model];
+  const field = model?.fields[signal.field];
+  // A TEXT column does not prove that existing rows satisfy a newly narrowed
+  // enum CHECK constraint; the catalog snapshot currently observes type only.
+  if (!model || !field || field.type === 'enum') return false;
+  const table = database.tables[model.tableName ?? signal.model];
+  const column = table?.columns[field.column ?? camelToSnake(signal.field)];
+  return column !== undefined && normalizePgType(column.dataType) === sqlType(field.type);
+}
+
+function databasePreservesRemovedApplicationModel(
+  signal: MigrationSignal,
+  active: SchemaJSON | null,
+  source: SchemaJSON,
+  database: DatabaseSnapshot | null,
+): boolean {
+  if (!active || !database || database.ownership !== 'application' || signal.code !== 'drop_model') return false;
+  if (source.models[signal.model]) return false;
+  const activeModel = active.models[signal.model];
+  return activeModel !== undefined && database.tables[activeModel.tableName ?? signal.model] !== undefined;
+}
+
+export function reconcileSourceToActive(
+  active: SchemaJSON | null,
+  source: SchemaJSON,
+  hints: RenameHints = {},
+  backfills: readonly BackfillValue[] = [],
+  database: DatabaseSnapshot | null = null,
+): readonly DeploymentFinding[] {
+  return reconcileSourceToActiveResult(active, source, hints, backfills, database).findings;
+}
+
+export function reconcileSourceToActiveResult(
+  active: SchemaJSON | null,
+  source: SchemaJSON,
+  hints: RenameHints = {},
+  backfills: readonly BackfillValue[] = [],
+  database: DatabaseSnapshot | null = null,
+): { operations: readonly MigrationStep[]; findings: readonly DeploymentFinding[] } {
   const steps = diffSchema(active, source, hints);
   const classification = classifyMigration(steps);
-  const signals = [...unresolvedBlockers(classification, backfills), ...classification.warnings].map((signal) => signalFinding(signal, 'source_to_active'));
-  const signalLocations = new Set(signals.map(({ model, field }) => `${model}:${field ?? ''}`));
+  const blockers = unresolvedBlockers(classification, backfills);
+  const requiredFieldsVerified = blockers.filter((signal) => databaseSatisfiesRequiredField(signal, source, database));
+  const typeCorrectionsVerified = classification.warnings.filter((signal) => databaseSatisfiesRiskyCast(signal, source, database));
+  const removedApplicationModelsPreserved = classification.warnings.filter((signal) =>
+    databasePreservesRemovedApplicationModel(signal, active, source, database)
+  );
+  const databaseVerified = new Set<MigrationSignal>([
+    ...requiredFieldsVerified,
+    ...typeCorrectionsVerified,
+    ...removedApplicationModelsPreserved,
+  ]);
+  const signals = [
+    ...blockers.filter((signal) => !databaseVerified.has(signal)),
+    ...classification.warnings.filter((signal) => !databaseVerified.has(signal)),
+  ].map((signal) => signalFinding(signal, 'source_to_active'));
+  // Keep every classified location out of the ordinary step findings, including
+  // blockers discharged by observed PostgreSQL evidence. Otherwise a verified
+  // required field falls through and is emitted again as an add_field blocker.
+  const signalLocations = new Set([...blockers, ...classification.warnings].map(({ model, field }) => `${model}:${field ?? ''}`));
   const ordinary = steps
     .map(stepFinding)
     .filter((finding): finding is DeploymentFinding => finding !== null)
@@ -74,7 +148,49 @@ export function reconcileSourceToActiveResult(active: SchemaJSON | null, source:
           }
         : finding;
     });
-  return { operations: steps, findings: [...signals, ...ordinary] };
+  const requiredFieldEvidence: DeploymentFinding[] = requiredFieldsVerified.length === 0 ? [] : [{
+    id: 'source_to_active:database_migration_verified',
+    code: 'database_migration_verified',
+    category: 'data_movement',
+    severity: 'info',
+    direction: 'source_to_active',
+    phase: 'verify',
+    owner: database?.ownership === 'ablo' ? 'ablo' : 'application_migration',
+    from: { requiredChanges: requiredFieldsVerified.length },
+    to: 'satisfied',
+    message: `PostgreSQL already enforces ${requiredFieldsVerified.length} required field migration(s) absent from the active artifact.`,
+    action: 'No synthetic backfill declaration is needed; preserve the matching non-null columns and activate the reviewed schema.',
+  }];
+  const typeCorrectionEvidence: DeploymentFinding[] = typeCorrectionsVerified.length === 0 ? [] : [{
+    id: 'source_to_active:database_type_correction_verified',
+    code: 'database_type_correction_verified',
+    category: 'destructive_contract',
+    severity: 'info',
+    direction: 'source_to_active',
+    phase: 'verify',
+    owner: database?.ownership === 'ablo' ? 'ablo' : 'application_migration',
+    from: { typeCorrections: typeCorrectionsVerified.length },
+    to: 'source_database_alignment',
+    message: `PostgreSQL already matches ${typeCorrectionsVerified.length} candidate field type correction(s) that differ from the active artifact.`,
+    action: 'No physical cast is needed; activate the reviewed schema and use forward recovery because the prior artifact no longer matches PostgreSQL.',
+  }];
+  const removedModelEvidence: DeploymentFinding[] = removedApplicationModelsPreserved.length === 0 ? [] : [{
+    id: 'source_to_active:application_model_removal_verified',
+    code: 'application_model_removal_verified',
+    category: 'compatibility',
+    severity: 'warning',
+    direction: 'source_to_active',
+    phase: 'verify',
+    owner: 'application',
+    from: { removedModels: removedApplicationModelsPreserved.length },
+    to: 'physical_tables_preserved',
+    message: `${removedApplicationModelsPreserved.length} model removal(s) only change the served schema; their application-owned PostgreSQL tables remain present.`,
+    action: 'Verify no supported client still reads these models, then activate; Ablo will not drop the preserved application tables.',
+  }];
+  return {
+    operations: steps,
+    findings: [...signals, ...requiredFieldEvidence, ...typeCorrectionEvidence, ...removedModelEvidence, ...ordinary],
+  };
 }
 
 export function reconcilePolicyIntent(source: SchemaJSON): readonly DeploymentFinding[] {

@@ -4,7 +4,7 @@ import type { MutationStore } from './MutationStore.js';
 import type { OptimisticUpdateEntry } from './localMutation.js';
 import type { MutationCommitResult } from '@abloatai/transaction/commit';
 import type { DurableCommitEnvelope } from '@abloatai/transaction/commit';
-import { applyWriteOptions, TX_TYPE_TO_MUTATION_OP } from './commitPayload.js';
+import { applyWriteOptions, collectQueuedReads, TX_TYPE_TO_MUTATION_OP } from './commitPayload.js';
 
 export interface PendingDrainContext {
   readonly runtime: RuntimeContext;
@@ -81,6 +81,7 @@ export async function drainPendingConfirmations(ctx: PendingDrainContext): Promi
           origin: 'model_batch',
           operations: projectedOperations,
           sourceMutationIds: ctx.sourceMutationIdsFor(batch),
+          commitOptions: { reads: collectQueuedReads(batch) },
           createdAt: Math.min(...batch.map((transaction) => transaction.createdAt)),
           sealedAt: batch[0]?.commitEnvelope?.sealedAt ?? Date.now(),
           sequence: batch[0]?.commitEnvelope?.sequence,
@@ -89,6 +90,9 @@ export async function drainPendingConfirmations(ctx: PendingDrainContext): Promi
         const result = ctx.parseMutationCommitResult(
           await ctx.dispatchCommitBounded(durableEnvelope.operations, {
             idempotencyKey,
+            ...(durableEnvelope.commitOptions.reads !== undefined
+              ? { reads: durableEnvelope.commitOptions.reads }
+              : {}),
           }),
         );
         await ctx.persistDurableCommitAcceptance(durableEnvelope, result);

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "blume";
+import { apiReferenceSidebar } from "./navigation/api-reference";
 
 /**
  * The site description IS the landing page's promise line. That line has one
@@ -94,6 +95,7 @@ export default defineConfig({
       // open group would just be closed again by the browser.
       display: "group",
       items: [
+        apiReferenceSidebar(new URL("./public/openapi.json", import.meta.url)),
         {
           label: "Get Started",
           icon: "play",

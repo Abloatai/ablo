@@ -1,4 +1,4 @@
-import type { DeploymentApplyResult, DeploymentObservation, DeploymentStep, SchemaDeploymentPlan } from './contracts.js';
+import type { DeploymentApplyResult, DeploymentFinding, DeploymentObservation, DeploymentStep, SchemaDeploymentPlan } from './contracts.js';
 import { deploymentFingerprint } from './fingerprint.js';
 import { reconcileDeploymentManifest, reconcilePolicyIntent, reconcileSchemaToDatabase, reconcileSourceToActiveResult } from './reconcile.js';
 import { sequenceDeployment } from './sequence.js';
@@ -9,6 +9,27 @@ export { reconcileClientToActive, reconcileDeploymentManifest, reconcilePolicyIn
 export { sequenceDeployment } from './sequence.js';
 export * from './backfill.js';
 export * from './postgresCatalog.js';
+
+function physicalEvidenceKey(finding: DeploymentFinding): string {
+  return JSON.stringify([
+    finding.code,
+    finding.category,
+    finding.severity,
+    finding.phase,
+    finding.owner,
+    finding.model,
+    finding.field,
+    finding.column,
+    finding.from,
+    finding.to,
+    finding.message,
+    finding.action,
+  ]);
+}
+
+function physicalResourceKey(finding: DeploymentFinding): string {
+  return JSON.stringify([finding.model, finding.column, finding.field]);
+}
 
 function planStates(observation: DeploymentObservation): SchemaDeploymentPlan['states'] {
   const { schema: _sourceSchema, ...source } = observation.source;
@@ -24,14 +45,44 @@ export function buildSchemaDeploymentPlan(observation: DeploymentObservation, no
     observation.source.schema,
     observation.intent?.renames,
     observation.intent?.backfills,
+    observation.database,
   );
   const provision = reconcileSourceToActiveResult(null, observation.source.schema).operations;
+  const sourceToDatabase = reconcileSchemaToDatabase(observation.source.schema, observation.database, 'source_to_database');
+  const sourcePhysicalEvidence = new Set(sourceToDatabase.map(physicalEvidenceKey));
+  const sourcePhysicalResources = new Set(sourceToDatabase.map(physicalResourceKey));
+  const activeDatabaseFindings = observation.active
+    ? reconcileSchemaToDatabase(observation.active.schema, observation.database, 'active_to_database')
+    : [];
+  const candidateAlignedActiveFindings: DeploymentFinding[] = [];
+  const activeToDatabase = activeDatabaseFindings.filter((finding) => {
+    if (sourcePhysicalEvidence.has(physicalEvidenceKey(finding))) return false;
+    if (!sourcePhysicalResources.has(physicalResourceKey(finding))) {
+      candidateAlignedActiveFindings.push(finding);
+      return false;
+    }
+    return true;
+  });
+  const candidateAlignmentEvidence: DeploymentFinding[] = candidateAlignedActiveFindings.length === 0 ? [] : [{
+    id: 'active_to_database:candidate_alignment_verified',
+    code: 'candidate_alignment_verified',
+    category: 'observation',
+    severity: 'info',
+    direction: 'active_to_database',
+    phase: 'verify',
+    owner: observation.database?.ownership === 'ablo' ? 'ablo' : 'application_migration',
+    from: { activePhysicalDifferences: candidateAlignedActiveFindings.length },
+    to: 'source_database_alignment',
+    message: `PostgreSQL differs from the active artifact at ${candidateAlignedActiveFindings.length} physical contract location(s), and the candidate source already matches those locations.`,
+    action: 'Treat these differences as completed expand work; review the remaining source-to-active compatibility findings before activation.',
+  }];
   const findings = [
     ...reconcilePolicyIntent(observation.source.schema),
     ...reconcileDeploymentManifest(observation.intent?.manifest),
     ...sourceToActive.findings,
-    ...reconcileSchemaToDatabase(observation.source.schema, observation.database, 'source_to_database'),
-    ...(observation.active ? reconcileSchemaToDatabase(observation.active.schema, observation.database, 'active_to_database') : []),
+    ...sourceToDatabase,
+    ...activeToDatabase,
+    ...candidateAlignmentEvidence,
     ...(observation.supplementalFindings ?? []),
   ];
   const unique = [...new Map(findings.map((finding) => [finding.id, finding])).values()].map((finding) =>

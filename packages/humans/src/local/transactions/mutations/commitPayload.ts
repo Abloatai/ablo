@@ -160,6 +160,23 @@ export interface QueuedMutation {
   confirmation?: Promise<void>;
 }
 
+/** Merge per-write premises into the one batch-level read set sent on wire. */
+export function collectQueuedReads(
+  transactions: readonly QueuedMutation[],
+): MutationOptions['reads'] | undefined {
+  const declared = transactions
+    .map((transaction) => transaction.writeOptions?.reads)
+    .filter((reads) => reads !== undefined);
+  if (declared.length === 0) return undefined;
+
+  const unique = new Map<string, NonNullable<MutationOptions['reads']>[number]>();
+  for (const dependency of declared.flatMap((reads) => reads ?? [])) {
+    unique.set(JSON.stringify(dependency), dependency);
+  }
+  const reads = [...unique.values()];
+  return reads.length > 0 ? reads : null;
+}
+
 export const normalizeModelKey = (modelName: string): string =>
   modelName.replace('Model', '').toLowerCase();
 export const stripModelSuffix = (modelName: string): string => modelName.replace('Model', '');

@@ -242,7 +242,7 @@ import type { MutationOptions } from '@abloatai/transaction/client/resources/mut
  */
 export type WriteOptions = Pick<
   MutationOptions,
-  'readAt' | 'idempotencyKey' | 'label' | 'fenceToken' | 'claimRef'
+  'readAt' | 'reads' | 'idempotencyKey' | 'label' | 'fenceToken' | 'claimRef'
 >;
 
 /** A single mutation within a batch. Its `options` travel with it so the server

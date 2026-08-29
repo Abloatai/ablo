@@ -24,11 +24,13 @@ import {
   commitEnvelopeMemberSchema,
   commitOutboxScopeSchema,
 } from '@abloatai/transaction/commit';
+import { readDependencySchema } from '@abloatai/transaction/coordination/schema';
 
 /** The subset of a write's options that is stored with each transaction or queued mutation. */
 const persistedWriteOptionsSchema = z
   .object({
     readAt: z.number().nullable().optional(),
+    reads: z.array(readDependencySchema).nullable().optional(),
     idempotencyKey: z.string().optional(),
     label: z.string().optional(),
     // Aligned with the `WriteOptions` type: a claimed write persisted locally

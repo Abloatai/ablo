@@ -1,0 +1,122 @@
+---
+/**
+ * Paginates the generated pre-1.0 changelog without owning its timeline.
+ *
+ * Blume natively reveals older releases by semver major, but a changelog made
+ * entirely of `0.x` versions has only one major and therefore stays unbounded.
+ * This progressive enhancement pages the existing Update elements in batches;
+ * the complete release history remains in the server HTML for crawlers, agents,
+ * deep links, and readers without JavaScript.
+ */
+---
+
+<template data-ablo-changelog-pagination-template>
+  <nav
+    aria-label="Changelog pages"
+    class="mt-10 grid grid-cols-[1fr_auto_1fr] items-center border-border border-t pt-6 text-sm"
+    data-ablo-changelog-pagination
+  >
+    <a
+      class="justify-self-start font-medium text-muted-foreground no-underline hover:text-foreground"
+      data-changelog-previous
+    >
+      Previous
+    </a>
+    <span aria-live="polite" class="text-muted-foreground">
+      Page <span data-changelog-current></span> of <span data-changelog-total></span>
+    </span>
+    <a
+      class="justify-self-end font-medium text-muted-foreground no-underline hover:text-foreground"
+      data-changelog-next
+    >
+      Next
+    </a>
+  </nav>
+</template>
+
+<script is:inline>
+  (() => {
+    const PAGE_SIZE = 5;
+    const CHANGELOG_PATH = "/changelog";
+
+    const pageHref = (page) => {
+      const url = new URL(window.location.href);
+      if (page === 1) url.searchParams.delete("page");
+      else url.searchParams.set("page", String(page));
+      url.hash = "";
+      return `${url.pathname}${url.search}`;
+    };
+
+    const install = () => {
+      if (document.querySelector("[data-ablo-changelog-pagination]")) return;
+      window.__abloChangelogPaginationAbort?.abort();
+      delete window.__abloChangelogPaginationAbort;
+      if (window.location.pathname.replace(/\/$/u, "") !== CHANGELOG_PATH) return;
+
+      const updates = [...document.querySelectorAll("article[data-blume-update]")];
+      if (updates.length <= PAGE_SIZE) return;
+
+      const timeline = updates[0]?.parentElement;
+      if (!timeline || timeline.matches("blume-changelog")) return;
+
+      const template = document.querySelector("[data-ablo-changelog-pagination-template]");
+      const pagination = template?.content.firstElementChild?.cloneNode(true);
+      if (!(pagination instanceof HTMLElement)) return;
+
+      const previous = pagination.querySelector("[data-changelog-previous]");
+      const next = pagination.querySelector("[data-changelog-next]");
+      const current = pagination.querySelector("[data-changelog-current]");
+      const total = pagination.querySelector("[data-changelog-total]");
+      if (!(previous instanceof HTMLAnchorElement) || !(next instanceof HTMLAnchorElement)) return;
+
+      const pageCount = Math.ceil(updates.length / PAGE_SIZE);
+      const requested = Number.parseInt(new URL(window.location.href).searchParams.get("page") ?? "1", 10);
+      const pageForHash = () => {
+        if (!window.location.hash) return null;
+        const target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+        const update = target?.closest("article[data-blume-update]");
+        const index = update ? updates.indexOf(update) : -1;
+        return index < 0 ? null : Math.floor(index / PAGE_SIZE) + 1;
+      };
+
+      const showPage = (value, scrollToHash = false) => {
+        const page = Math.min(Math.max(value, 1), pageCount);
+        const start = (page - 1) * PAGE_SIZE;
+        updates.forEach((update, index) => {
+          update.hidden = index < start || index >= start + PAGE_SIZE;
+        });
+
+        if (current) current.textContent = String(page);
+        if (total) total.textContent = String(pageCount);
+        previous.hidden = page === 1;
+        if (page === 1) previous.removeAttribute("href");
+        else previous.href = pageHref(page - 1);
+        next.hidden = page === pageCount;
+        if (page === pageCount) next.removeAttribute("href");
+        else next.href = pageHref(page + 1);
+
+        if (scrollToHash && window.location.hash) {
+          requestAnimationFrame(() =>
+            document.getElementById(decodeURIComponent(window.location.hash.slice(1)))?.scrollIntoView(),
+          );
+        }
+      };
+
+      const controller = new AbortController();
+      window.__abloChangelogPaginationAbort = controller;
+      timeline.append(pagination);
+      showPage(pageForHash() ?? (Number.isFinite(requested) ? requested : 1));
+      window.addEventListener(
+        "hashchange",
+        () => {
+          const page = pageForHash();
+          if (page !== null) showPage(page, true);
+        },
+        { signal: controller.signal },
+      );
+    };
+
+    install();
+    document.addEventListener("astro:page-load", install);
+  })();
+</script>

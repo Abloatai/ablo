@@ -1,5 +1,13 @@
 # @abloatai/humans
 
+## 0.59.1
+
+### Patch Changes
+
+- Preserve exact-read dependencies through durable batched mutations and replay so stale premises remain enforced.
+- Updated dependencies
+  - @abloatai/transaction@0.59.1
+
 ## 0.59.0
 
 ### Patch Changes

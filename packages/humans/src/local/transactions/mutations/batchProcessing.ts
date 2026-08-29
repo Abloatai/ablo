@@ -7,7 +7,7 @@ import type { DeltaConfirmationTracker } from './deltaConfirmation.js';
 import type { MutationCommitResult } from '@abloatai/transaction/commit';
 import type { DurableCommitEnvelope } from '@abloatai/transaction/commit';
 import { AbloError, AbloNotFoundError } from '@abloatai/transaction/errors';
-import { applyWriteOptions, normalizeModelKey, TX_TYPE_TO_MUTATION_OP, type WriteOperationFields } from './commitPayload.js';
+import { applyWriteOptions, collectQueuedReads, normalizeModelKey, TX_TYPE_TO_MUTATION_OP, type WriteOperationFields } from './commitPayload.js';
 import type { MutationOperationType } from '@abloatai/transaction/types';
 
 export interface BatchProcessingContext {
@@ -138,6 +138,7 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                 origin: 'model_batch',
                 operations: batchOps.map(({ op }) => op),
                 sourceMutationIds: ctx.sourceMutationIdsFor(batch),
+                commitOptions: { reads: collectQueuedReads(batch) },
                 createdAt: Math.min(...batch.map((transaction) => transaction.createdAt)),
                 sealedAt: batch[0]?.commitEnvelope?.sealedAt ?? Date.now(),
                 sequence: batch[0]?.commitEnvelope?.sequence,
@@ -155,6 +156,9 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
               const result = ctx.parseMutationCommitResult(
                 await ctx.dispatchCommitBounded(operations, {
                   idempotencyKey: commitIdempotencyKey,
+                  ...(durableEnvelope.commitOptions.reads !== undefined
+                    ? { reads: durableEnvelope.commitOptions.reads }
+                    : {}),
                 }),
               );
               await ctx.persistDurableCommitAcceptance(

@@ -1,5 +1,11 @@
 # @abloatai/transaction
 
+## 0.59.1
+
+### Patch Changes
+
+- Use verified PostgreSQL shape as evidence of completed required-field and field-type migrations, recognize metadata-only model removals from application-owned databases while preserving their tables, and collapse duplicate physical drift findings across candidate and active schemas.
+
 ## 0.59.0
 
 ### Minor Changes

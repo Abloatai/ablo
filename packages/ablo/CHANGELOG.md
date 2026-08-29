@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.59.1
+
+### Plans recognize completed database migrations
+
+`ablo plan` now treats a connected PostgreSQL column as evidence that required
+field migration work is complete when the mapped column exists, has the expected
+type, and already enforces `NOT NULL`. The plan reports that verified work once
+instead of demanding a synthetic backfill merely because the active Ablo
+artifact predates the database migration.
+
+The same reconciliation now recognizes a risky field-type correction as already
+completed when PostgreSQL has the candidate type, so activation does not demand
+`--force` merely because the active artifact still describes the old type. That
+evidence remains a forward-only contract boundary: reactivating the old artifact
+would disagree with the migrated database. Enum narrowing is not inferred from
+a `TEXT` column because the observed shape does not prove existing values satisfy
+the new constraint.
+
+Removing a model from the served schema also no longer implies that Ablo will
+drop its table when the connected database is application-owned and the table is
+still present. The plan reports a compatibility warning, retains the physical
+table, and allows the reviewed metadata activation without `--force`. Ablo-owned
+tables, missing application tables, and unobserved database states remain
+destructive errors.
+
+Missing, nullable, incompatible, contradictory, and unobserved database states
+remain blocked. Duplicate physical findings shared by the candidate and active
+schemas are collapsed, while genuine three-state disagreements remain visible
+in both directions.
+
+### Batched writes preserve their exact-read evidence
+
+Reactive writes that carry captured rows through `reads` now retain those
+dependencies when several writes are sealed into one durable commit, including
+after an offline replay. A premise that became stale is therefore still rejected
+instead of being lost at the batch boundary.
+
 ## 0.59.0
 
 ### Schema changes now have one ordered deployment plan
