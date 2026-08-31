@@ -319,7 +319,7 @@ export class SyncWebSocket<
   /**
    * Public wrapper for sending ack from outside the class
    */
-  acknowledge(syncId: number): void {
+  override acknowledge(syncId: number): void {
     this.sendAck(syncId);
   }
 

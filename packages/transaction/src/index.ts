@@ -31,6 +31,7 @@ export { Ablo } from './client/ablo.js';
 export type {
   AbloHttpClient,
   AbloHttpClientOptions,
+  AbloWebSocketClient,
   CapturedRow,
   HttpModelClient,
   HttpModelMutationParams,

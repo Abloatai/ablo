@@ -412,7 +412,7 @@ export abstract class Model {
     opts?: { fallbackToLive?: boolean },
   ): ModelData {
     const out: ModelData = {};
-    const modified = this.modifiedProperties instanceof Map ? this.modifiedProperties : null;
+    const modified = this.modifiedProperties;
     const original = this.getOriginalSnapshot();
     for (const key of keys) {
       if (key === 'id') continue;
@@ -438,7 +438,7 @@ export abstract class Model {
    * is never consumed. With no `keys`, consumes every tracked field.
    */
   consumeModifiedFields(keys?: Iterable<string>): void {
-    if (!(this.modifiedProperties instanceof Map) || this.modifiedProperties.size === 0) {
+    if (this.modifiedProperties.size === 0) {
       return;
     }
     const only = keys ? new Set(keys) : null;

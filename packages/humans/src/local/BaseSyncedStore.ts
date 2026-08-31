@@ -1578,7 +1578,6 @@ export class BaseSyncedStore<
       acknowledge: (syncId) => { this.syncWebSocket.acknowledge(syncId); },
       get objectPool() { return store.objectPool; },
       // Dynamic-dispatch hooks — protected override points on this class.
-      getStateFields: (modelName) => this.getStateFields(modelName),
       isCustomEntity: (modelName) => this.isCustomEntity(modelName),
       createCustomEntity: (modelName, modelId, data) =>
         this.createCustomEntity(modelName, modelId, data),
@@ -1607,14 +1606,9 @@ export class BaseSyncedStore<
     );
   }
 
-  /** Get fields that represent meaningful state for deduplication. Override for model-specific fields. */
-  protected getStateFields(_modelName: string): string[] {
-    return ['status', 'state', 'isActive'];
-  }
-
-  /** Deduplicate deltas to the same entity — keep meaningful state transitions only */
+  /** Deduplicate repeated delivery of the same positive sync id. */
   protected deduplicateDeltas(deltas: SyncDelta[]): SyncDelta[] {
-    return deltaPipeline.deduplicateDeltas(this.deltaPipelineContext, deltas);
+    return deltaPipeline.deduplicateDeltas(deltas);
   }
 
   /** Process incoming delta with smart batching */

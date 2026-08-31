@@ -13,7 +13,7 @@ import { InstanceCache, ModelScope } from './InstanceCache.js';
 import { Model } from './Model.js';
 import type { ModelData } from '@abloatai/transaction/types/modelData';
 import type { AppliedChange } from '../plugin.js';
-import { snapshotJsonValue } from '@abloatai/transaction/utils/json';
+import { deepEqual, snapshotJsonValue } from '@abloatai/transaction/utils/json';
 // ModelRegistry instance accessed via this.objectPool.registry
 import { LoadStrategy } from '@abloatai/transaction/types';
 import { globalRuntime } from './context.js';
@@ -1938,6 +1938,27 @@ export class SyncClient extends EventEmitter {
       // otherwise re-add it for the brief window before the matching delete
       // confirmation lands.
       if (this.echoTracker.consumeEcho(transactionId)) {
+        // A direct assignment can re-enter change tracking while this
+        // optimistic write is in flight. Leaving the acknowledged field dirty
+        // makes conflict resolution preserve it over the next collaborator
+        // delta, so peers appear desynchronized until refresh.
+        //
+        // Re-baseline only values this echo actually confirms. If the user has
+        // edited the same field again since the write was sent, its current
+        // dirty value differs from the echo and remains queued.
+        if (resident && result.data) {
+          const acknowledgedFields: string[] = [];
+          for (const [field, change] of resident.modifiedProperties) {
+            if (
+              Object.prototype.hasOwnProperty.call(result.data, field) &&
+              deepEqual(change.new, result.data[field])
+            ) {
+              acknowledgedFields.push(field);
+            }
+          }
+          resident.consumeModifiedFields(acknowledgedFields);
+          resident.markAsSynced();
+        }
         continue;
       }
 

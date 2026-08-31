@@ -31,6 +31,18 @@ describe('Model.capturePreviousValues', () => {
     expect(item.capturePreviousValues(['title'])).toEqual({ title: 'A' });
   });
 
+  it('captures and consumes an activated observable model update', () => {
+    const item = createItemFixture({ title: 'A', status: 'todo' });
+    item.markAsPersisted();
+    item.ensureObservable();
+    item.applyChanges({ title: 'B' });
+
+    expect(item.capturePreviousValues(['title'])).toEqual({ title: 'A' });
+
+    item.consumeModifiedFields(['title']);
+    expect(item.hasChanges).toBe(false);
+  });
+
   it('tier 2 — falls back to the original snapshot for a key never pre-mutated', () => {
     const item = createItemFixture({ title: 'Loaded', status: 'todo' });
     item.markAsPersisted(); // snapshot = { title: 'Loaded', status: 'todo', ... }

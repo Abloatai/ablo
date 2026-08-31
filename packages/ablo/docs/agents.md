@@ -21,16 +21,49 @@ console.log(matching[0].title);
 These are observational reads. Use `read({ id })` only when a later Ablo write
 depends on that exact version and will pass it through `reads`.
 
-An agent is a **reactive** participant: it wakes on something happening, reads
-what it needs, writes a result, and goes idle. That's a request/response
-workload — so agents talk to Ablo over **plain HTTP**, holding no WebSocket. The
-credential *is* the identity; the server resolves the org, scope, and actor from
-the key on every request.
+Most agents wake on a trigger, read what they need, write a result, and go idle.
+That is a request/response workload, so they use plain HTTP. A resident agent
+that needs pushed deltas, queued-claim grants, or presence selects
+`transport: 'websocket'`. The credential is the identity on both carriers; the
+server resolves the org, scope, and actor from it.
 
-Agents get the stateless plane (HTTP). People — when you add the `humans()`
-plugin — get the live plane (WebSocket: presence, optimistic, sub-100ms).
-**Both operate on the same typed, coordinated state — and coordinate *with each
-other*.**
+Short-lived agents use HTTP. Long-running agents may add a multiplexed
+WebSocket without installing the human materializer. People add the `humans()`
+plugin for a local reactive graph. All three operate on the same typed,
+coordinated state and enter the same server-side commit and claim paths.
+
+```ts
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+  transport: 'websocket',
+  cursorStore,
+});
+
+await ablo.ready();
+
+for await (const delta of ablo.observe()) {
+  await applyToAgentState(delta);
+  await delta.checkpoint(); // persist the cursor, then acknowledge it
+}
+```
+
+The selected WebSocket is shared by commits, row claims and releases,
+subscription changes, pushed deltas, presence, and collaboration events.
+Reconnect sends the last checkpointed position, so an uncheckpointed delta is
+eligible for redelivery. An unsupported protocol version closes explicitly
+instead of silently falling back to a different wire dialect.
+
+The client retains no delta backlog while `observe()` is inactive. Starting an
+observer requests replay from the durable checkpoint. An active observer has a
+bounded in-memory backlog; if it falls behind that bound, observation fails
+explicitly and can be restarted from the same durable checkpoint.
+
+The public operation names do not change with the carrier. For example,
+`ablo.records.update(...)` and `ablo.records.claim(...)` are the same calls on
+HTTP and WebSocket. HTTP remains available for point reads and administrative
+resources; `context().onChange` uses POST/SSE when HTTP is selected and reuses
+the socket when WebSocket is selected.
 
 <Note>
 Agents transact against your **pushed schema**, same as everyone — `ablo.records`
@@ -62,10 +95,9 @@ await ablo.records.update({ id: record.id, data: { status: "done" } });
 
 It exposes `get` / `list` / `create` / `update` / `delete`, plus `commits`
 and `claim`. It does **not** expose stateful-only `local` reads or model
-`onChange` subscriptions. Those need a WebSocket, so with `transport: 'http'`
-they are compile errors. `context().onChange` is separate: while its listener
-is active, it holds one HTTP response open until the context changes or the
-listener stops.
+`onChange` subscriptions. `context().onChange` is separate: it reuses the
+selected WebSocket transport, or holds one POST/SSE response until the context
+changes on the HTTP transport.
 
 ## Managed scoped agents
 

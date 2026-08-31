@@ -56,6 +56,7 @@ import {
   type FunctionalUpdateOptions,
 } from '../../client/resources/functionalUpdate.js';
 import type { HeldClaim, HeldLease } from '../../types/streams.js';
+import type { JsonValue } from '../../types/streams.js';
 import { AbloConnectionError, AbloValidationError } from '../../errors.js';
 import type { ReadDependency } from '../../coordination/schema.js';
 import {
@@ -65,8 +66,22 @@ import {
   prepareReadSet,
   type ReadSetContext,
 } from '../../commit/readSetContext.js';
-import { recordHttpCommitReceipt } from '../../commit/recordRuntime.js';
+import {
+  recordHttpCommitReceipt,
+  recordWebSocketCommitReceipt,
+} from '../../commit/recordRuntime.js';
 import type { EffectiveAuthority } from '../../auth/capability.js';
+import {
+  createWebSocketSession,
+} from '../websocket/session.js';
+import type {
+  AbloWebSocketSession,
+  WebSocketObservedDelta,
+} from '../websocket/sessionContract.js';
+import { subscribeWebSocketReadChanges } from '../websocket/contextSubscription.js';
+import type {
+  CoreSyncEventMap,
+} from '../websocket/transport.js';
 
 export interface AbloHttpClientOptions<S extends SchemaRecord>
   extends HttpClientConfig<S> {
@@ -76,6 +91,16 @@ export interface AbloHttpClientOptions<S extends SchemaRecord>
    * @default 30_000
    */
   readonly timeoutMs?: number;
+  /** Initial area of interest for `transport: 'websocket'`. */
+  readonly syncGroups?: readonly string[];
+  /** Application frame names accepted by `subscribe` on the WebSocket transport. */
+  readonly collaborationEvents?: readonly string[];
+  /** Durable resume position for WebSocket observation. */
+  readonly cursorStore?: import('../../client/contract.js').ObserveCursorStore;
+  readonly cursorKey?: string;
+  readonly reconnectDelay?: number;
+  readonly maxReconnectDelay?: number;
+  readonly connectTimeoutMs?: number;
 }
 
 declare const capturedRowBrand: unique symbol;
@@ -217,6 +242,30 @@ export type AbloHttpClient<S extends SchemaRecord> = {
    * scoped agent key (`rk_`). See {@link CreateSessionParams}.
   */
   readonly sessions: SessionResource<S>;
+};
+
+/** The same typed resource client, with server-pushed capabilities carried by WebSocket. */
+export type AbloWebSocketClient<S extends SchemaRecord> = AbloHttpClient<S> & {
+  observe(options?: { signal?: AbortSignal }): AsyncIterable<WebSocketObservedDelta>;
+  subscribe<K extends keyof CoreSyncEventMap>(
+    event: K,
+    listener: (...args: CoreSyncEventMap[K]) => void,
+  ): () => void;
+  updateSubscription(
+    syncGroups: readonly string[],
+    options?: { timeoutMs?: number },
+  ): Promise<{ syncGroups: string[] }>;
+  readonly presence: {
+    update(input?: {
+      readonly status?: 'online' | 'away' | 'offline';
+      readonly customStatus?: string;
+      readonly timezone?: string;
+      readonly activity?: Readonly<Record<string, JsonValue>>;
+    }): Promise<void>;
+  };
+  readonly collaboration: {
+    send(event: string, payload: Readonly<Record<string, JsonValue>>): Promise<void>;
+  };
 };
 
 /**
@@ -497,8 +546,9 @@ function createHttpModelClient<T, C = T>(
 /** @internal Constructed only through the public `Ablo({ transport: 'http' })` factory. */
 export function createAbloHttpClient<S extends SchemaRecord>(
   options: AbloHttpClientOptions<S>,
-): AbloHttpClient<S> {
+): AbloHttpClient<S> | AbloWebSocketClient<S> {
   const { schema, onCommitReceipt, ...rest } = options;
+  const usesWebSocket = options.transport === 'websocket';
   const readSetContext = createReadSetContext();
   const transport: HttpTransport = createHttpTransport({
     ...rest,
@@ -509,6 +559,21 @@ export function createAbloHttpClient<S extends SchemaRecord>(
       recordHttpCommitReceipt(readSetContext, observation);
       onCommitReceipt?.(observation);
     },
+    ...(usesWebSocket ? {
+      dispatchCommit: async (input) => {
+        const receipt = await (await webSocketSession()).commit(input);
+        recordWebSocketCommitReceipt(readSetContext, {
+          receipt,
+          operations: input.operations,
+          reads: input.reads,
+        });
+        return receipt;
+      },
+      dispatchClaim: async (input) => (await webSocketSession()).claim(input),
+      releaseDispatchedClaim: (input) => {
+        void webSocketSession().then((session) => session.release(input));
+      },
+    } : {}),
   });
   const schemaModels = new Set(Object.keys(schema.models));
   const clientIdentity = {};
@@ -517,6 +582,56 @@ export function createAbloHttpClient<S extends SchemaRecord>(
     string,
     HttpModelClient<Record<string, unknown>, Record<string, unknown>>
   >();
+  let webSocket: AbloWebSocketSession | null = null;
+  let webSocketPromise: Promise<AbloWebSocketSession> | null = null;
+  const webSocketOpen = new AbortController();
+  let disposed = false;
+
+  const webSocketSession = (): Promise<AbloWebSocketSession> => {
+    if (disposed) {
+      return Promise.reject(new AbloConnectionError('This Ablo client is disposed.'));
+    }
+    if (webSocket) return Promise.resolve(webSocket);
+    if (webSocketPromise) return webSocketPromise;
+    webSocketPromise = (async () => {
+      await transport.ready();
+      const session = await createWebSocketSession({
+        baseUrl: rest.baseURL ?? undefined,
+        getAuthToken: async () => (await transport.getAuthToken()) ?? undefined,
+        syncGroups: options.syncGroups,
+        collaborationEvents: options.collaborationEvents,
+        cursorStore: options.cursorStore,
+        cursorKey: options.cursorKey,
+        reconnectDelay: options.reconnectDelay,
+        maxReconnectDelay: options.maxReconnectDelay,
+        connectTimeoutMs: options.connectTimeoutMs,
+      }, webSocketOpen.signal);
+      if (disposed) {
+        await session.close();
+        throw new AbloConnectionError('This Ablo client is disposed.');
+      }
+      webSocket = session;
+      return session;
+    })().finally(() => {
+      webSocketPromise = null;
+    });
+    return webSocketPromise;
+  };
+
+  const ready = async (): Promise<void> => {
+    await transport.ready();
+    if (usesWebSocket) await webSocketSession();
+  };
+
+  const dispose = async (): Promise<void> => {
+    if (disposed) return;
+    disposed = true;
+    webSocketOpen.abort();
+    const opening = webSocketPromise;
+    if (webSocket) await webSocket.close();
+    else await opening?.then((session) => session.close()).catch(() => undefined);
+    await transport.dispose();
+  };
 
   const model = (
     name: string,
@@ -563,11 +678,50 @@ export function createAbloHttpClient<S extends SchemaRecord>(
         return {
           context: readSetContext,
           client: clientIdentity,
-          onChange: transport.onChange,
+          onChange: (reads: readonly ReadDependency[], listener: Parameters<typeof transport.onChange>[1]) =>
+            usesWebSocket
+              ? subscribeWhenConnected(webSocketSession, reads, listener)
+              : transport.onChange(reads, listener),
         };
       }
       if (typeof prop !== 'string') return undefined;
       if (prop === 'commits') return commits;
+      if (prop === 'ready') return ready;
+      if (prop === 'dispose') return dispose;
+      if (usesWebSocket && prop === 'observe') {
+        return async function* (observeOptions?: { signal?: AbortSignal }) {
+          yield* (await webSocketSession()).observe(observeOptions);
+        };
+      }
+      if (usesWebSocket && prop === 'subscribe') {
+        return <K extends keyof CoreSyncEventMap>(
+          event: K,
+          listener: (...args: CoreSyncEventMap[K]) => void,
+        ) => {
+          let stop: (() => void) | undefined;
+          let cancelled = false;
+          void webSocketSession().then((session) => {
+            if (!cancelled) stop = session.subscribe(event, listener);
+          });
+          return () => { cancelled = true; stop?.(); };
+        };
+      }
+      if (usesWebSocket && prop === 'updateSubscription') {
+        return async (groups: readonly string[], subscriptionOptions?: { timeoutMs?: number }) =>
+          (await webSocketSession()).updateSubscription(groups, subscriptionOptions);
+      }
+      if (usesWebSocket && prop === 'presence') {
+        return {
+          update: async (input?: Parameters<AbloWebSocketSession['presence']['update']>[0]) =>
+            (await webSocketSession()).presence.update(input),
+        };
+      }
+      if (usesWebSocket && prop === 'collaboration') {
+        return {
+          send: async (event: string, payload: Readonly<Record<string, JsonValue>>) =>
+            (await webSocketSession()).collaboration.send(event, payload),
+        };
+      }
       // Real protocol members pass through unchanged.
       if (isProtocolMember(prop)) {
         return transport[prop];
@@ -586,5 +740,18 @@ export function createAbloHttpClient<S extends SchemaRecord>(
   // A single boundary cast. `AbloHttpClient<S>` declares only what the model
   // accessor and the passed-through protocol members actually implement, so no
   // method on this type is missing at runtime.
-  return facade as AbloHttpClient<S>;
+  return facade as AbloHttpClient<S> | AbloWebSocketClient<S>;
+}
+
+function subscribeWhenConnected(
+  session: () => Promise<AbloWebSocketSession>,
+  reads: readonly ReadDependency[],
+  listener: Parameters<typeof subscribeWebSocketReadChanges>[2],
+): () => void {
+  let stop: (() => void) | undefined;
+  let cancelled = false;
+  void session().then((connected) => {
+    if (!cancelled) stop = subscribeWebSocketReadChanges(connected, reads, listener);
+  });
+  return () => { cancelled = true; stop?.(); };
 }

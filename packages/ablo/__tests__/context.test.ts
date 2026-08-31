@@ -233,6 +233,105 @@ describe('context()', () => {
     expect(subscriptions).toBe(1);
   });
 
+  it('reuses the selected WebSocket transport for context changes instead of opening SSE', async () => {
+    const originalWebSocket = globalThis.WebSocket;
+    let subscriptionPosts = 0;
+    class TestWebSocket {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      static readonly CLOSED = 3;
+      static instances: TestWebSocket[] = [];
+      readyState = TestWebSocket.CONNECTING;
+      onopen: (() => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      constructor() { TestWebSocket.instances.push(this); }
+      send(): void {}
+      close(): void {
+        this.readyState = TestWebSocket.CLOSED;
+        this.onclose?.({ code: 1000, reason: 'closed' } as CloseEvent);
+      }
+      open(): void { this.readyState = TestWebSocket.OPEN; this.onopen?.(); }
+      receive(frame: unknown): void {
+        this.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent);
+      }
+    }
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: TestWebSocket,
+    });
+    const ablo = Ablo({
+      schema,
+      apiKey: 'rk_context_ws',
+      transport: 'websocket',
+      baseURL: 'https://api.example.test',
+      fetch: (input, init) => {
+        const url = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        if (path.endsWith('/models/context/context-1')) {
+          return Promise.resolve(response(modelReadResponse({
+            model: 'context', id: 'context-1',
+            data: { id: 'context-1', title: 'Current' }, stamp: 17,
+          })));
+        }
+        if (path.endsWith('/auth/identity')) {
+          return Promise.resolve(response({
+            participantKind: 'agent', participantId: 'agent-live',
+            accountScope: 'org-live', projectId: 'project-live', branchId: 'branch-live',
+            branchRoot: false, syncGroups: ['org:org-live'], deliveryPartition: null,
+            authority: {
+              organizationId: 'org-live', projectId: 'project-live', branchId: 'branch-live',
+              syncGroups: ['org:org-live'], operations: [], participantKind: 'agent',
+              participantId: 'agent-live', deliveryPartition: null,
+            },
+            userMeta: {},
+          }));
+        }
+        if (path.endsWith('/v1/subscriptions') && init?.method === 'POST') {
+          subscriptionPosts += 1;
+          return Promise.reject(new Error('SSE must not open while WebSocket is selected'));
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      },
+    });
+    try {
+      const selected = await context({
+        ablo,
+        data: { brief: ablo.context.read({ id: 'context-1' }) },
+      });
+      const opening = ablo.ready();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      TestWebSocket.instances[0]?.open();
+      await opening;
+      await expect(ablo.ready()).resolves.toBeUndefined();
+
+      const changed = new Promise<Error>((resolve) => selected.onChange(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      TestWebSocket.instances[0]?.receive({
+        type: 'delta',
+        payload: {
+          id: 18, actionType: 'U', modelName: 'context', modelId: 'context-1',
+          data: { id: 'context-1', title: 'Changed' }, syncGroups: ['org:org-live'],
+          createdAt: '2026-08-30T12:00:00.000Z',
+        },
+      });
+      await expect(changed).resolves.toMatchObject({ code: 'stale_context' });
+      expect(subscriptionPosts).toBe(0);
+    } finally {
+      await ablo.dispose();
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: originalWebSocket,
+      });
+    }
+  });
+
   it('opens no subscription when the context contains no reads', async () => {
     const ablo = Ablo({
       schema,

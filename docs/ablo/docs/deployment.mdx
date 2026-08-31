@@ -130,6 +130,7 @@ runs. In production that resolves to four rows:
 |---|---|---|
 | Server, worker, agent, cron | `sk_` in `ABLO_API_KEY` | Defaults from the environment, so most code passes nothing. |
 | Serverless function | `sk_` in `ABLO_API_KEY`, with `transport: 'http'` | Stateless request/response; nothing held open across invocations. |
+| Resident agent | restricted `rk_` or agent-scoped credential, with `transport: 'websocket'` | One multiplexed WebSocket per client and Ablo cell; checkpoint durable deltas before acknowledging. |
 | Browser, read-only | root-bound `pk_` | Publishable, safe to ship, and read-only. |
 | Browser, writing as the signed-in user | `authEndpoint` | A route on your backend mints a short-lived `ek_` per user. |
 

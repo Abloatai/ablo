@@ -60,7 +60,6 @@ describe('delta pipeline single-flight drain', () => {
         remove: jest.fn(() => true),
         clear: jest.fn(),
       },
-      getStateFields: () => [],
       isCustomEntity: () => false,
       createCustomEntity: () => null,
       deduplicateDeltas: (deltas) => deltas,

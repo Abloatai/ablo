@@ -218,6 +218,7 @@ publish_release() {
   echo ">>> publish 1/5: validating the prepared state"
   command -v gh >/dev/null 2>&1 || { echo "error: gh not installed" >&2; exit 1; }
   gh auth status >/dev/null 2>&1 || { echo "error: gh not authenticated" >&2; exit 1; }
+  bash "$SCRIPT_DIR/publishing/verify-trusted-publishers.sh"
   git fetch origin main --quiet
   git -C "$MIRROR_DIR" fetch origin main --quiet
 

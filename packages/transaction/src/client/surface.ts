@@ -14,7 +14,7 @@ export type PublicAbloOptions<S extends SchemaRecord = SchemaRecord> = Omit<
   AbloHttpClientOptions<S>,
   'onCommitReceipt' | 'transport'
 > & {
-  readonly transport?: 'http';
+  readonly transport?: 'http' | 'websocket';
 };
 
 export const PUBLIC_ABLO_OPTION_KEYS = [
@@ -36,6 +36,13 @@ export const PUBLIC_ABLO_OPTION_KEYS = [
   'commitOutboxScope',
   'transport',
   'timeoutMs',
+  'syncGroups',
+  'collaborationEvents',
+  'cursorStore',
+  'cursorKey',
+  'reconnectDelay',
+  'maxReconnectDelay',
+  'connectTimeoutMs',
 ] as const;
 
 type Equal<A, B> =

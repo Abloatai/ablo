@@ -20,7 +20,11 @@ import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
 import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
 import { createItemFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
-import { AbloIdempotencyError } from '@abloatai/transaction/errors';
+import {
+  AbloIdempotencyError,
+  AbloStaleContextError,
+  AbloValidationError,
+} from '@abloatai/transaction/errors';
 import type { Logger } from '../../interfaces/index.js';
 
 function spyLogger(): Logger & {
@@ -97,6 +101,46 @@ describe('permanent-error log severity + dedup', () => {
       (a) => typeof a[0] === 'string' && (a[0]).startsWith('Your create to'),
     )).toHaveLength(1);
     expect(callMatching(logger.debug, 'write rejected again')).toBeDefined();
+  });
+
+  it('reports stale context as an expected coordination outcome, not a warning', async () => {
+    ctx.mocks.mutationExecutor.failMethod(
+      'commit',
+      new AbloStaleContextError(
+        'Write rejected: 1 conditional target changed since read. Re-read and regenerate.',
+        { code: 'stale_context', requestId: 'req-stale' },
+      ),
+    );
+
+    const item = createItemFixture({ id: 'item-stale', title: 'local edit' });
+    item.markAsPersisted();
+    item.propertyChanged('title', 'original', 'local edit');
+    const tx = await queue.update(item, userContext, { title: 'local edit' });
+    await waitFor(() => tx.status === 'failed');
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(callMatching(logger.info, 'Your update to')).toEqual([
+      'Your update to "Item" was not saved because it changed elsewhere before this save completed. The local edit was reverted.',
+    ]);
+    expect(callMatching(logger.debug, 'coordination rejection')).toBeDefined();
+  });
+
+  it('keeps unexpected permanent rejections visible as warnings', async () => {
+    ctx.mocks.mutationExecutor.failMethod(
+      'commit',
+      new AbloValidationError('Required title is missing.', {
+        code: 'not_null_violation',
+        requestId: 'req-validation',
+      }),
+    );
+
+    const item = createItemFixture({ id: 'item-invalid', title: 'local edit' });
+    item.markAsPersisted();
+    item.propertyChanged('title', 'original', 'local edit');
+    const tx = await queue.update(item, userContext, { title: 'local edit' });
+    await waitFor(() => tx.status === 'failed');
+
+    expect(callMatching(logger.warn, 'Your update to')).toBeDefined();
   });
 
   it('re-warns a genuine permanent error after a successful write clears the dedup', async () => {

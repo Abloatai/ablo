@@ -72,7 +72,6 @@ function makePipelineCtx(overrides: {
       remove: jest.fn(() => true),
       clear,
     },
-    getStateFields: () => [],
     isCustomEntity: () => false,
     createCustomEntity: () => null,
     deduplicateDeltas: (deltas) => deltas,

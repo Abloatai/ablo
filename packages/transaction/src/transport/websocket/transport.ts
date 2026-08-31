@@ -203,6 +203,7 @@ export interface CoreSyncEventMap {
   presence_update: [PresenceUpdate];
   error: [Error];
   session_error: [Error];
+  protocol_mismatch: [CloseEvent];
   /**
    * The WebSocket `onclose` fired before `onopen` — the handshake itself
    * failed. The browser cannot expose the HTTP status (it shows as code
@@ -996,6 +997,77 @@ export class WsTransport<
         this.logger.debug('WebSocket send failed - offline');
       }
     }
+  }
+
+  /**
+   * Ask the server for every durable delta after the supplied position.
+   *
+   * This is deliberately part of the carrier rather than the reactive
+   * materialiser: browser stores and headless WebSocket clients resume the same
+   * ordered protocol. The owner decides when a received position is durable
+   * enough to acknowledge.
+   */
+  requestSync(position: {
+    readonly cursor?: string | null;
+    readonly lastSyncId: number;
+  }): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      throw this.notConnectedError('sync_request');
+    }
+    const capabilities = Object.entries(this.options.capabilities)
+      .filter(([, enabled]) => enabled)
+      .map(([name]) => name);
+    this.send({
+      type: 'sync_request',
+      payload: {
+        cursor: position.cursor ?? null,
+        lastSyncId: position.lastSyncId,
+        capabilities,
+        protocolVersion: PROTOCOL_VERSION,
+      },
+    });
+  }
+
+  /** Persist the server-side resume position after the caller durably applied it. */
+  acknowledge(lastSyncId: number): void {
+    if (!Number.isSafeInteger(lastSyncId) || lastSyncId < 0) {
+      throw new AbloValidationError('acknowledge requires a non-negative safe integer.', {
+        code: 'invalid_request',
+      });
+    }
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.send({ type: 'ack', payload: { lastSyncId } });
+  }
+
+  /** Announce this participant's current presence on the shared connection. */
+  updatePresence(input: {
+    readonly status?: 'online' | 'away' | 'offline';
+    readonly customStatus?: string;
+    readonly timezone?: string;
+    readonly activity?: Record<string, unknown>;
+  } = {}): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      throw this.notConnectedError('presence_update');
+    }
+    let timezone = input.timezone;
+    if (!timezone) {
+      try {
+        timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch {
+        timezone = 'UTC';
+      }
+    }
+    this.send({
+      type: 'presence_update',
+      payload: {
+        status: input.status ?? 'online',
+        timezone,
+        ...(input.customStatus !== undefined
+          ? { customStatus: input.customStatus }
+          : {}),
+        ...(input.activity !== undefined ? { activity: input.activity } : {}),
+      },
+    });
   }
 
   /**

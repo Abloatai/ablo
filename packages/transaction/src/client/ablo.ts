@@ -23,6 +23,7 @@
 import {
   createAbloHttpClient,
   type AbloHttpClient,
+  type AbloWebSocketClient,
 } from '../transport/http/client.js';
 import type { SchemaRecord } from '../schema/schema.js';
 import type { PublicAbloOptions } from './surface.js';
@@ -34,14 +35,18 @@ import type * as _Http from './resources/httpResources.js';
 /**
  * Create a coordination-layer client in one call.
  *
- * The core carries one transport today — request/response HTTP — so
- * `transport: 'http'` is accepted for symmetry with the reactive package's
- * factory and may be omitted. The duplex transport joins this slot when the
- * socket carve lands (ADR 0016, follow-up 3a).
+ * HTTP is the default. A resident process may select `transport: 'websocket'`
+ * without changing the model, commit, or claim vocabulary.
  */
 export function Ablo<const S extends SchemaRecord>(
+  options: PublicAbloOptions<S> & { readonly transport: 'websocket' },
+): AbloWebSocketClient<S>;
+export function Ablo<const S extends SchemaRecord>(
   options: PublicAbloOptions<S>,
-): AbloHttpClient<S> {
+): AbloHttpClient<S>;
+export function Ablo<const S extends SchemaRecord>(
+  options: PublicAbloOptions<S>,
+): AbloHttpClient<S> | AbloWebSocketClient<S> {
   return createAbloHttpClient(options);
 }
 

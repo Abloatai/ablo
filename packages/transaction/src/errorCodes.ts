@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-08-15';
+export const ERROR_CONTRACT_VERSION = '2026-08-30';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -1237,6 +1237,10 @@ export const ERROR_CODES = {
     503,
     false,
     'The offline grace window expired before this commit could be sent, so it was not applied. Re-apply the change once the connection returns.'
+  ),
+  observation_buffer_overflow: client(
+    'transport',
+    'A WebSocket observer fell behind its bounded in-memory backlog. Restart observation to replay from the last durable checkpoint.'
   ),
   queue_too_deep: wire(
     'transport',

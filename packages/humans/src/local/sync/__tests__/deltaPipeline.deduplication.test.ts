@@ -1,4 +1,4 @@
-import { deduplicateDeltas, type DeltaPipelineContext } from '../deltaPipeline.js';
+import { deduplicateDeltas } from '../deltaPipeline.js';
 import type { SyncDelta } from '../SyncWebSocket.js';
 
 function delta(id: number, modelId: string, actionType: SyncDelta['actionType'] = 'I'): SyncDelta {
@@ -13,18 +13,19 @@ function delta(id: number, modelId: string, actionType: SyncDelta['actionType'] 
   };
 }
 
-const context = {
-  getStateFields: () => ['status'],
-} as DeltaPipelineContext;
-
 describe('delta pipeline deduplication', () => {
-  it('returns an already ordered unique-entity frame without rebuilding it', () => {
+  it('returns an already ordered frame without rebuilding it', () => {
     const frame = [delta(1, 'a'), delta(2, 'b'), delta(3, 'c')];
-    expect(deduplicateDeltas(context, frame)).toBe(frame);
+    expect(deduplicateDeltas(frame)).toBe(frame);
   });
 
-  it('retains the full reconciliation path when an entity repeats', () => {
-    const frame = [delta(3, 'a'), delta(1, 'a'), delta(2, 'b'), delta(4, 'a', 'D')];
-    expect(deduplicateDeltas(context, frame).map(({ id }) => id)).toEqual([2, 4]);
+  it('keeps every ordered change when an entity repeats', () => {
+    const frame = [delta(1, 'a'), delta(2, 'a'), delta(3, 'a', 'D')];
+    expect(deduplicateDeltas(frame)).toBe(frame);
+  });
+
+  it('orders overlap and removes only a repeated sync id', () => {
+    const frame = [delta(3, 'a'), delta(1, 'a'), delta(2, 'b'), delta(3, 'a')];
+    expect(deduplicateDeltas(frame).map(({ id }) => id)).toEqual([1, 2, 3]);
   });
 });

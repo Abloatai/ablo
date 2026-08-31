@@ -871,6 +871,19 @@ function detailsFromBody(body: unknown): Record<string, unknown> | undefined {
   return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
+function detailsFromNestedError(
+  nested: NestedErrorShape | undefined,
+): Record<string, unknown> | undefined {
+  if (!nested) return undefined;
+  const extras = detailsFromBody(nested) ?? {};
+  delete extras.details;
+  const direct = typeof nested.details === 'object' && nested.details !== null
+    ? nested.details as Record<string, unknown>
+    : {};
+  const merged = { ...extras, ...direct };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 export function translateHttpError(
   status: number,
   body: unknown,
@@ -911,6 +924,10 @@ export function translateHttpError(
     typeof body === 'object' && body !== null && 'request_id' in body
       ? (body as { request_id?: unknown }).request_id
       : undefined;
+  const details = {
+    ...(detailsFromBody(body) ?? {}),
+    ...(detailsFromNestedError(nested) ?? {}),
+  };
 
   return errorFromWire(message, {
     code,
@@ -918,7 +935,7 @@ export function translateHttpError(
     requestId: requestId ?? (typeof bodyRequestId === 'string' ? bodyRequestId : undefined),
     requiredCapability,
     claims,
-    details: detailsFromBody(body),
+    details: Object.keys(details).length > 0 ? details : undefined,
   });
 }
 

@@ -1035,6 +1035,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "observation_buffer_overflow": {
+      "category": "transport",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
+    },
     "operational_warning": {
       "category": "server",
       "httpStatus": null,
@@ -1786,6 +1792,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "client",
     },
   },
-  "version": "2026-08-15",
+  "version": "2026-08-30",
 }
 `;

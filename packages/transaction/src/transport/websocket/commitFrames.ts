@@ -37,9 +37,10 @@ export type CommitAck = CanonicalCommitAck;
 export interface CommitFrameOperation {
   readonly type: string;
   readonly model: string;
-  readonly id: string;
-  readonly input?: Record<string, unknown>;
-  readonly transactionId?: string;
+  readonly id: string | null;
+  readonly input?: Record<string, unknown> | null;
+  readonly where?: Record<string, unknown> | null;
+  readonly transactionId?: string | null;
   readonly claimId?: string | null;
   readonly readAt?: number | null;
   readonly fenceToken?: number | null;
@@ -65,6 +66,7 @@ export function buildCommitFrame(
       model: op.model,
       id: op.id,
       input: op.input,
+      where: op.where,
       transactionId: op.transactionId,
       claimId: op.claimId,
       readAt: op.readAt,

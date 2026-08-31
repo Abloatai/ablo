@@ -21,8 +21,9 @@ interface WebSocketCommitObservation {
   readonly operations: readonly {
     readonly type: string;
     readonly model: string;
-    readonly id: string;
-    readonly input?: Record<string, unknown>;
+    readonly id: string | null;
+    readonly input?: Record<string, unknown> | null;
+    readonly where?: Record<string, unknown> | null;
     readonly claimId?: string | null;
     readonly readAt?: number | null;
     readonly fenceToken?: number | null;
@@ -149,6 +150,7 @@ export function recordWebSocketCommitReceipt(
     model: operation.model,
     id: operation.id,
     ...(operation.input ? { data: operation.input } : {}),
+    ...(operation.where ? { where: operation.where } : {}),
     ...(operation.claimId ? { claimId: operation.claimId } : {}),
     ...(typeof operation.readAt === 'number' ? { readAt: operation.readAt } : {}),
     ...(typeof operation.fenceToken === 'number'

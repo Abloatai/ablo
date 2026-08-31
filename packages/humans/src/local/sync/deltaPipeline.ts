@@ -102,7 +102,6 @@ export interface DeltaPipelineContext {
   };
 
   // ── Dynamic-dispatch hooks back into the store (protected override points) ──
-  getStateFields(modelName: string): string[];
   isCustomEntity(modelName: string): boolean;
   createCustomEntity(modelName: string, modelId: string, data: Record<string, unknown>): Model | null;
   deduplicateDeltas(deltas: SyncDelta[]): SyncDelta[];
@@ -159,91 +158,36 @@ export function handleGroupHandlerFailure(
   }
 }
 
-/** Builds a small signature of a delta's state fields, used to detect no-op duplicate deltas. */
-function extractStateSignature(
-  ctx: DeltaPipelineContext,
-  delta: SyncDelta,
-): Record<string, unknown> | null {
-  if (!delta.data || typeof delta.data !== 'object') return null;
+/**
+ * Deduplicate repeated delivery of the same log entry.
+ *
+ * A row may legitimately change several times in one receive frame. Those
+ * changes are ordered facts, even when a small subset of fields (such as
+ * `status`) happens to remain equal. Collapsing by entity or a partial state
+ * signature can therefore discard the newest row image while the cursor still
+ * advances past it. Only an identical positive sync id proves duplicate
+ * delivery; non-positive ids carry no usable log identity and stay untouched.
+ */
+export function deduplicateDeltas(deltas: SyncDelta[]): SyncDelta[] {
+  if (deltas.length < 2 || deltas.some((delta) => delta.id <= 0)) return deltas;
 
-  const data = typeof delta.data === 'string'
-    ? (JSON.parse(delta.data) as Record<string, unknown>)
-    : (delta.data);
-
-  // Generic state fields — subclasses can override getStateFields() for model-specific fields
-  const fieldsToCheck = ctx.getStateFields(delta.modelName);
-  const signature: Record<string, unknown> = {
-    actionType: delta.actionType,
-    modelName: delta.modelName,
-  };
-
-  for (const field of fieldsToCheck) {
-    if (field in data) signature[field] = data[field];
-  }
-
-  return signature;
-}
-
-function isSameState(a: Record<string, unknown> | null, b: Record<string, unknown> | null): boolean {
-  if (!a || !b) return false;
-  const keys = Object.keys(a);
-  if (keys.length !== Object.keys(b).length) return false;
-  return keys.every((k) => a[k] === b[k]);
-}
-
-/** Deduplicate deltas to the same entity — keep meaningful state transitions only */
-export function deduplicateDeltas(ctx: DeltaPipelineContext, deltas: SyncDelta[]): SyncDelta[] {
-  // The dominant live-publication shape is a frame of independent entity
-  // creates. When every entity key occurs once, reconciliation cannot remove
-  // or reorder anything: preserve the already commit-ordered input directly
-  // and avoid allocating a bucket array, state signature, and two sorts per
-  // delta. The first duplicate falls through to the full transition logic.
-  const uniqueEntities = new Set<string>();
-  let hasDuplicateEntity = false;
-  for (const delta of deltas) {
-    const key = `${delta.modelName}:${delta.modelId}`;
-    if (uniqueEntities.has(key)) {
-      hasDuplicateEntity = true;
+  let strictlyOrdered = true;
+  for (let index = 1; index < deltas.length; index += 1) {
+    if (deltas[index - 1]!.id >= deltas[index]!.id) {
+      strictlyOrdered = false;
       break;
     }
-    uniqueEntities.add(key);
   }
-  if (!hasDuplicateEntity) return deltas;
+  if (strictlyOrdered) return deltas;
 
-  const byEntity = new Map<string, SyncDelta[]>();
-  for (const d of deltas) {
-    const key = `${d.modelName}:${d.modelId}`;
-    if (!byEntity.has(key)) byEntity.set(key, []);
-    byEntity.get(key)!.push(d);
-  }
-
-  const result: SyncDelta[] = [];
-  for (const entityDeltas of byEntity.values()) {
-    const sorted = entityDeltas.sort((a, b) => a.id - b.id);
-
-    // DELETE wins — it's the final state
-    const del = sorted.find((d) => d.actionType === 'D');
-    if (del) { result.push(del); continue; }
-
-    // Keep deltas that represent different states
-    const unique: SyncDelta[] = [];
-    let prev: Record<string, unknown> | null = null;
-    for (const d of sorted) {
-      const sig = extractStateSignature(ctx, d);
-      if (!isSameState(prev, sig)) { unique.push(d); prev = sig; }
-    }
-
-    if (unique.length > 0) {
-      result.push(...unique);
-    } else {
-      // `sorted` is never empty (every byEntity bucket gets at least one
-      // delta pushed) — the guard only narrows the indexed access.
-      const last = sorted.at(-1);
-      if (last) result.push(last);
-    }
-  }
-
-  return result.sort((a, b) => a.id - b.id);
+  const seen = new Set<number>();
+  return [...deltas]
+    .sort((a, b) => a.id - b.id)
+    .filter((delta) => {
+      if (seen.has(delta.id)) return false;
+      seen.add(delta.id);
+      return true;
+    });
 }
 
 /**

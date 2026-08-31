@@ -1,6 +1,6 @@
 {
   "name": "@ablo/agent",
-  "version": "0.59.1",
+  "version": "0.59.2",
   "private": true,
   "description": "Internal AI SDK composition and Ablo coordination adapters for the product's agents.",
   "license": "SEE LICENSE IN LICENSE",

@@ -163,11 +163,13 @@ workflow or deployment lanes.
 
 ## transport
 
-The package-root client uses request/response HTTP. `transport: 'http'` is
-accepted but optional.
+The package-root client defaults to request/response HTTP. Select
+`transport: 'websocket'` for a resident agent that needs pushed coordination;
+the model, commit, claim, and context vocabulary stays unchanged.
 
-Live state, presence, and local reads belong to the reactive client described in
-the [React guide](/react), rather than another value on this option.
+Local materialized state and reactive reads still belong to the human client
+described in the [React guide](/react); selecting WebSocket here adds a
+carrier, not the human materializer.
 
 ## timeoutMs
 

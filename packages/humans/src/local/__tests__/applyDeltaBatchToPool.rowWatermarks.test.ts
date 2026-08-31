@@ -78,4 +78,54 @@ describe('SyncClient.applyDeltaBatchToPool — row positions', () => {
 
     expect(pool.watermarks.of(resident)).toBe(50);
   });
+
+  it('re-baselines dirty fields confirmed by an own echo', () => {
+    const { pool, client } = setup();
+    const resident = new ItemModel({ id: 'keep', title: 'before' });
+    resident.markAsPersisted();
+    pool.add(resident, ModelScope.live);
+    pool.get('keep');
+    resident.applyChanges({ title: 'mine' });
+    client.markTransactionPending('tx-own');
+
+    client.applyDeltaBatchToPool(
+      [{
+        action: 'update',
+        modelName: 'Item',
+        modelId: 'keep',
+        data: { id: 'keep', title: 'mine' },
+        syncId: 51,
+        transactionId: 'tx-own',
+      }],
+      identityEnrich,
+    );
+
+    expect(resident.title).toBe('mine');
+    expect(resident.hasChanges).toBe(false);
+  });
+
+  it('keeps a newer local edit dirty when an older own echo arrives', () => {
+    const { pool, client } = setup();
+    const resident = new ItemModel({ id: 'keep', title: 'before' });
+    resident.markAsPersisted();
+    pool.add(resident, ModelScope.live);
+    pool.get('keep');
+    resident.applyChanges({ title: 'newer local edit' });
+    client.markTransactionPending('tx-own');
+
+    client.applyDeltaBatchToPool(
+      [{
+        action: 'update',
+        modelName: 'Item',
+        modelId: 'keep',
+        data: { id: 'keep', title: 'older committed edit' },
+        syncId: 52,
+        transactionId: 'tx-own',
+      }],
+      identityEnrich,
+    );
+
+    expect(resident.title).toBe('newer local edit');
+    expect(resident.getChanges()).toEqual({ title: 'newer local edit' });
+  });
 });

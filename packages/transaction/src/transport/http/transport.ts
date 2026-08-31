@@ -124,6 +124,12 @@ import {
 } from '../../client/resources/modelOperations.js';
 import type { Duration } from '../../utils/duration.js';
 import { claimDescription, partName } from '../../coordination/schema.js';
+import type {
+  ClaimAcquired,
+  ClaimBeginPayload,
+  ClaimGranted,
+  ClaimQueued,
+} from '../../coordination/schema.js';
 import type { BatchFence } from '../../claims/locator.js';
 import {
   subTarget,
@@ -169,6 +175,7 @@ import {
 } from '../../commit/httpRequest.js';
 import { resolveDurableWrites } from '../../commit/durableWrites.js';
 import { createHttpReadOnChange, type HttpReadOnChange } from './subscription.js';
+import type { CommitFrameOperation } from '../websocket/commitFrames.js';
 
 /** @internal Private options for the schema-agnostic HTTP protocol transport. */
 export type HttpTransportOptions = Omit<HttpClientConfig, 'schema'> & {
@@ -191,6 +198,24 @@ export type HttpTransportOptions = Omit<HttpClientConfig, 'schema'> & {
    * @default 30_000
    */
   readonly timeoutMs?: number;
+  /** @internal Routes writes through the selected duplex transport. */
+  readonly dispatchCommit?: ((input: {
+    readonly clientTxId: string;
+    readonly operations: readonly CommitFrameOperation[];
+    readonly reads?: readonly import('../../coordination/schema.js').ReadDependency[] | null;
+  }) => Promise<CommitReceiptWire>) | undefined;
+  /** @internal Routes held-claim acquisition through the shared socket. */
+  readonly dispatchClaim?: ((input: ClaimBeginPayload & {
+    readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+    readonly onQueued?: (event: ClaimQueued) => Error | undefined;
+  }) => Promise<ClaimAcquired | ClaimGranted>) | undefined;
+  /** @internal Releases a socket-acquired claim on that same session. */
+  readonly releaseDispatchedClaim?: ((input: {
+    readonly claimId: string;
+    readonly entityType: string;
+    readonly entityId: string;
+  }) => void) | undefined;
 };
 
 /** @internal Default per-request deadline for the private HTTP transport. */
@@ -981,11 +1006,22 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       path: string;
       body: unknown;
       wait: CommitWait;
+      operations: readonly CommitFrameOperation[];
+      reads?: readonly import('../../coordination/schema.js').ReadDependency[] | null;
     },
     beforeConfirmation?: (response: CommitResponse) => Promise<void>
   ): Promise<CommitResponse> {
     return runInHttpCommitLane(async () => {
       await prepare();
+      if (options.dispatchCommit) {
+        const response = await options.dispatchCommit({
+          clientTxId: input.idempotencyKey,
+          operations: input.operations,
+          ...(input.reads !== undefined ? { reads: input.reads } : {}),
+        });
+        if (response.status === 'confirmed') await beforeConfirmation?.(response);
+        return response;
+      }
       // Startup preparation covers replay. Re-draining here makes every later write wait
       // behind an ambiguous predecessor from this same process.
       const replayed = await replayHttpCommitOutbox();
@@ -1296,6 +1332,17 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         reads: commitOptions.reads,
       };
       const wait = commitOptions.wait ?? 'confirmed';
+      const frameOperations: CommitFrameOperation[] = operations.map((operation) => ({
+        type: operation.action.toUpperCase(),
+        model: operation.model,
+        id: operation.id ?? null,
+        input: operation.data ?? null,
+        where: operation.where ?? null,
+        transactionId: operation.transactionId ?? null,
+        claimId: operation.claimId ?? null,
+        readAt: operation.readAt ?? null,
+        fenceToken: operation.fenceToken ?? null,
+      }));
       let body: CommitResponse;
       try {
         body = await dispatchHttpCommit({
@@ -1304,6 +1351,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           idempotencyKey: clientTxId,
           body: requestBody,
           wait,
+          operations: frameOperations,
+          reads: commitOptions.reads,
         });
       } catch (error) {
         // Coordination collision over HTTP — surface it to observability on the
@@ -1529,6 +1578,17 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     if (action === 'create') requestBody.id = id;
     if (data !== undefined) requestBody.data = data;
 
+    const frameOperation: CommitFrameOperation = {
+      type: action.toUpperCase(),
+      model: modelName,
+      id: action === 'create' ? (id || null) : id,
+      input: data ?? null,
+      transactionId: null,
+      claimId: normalizeClaimId(options?.claimRef) ?? claimHandle?.id ?? null,
+      readAt: readAt ?? null,
+      fenceToken: options?.fenceToken ?? claimHandle?.fenceToken ?? null,
+    };
+
     let body: CommitResponse;
     try {
       body = await dispatchHttpCommit(
@@ -1541,6 +1601,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           // confirmation. Early queued receipts remain available through the
           // lower-level `commits.create` lifecycle surface.
           wait: 'confirmed',
+          operations: [frameOperation],
+          reads: options?.reads,
         },
         beforeConfirmation
       );
@@ -1579,6 +1641,59 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       params: ClaimParams<Fields>
     ): Promise<{ id: string; fenceToken?: number }> => {
       const contention = resolveClaimContentionOptions(params);
+      if (options.dispatchClaim) {
+        const claimId = createClientTxId();
+        let waited = false;
+        try {
+          const grant = await options.dispatchClaim({
+            claimId,
+            entityType: name,
+            entityId: params.id,
+            ...subTarget(params, name),
+            description: claimDescription(params),
+            ...(params.ttl !== undefined ? { estimatedMs: toMs(params.ttl) } : {}),
+            queue: contention.wait,
+            ...(contention.timeoutMs !== undefined ? { timeoutMs: contention.timeoutMs } : {}),
+            ...(contention.signal !== undefined ? { signal: contention.signal } : {}),
+            onQueued: (event) => {
+              waited = true;
+              emitClaimStatus(contention.onStatus, {
+                type: 'queued',
+                claimId: event.claimId,
+                position: event.position,
+                ahead: event.position + 1,
+              });
+              if (
+                contention.maxDepth !== undefined
+                && event.position >= contention.maxDepth
+              ) {
+                return new AbloClaimedError(
+                  `Claim queue for ${name}/${params.id} is ${event.position} deep (max ${contention.maxDepth}).`,
+                  { code: 'queue_too_deep' },
+                );
+              }
+              return undefined;
+            },
+          });
+          emitClaimStatus(contention.onStatus, {
+            type: 'granted',
+            claimId: grant.claimId,
+            waited,
+          });
+          return grant.fenceToken !== undefined
+            ? { id: grant.claimId, fenceToken: grant.fenceToken }
+            : { id: grant.claimId };
+        } catch (error) {
+          const normalized = error instanceof AbloError
+            ? error
+            : new AbloConnectionError(String(error));
+          emitClaimStatus(
+            contention.onStatus,
+            claimAttemptFailure(contention.wait, normalized),
+          );
+          throw error;
+        }
+      }
       // The row is named by the URL, so `target` carries only the narrowing a
       // claim adds below it. Sending it is what makes a field-scoped claim
       // actually field-scoped: the server's conflict rule reads `path`,
@@ -1656,10 +1771,17 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     };
     const releaseClaim = (
       params: ClaimLookupParams<T> | ClaimParams<Fields> | Claim<T>,
-    ): Promise<void> =>
-      requestRaw(claimPath(isClaimHandle(params) ? params.target.id : params.id), {
+      claimId?: string,
+    ): Promise<void> => {
+      const entityId = isClaimHandle(params) ? params.target.id : params.id;
+      if (claimId && options.releaseDispatchedClaim) {
+        options.releaseDispatchedClaim({ claimId, entityType: name, entityId });
+        return Promise.resolve();
+      }
+      return requestRaw(claimPath(entityId), {
         method: 'DELETE',
       }).then(() => undefined);
+    };
 
     // One beat on the held lease. A lapsed lease answers `claim_lost`
     // (409), which the wire error mapping surfaces as AbloClaimedError —
@@ -1763,7 +1885,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
 
       const release = () => {
         stopHeartbeatLoop?.();
-        return releaseClaim(params);
+        return releaseClaim(params, claimId);
       };
       // The handle handed back is a public claim, so its `meta` is the declared
       // shape — the same crossing the two decodes above make, spelled the same
@@ -1904,7 +2026,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           claim: undefined,
         });
       } finally {
-        await releaseClaim({ id }).catch(() => {});
+        await releaseClaim({ id }, claimId).catch(() => {});
       }
     };
 

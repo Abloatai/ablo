@@ -42,3 +42,5 @@ if grep -Eq 'NPM_TOKEN|NODE_AUTH_TOKEN' "$RELEASE_WORKFLOW"; then
   echo "error: release workflow contains a long-lived npm credential" >&2
   exit 1
 fi
+grep -q 'publishing/verify-trusted-publishers.sh' packages/ablo/scripts/release.sh
+bash packages/ablo/scripts/publishing/__tests__/verify-trusted-publishers.test.sh
