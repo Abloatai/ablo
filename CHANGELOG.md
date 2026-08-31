@@ -2,11 +2,40 @@
 
 ## 0.59.2
 
+### Collaborative edits now converge without a refresh
+
+Sequential edits to the same observable model from different clients now stay
+in sync. When one client receives confirmation of its own write, Ablo
+re-baselines the confirmed fields without overwriting newer local work. A later
+move, resize, formatting change, or other update from another client is then
+applied normally and propagated back to every participant instead of leaving
+the original editor on stale state.
+
+Receive-frame coalescing also preserves every distinct ordered transition for a
+row, even when those deltas share the same status metadata. This prevents valid
+same-object updates from disappearing between clients.
+
+### Undo restores the state before an update
+
+Observable model updates now capture their real pre-edit values. Undo therefore
+reverses drag, resize, and formatting changes to the correct previous state, in
+addition to the existing create and delete behavior.
+
+### Resident agents can use one resumable WebSocket session
+
+The package-root client now accepts `transport: 'websocket'` for long-running
+agents. One shared session carries commits, claims and releases, pushed deltas,
+context subscriptions, presence, and collaboration events. Observation resumes
+from a durable checkpoint after reconnect, with explicit overflow and protocol
+version failures instead of silently losing state. HTTP remains the default for
+short-lived request/response agents.
+
 ### Patch Changes
 
-- Updated dependencies [0b2fff7]
-  - @abloatai/humans@0.59.2
-  - @abloatai/transaction@0.59.2
+- Updated `@abloatai/humans` to 0.59.2 for collaborative state convergence and
+  correct update undo capture.
+- Updated `@abloatai/transaction` to 0.59.2 for multiplexed WebSocket agent
+  sessions.
 
 ## 0.59.1
 

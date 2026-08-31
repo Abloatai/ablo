@@ -4,7 +4,14 @@
 
 ### Patch Changes
 
-- 0b2fff7: Keep observable models converged after sequential edits from different clients by re-baselining fields confirmed by a write echo while retaining newer local edits. Capture the real pre-edit values of observable model updates so stream-recorded undo reverses drag, resize, and formatting changes correctly. Preserve every distinct ordered delta in coalesced receive frames instead of dropping same-row transitions that share status fields.
+- Keep observable models converged after sequential edits from different clients
+  by re-baselining fields confirmed by a write echo while retaining newer local
+  edits.
+- Capture the real pre-edit values of observable model updates so
+  stream-recorded undo reverses drag, resize, and formatting changes correctly.
+- Preserve every distinct ordered delta in coalesced receive frames instead of
+  dropping same-row transitions that share status fields.
+- Updated dependencies:
   - @abloatai/transaction@0.59.2
 
 ## 0.59.1

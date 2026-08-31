@@ -2,6 +2,16 @@
 
 ## 0.59.2
 
+### Patch Changes
+
+- Add opt-in multiplexed WebSocket sessions for resident agents. The shared
+  session carries commits, claims and releases, pushed deltas, context
+  subscriptions, presence, and collaboration events while preserving the same
+  public model operations as HTTP.
+- Resume observation from a durable checkpoint after reconnect and report
+  backlog overflow or unsupported protocol versions explicitly instead of
+  silently losing or misinterpreting state.
+
 ## 0.59.1
 
 ### Patch Changes
