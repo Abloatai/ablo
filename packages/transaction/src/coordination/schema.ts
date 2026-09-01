@@ -467,8 +467,8 @@ export type ClaimError = z.infer<typeof claimErrorSchema>;
  * frozen, and an older server may send a word not listed here. This is the
  * reader's side of it: a value that parses becomes the typed reason, and one
  * that does not is simply absent rather than smuggled through as prose.
- * {@link claimExpiredSchema} and {@link claimLostSchema} already spelled their
- * reasons as enums; this brings the refusals into line.
+ * {@link claimLostSchema} already spells its reasons as an enum; this brings
+ * the refusals into line.
  */
 export const claimEventReasonSchema = z.enum([
   'conflict',
@@ -643,17 +643,6 @@ export const claimQueueSchema = z.object({
   queue: z.array(claimQueueEntrySchema),
 });
 export type ClaimQueue = z.infer<typeof claimQueueSchema>;
-
-/**
- * A held claim's TTL lapsed server-side. The claim is already inactive by the
- * time this arrives, so a consumer either re-claims with a fresh credential or
- * accepts the drop; there is nothing to release.
- */
-export const claimExpiredSchema = z.object({
-  claimId: z.string(),
-});
-export type ClaimExpired = z.infer<typeof claimExpiredSchema>;
-
 
 /**
  * The two states a claim can be observed in while it still exists.
@@ -981,20 +970,9 @@ export type ClaimHeartbeatBatchAckPayload = z.infer<
 // ─────────────────────────────────────────────────────────────────────────
 //  Read interest — what a connection receives
 //
-//  Two frames set it, and they differ in exactly one way: whether the
-//  interest is leased.
-//
-//    • `claim`  — a PARTICIPANT claim. Adds a scope under a handle, with a
-//      TTL and an optional capability token, and announces the sender into
-//      that scope's roster. This is the frame `ablo.<model>.join(...)` sends;
-//      `release` drops it. Several may be open on one connection at once.
-//    • `update_subscription` — REPLACES the connection's whole read set. No
-//      handle, no lease, no roster entry.
-//
-//  Both are bounded by the connection credential's grant, and both name their
-//  groups the same way, so both parse their `syncGroups` through the same
-//  element schema. Neither is the row lease — that is `claim_begin`, in the
-//  pessimistic-claims block above, which shares only a word.
+//  `update_subscription` replaces the connection's whole read set. It is
+//  bounded by the connection credential's grant and is not a row lease;
+//  row leases use `claim_begin` in the pessimistic-claims block above.
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1012,67 +990,15 @@ export const MAX_FRAME_SYNC_GROUPS = 200;
  * that does not parse matches nothing, and subscribing to nothing quietly is
  * the failure this element type exists to prevent.
  *
- * Strict because this is untrusted client input, and shared because the two
- * frames below carry the same value: when they disagreed, `claim` accepted a
- * malformed group that `update_subscription` refused, and the connection
- * ended up leased to a scope it could never receive.
+ * Strict because this is untrusted client input.
  */
 const frameSyncGroupsSchema = z
   .array(syncGroupInputSchema)
   .max(MAX_FRAME_SYNC_GROUPS);
 
 /**
- * The `claim` payload a client sends — the frame behind `join`.
- *
- * It opens one participant claim: the connection is added to each named
- * scope's fan-out under `claimId`, announced into its presence roster, and
- * holds that interest until `release`, the TTL lapses, or the socket closes.
- * The handle is client-chosen because the client must be able to `release`
- * the exact claim it opened while others stay open.
- *
- * This shape was, for a long time, written three times — built as a literal in
- * the transport, restated as an interface on the server, and read back through
- * a cast in the frame handler — which is how the frame came to be the only
- * coordination message with no runtime check on the way in.
- */
-export const participantClaimPayloadSchema = z.object({
-  /** Client-chosen handle. Echoed on `claim_ack`; names the claim to `release`. */
-  claimId: z.string().min(1),
-  syncGroups: frameSyncGroupsSchema,
-  /**
-   * A narrower capability to present for this claim than the connection's own.
-   * Absent means the connection's credential governs it.
-   */
-  capabilityToken: z.string().optional(),
-  /**
-   * Crash cleanup, in seconds. The server caps it at the capability's own TTL;
-   * absent means the claim lives until `release` or disconnect.
-   */
-  ttlSeconds: z.number().optional(),
-});
-export type ParticipantClaimPayload = z.infer<
-  typeof participantClaimPayloadSchema
->;
-
-/**
- * The `release` payload — drop one participant claim by its handle.
- *
- * A projection of the claim it releases rather than a second object, so the
- * handle cannot be spelled one way when opened and another when dropped.
- * Idempotent by contract: the server accepts an unknown handle silently, so a
- * client releasing everything at shutdown never has to check what is still open.
- */
-export const participantReleasePayloadSchema =
-  participantClaimPayloadSchema.pick({ claimId: true });
-export type ParticipantReleasePayload = z.infer<
-  typeof participantReleasePayloadSchema
->;
-
-/**
  * The `update_subscription` payload a client sends. It replaces the
- * connection's read interest with the complete set of sync groups — the
- * unleased counterpart to {@link participantClaimPayloadSchema}, with no
- * handle, no TTL, and no roster entry.
+ * connection's read interest with the complete set of sync groups.
  */
 export const updateSubscriptionPayloadSchema = z.object({
   syncGroups: frameSyncGroupsSchema,

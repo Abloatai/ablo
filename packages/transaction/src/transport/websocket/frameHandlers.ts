@@ -46,16 +46,6 @@ export interface PendingCommit {
 }
 
 /**
- * In-flight `claim` request record, keyed by claimId. Resolved when the
- * matching `claim_ack` arrives, or rejected on timeout/disconnect.
- */
-export interface PendingClaim {
-  resolve: (value: { syncGroups: string[]; ttlSeconds?: number }) => void;
-  reject: (err: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-}
-
-/**
  * An in-flight `update_subscription` request awaiting its
  * `subscription_ack`. The wire carries no correlation id, so requests are
  * matched to their acknowledgements in first-in, first-out order, the same
@@ -109,8 +99,6 @@ export interface WsSession {
   observability: SocketObservability;
   /** In-flight commit acks keyed by clientTxId. */
   pendingMutations: Map<string, PendingCommit>;
-  /** In-flight claim acks keyed by claimId. */
-  pendingClaims: Map<string, PendingClaim>;
   /** Removes and returns the oldest in-flight `update_subscription` request. */
   shiftPendingSubscription(): PendingSubscription | undefined;
   /** Connection options subset the handlers write back (acked sync groups). */
@@ -290,84 +278,6 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
   }
 };
 
-/**
- * Handles the acknowledgement of a `claim` request. The frame has the shape
- * `{ type: 'claim_ack', payload: { claimId, success, syncGroups?,
- * ttlSeconds?, error? } }`.
- */
-const handleClaimAck: WsFrameHandler = (session, message) => {
-  const p = (message.payload ?? {}) as Record<string, unknown>;
-  const { claimId, success, syncGroups, ttlSeconds, error } = p;
-  const pending =
-    typeof claimId === 'string'
-      ? session.pendingClaims.get(claimId)
-      : undefined;
-  if (!pending) return;
-  clearTimeout(pending.timeout);
-  // `pending` exists ⇒ claimId was a string key (the guard above).
-  session.pendingClaims.delete(claimId as string);
-  if (success) {
-    pending.resolve({
-      syncGroups: Array.isArray(syncGroups) ? syncGroups : [],
-      ttlSeconds: typeof ttlSeconds === 'number' ? ttlSeconds : undefined,
-    });
-  } else {
-    const err = error as
-      | {
-          code?: unknown;
-          message?: unknown;
-          request_id?: unknown;
-          event_id?: unknown;
-        }
-      | undefined;
-    const code =
-      err?.code && typeof err.code === 'string'
-        ? err.code
-        : 'claim_rejected';
-    const msg =
-      err?.message && typeof err.message === 'string'
-        ? err.message
-        : 'claim rejected by server';
-    const requestId =
-      typeof err?.request_id === 'string' ? err.request_id : undefined;
-    const eventId =
-      typeof err?.event_id === 'string' ? err.event_id : undefined;
-    const details = eventId === undefined ? undefined : { event_id: eventId };
-    // Capability denials get the typed CapabilityError so
-    // callers can read `.requiredCapability` and attenuate-
-    // and-retry the claim with a narrower token.
-    if (
-      code === 'capability_scope_denied' ||
-      code === 'capability_invalid'
-    ) {
-      const rc = (error as { requiredCapability?: unknown } | undefined)
-        ?.requiredCapability;
-      const requiredCapability =
-        rc != null &&
-        typeof rc === 'object' &&
-        typeof (rc as { scope?: unknown }).scope === 'string'
-          ? (rc as RequiredCapability)
-          : undefined;
-      pending.reject(
-        new CapabilityError(code, msg, requiredCapability, {
-          ...(requestId !== undefined ? { requestId } : {}),
-          ...(details !== undefined ? { details } : {}),
-        }),
-      );
-    } else {
-      // Route through the shared factory so a failed claim_ack is a
-      // typed AbloError (registry code → right subclass), symmetric
-      // with the commit `mutation_result` path — never a bare Error.
-      pending.reject(
-        errorFromWire(msg, {
-          code,
-          requestId,
-          details,
-        }),
-      );
-    }
-  }
-};
 
 /**
  * Handles the acknowledgement of an `update_subscription` request. The wire
@@ -448,7 +358,6 @@ export const wsFrameHandlers: Record<string, WsFrameHandler> = {
   bootstrap_response: (session, message) => { session.handleBootstrapResponse(message.payload); },
   presence_update: (session, message) => { session.handlePresenceUpdate(message); },
   mutation_result: handleMutationResult,
-  claim_ack: handleClaimAck,
   subscription_ack: handleSubscriptionAck,
   delta: handleDeltaFrame,
 };
@@ -495,17 +404,6 @@ const validatedFrameHandlers: Record<
     'presence_update',
     (session, payload) => {
       session.handlePresenceUpdate({ payload });
-    },
-  ),
-  claim_expired: validating(
-    WS_INBOUND_FRAMES.claim_expired.payload,
-    'claim_expired',
-    (session, payload) => {
-      // Server-initiated expiry. The claim is already inactive by the time
-      // this arrives, so a consumer either re-claims with a fresh credential
-      // or accepts the drop.
-      recordClaim(tracePorts(session), 'expired', payload);
-      session.emit('claim_expired', payload);
     },
   ),
   claim_rejected: validating(

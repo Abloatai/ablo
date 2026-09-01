@@ -12,8 +12,10 @@ import { schema } from './ablo/schema';
 export const ablo = Ablo({ schema });
 ```
 
-These options configure the stateless HTTP client exported by the package root.
-For a live human interface, use the [React guide](./react.md).
+These options configure the package-root coordination client. API-key clients
+use HTTP; session clients use one multiplexed WebSocket by default. For a live
+human interface with a local graph, use the [React guide](./react.md). See
+[Transports](./transports.md) for the lifecycle and selection rules.
 
 ## schema
 
@@ -30,26 +32,55 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 ```
 
 Use a resolver for credentials that rotate. Return `null` when the login has
-ended; throw when credential resolution failed temporarily. Do not pass both
-`apiKey` and `authEndpoint`.
+ended; throw when credential resolution failed temporarily. Do not combine it
+with another credential option.
 
-## authEndpoint
+## session
 
-A same-origin URL that mints a short-lived credential, or an async credential
-resolver. The client sends a `POST` with cookies included and renews the token
-when needed.
+A scoped session returned by the server-only `Sessions(...).create()` issuer.
+Pass the resource
+directly for bounded work, or pass a provider that re-mints the same logical
+actor for a long-running client:
 
 ```ts
-const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+import Sessions from '@abloatai/ablo/sessions';
+
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_API_KEY });
+const session = await sessions.create({
+  agent: { id: workerId },
+  can: { records: ['read', 'update'] },
+});
+
+const worker = Ablo({ schema, session });
 ```
 
-Use this instead of placing a private API key in browser code.
+Do not extract `session.token` into `apiKey`; the session is the public handoff.
+A provider is cached until its returned session approaches `expiresAt`, so HTTP
+bootstrap and WebSocket connection setup do not mint duplicate credentials.
+
+In a browser, name the application-owned route that mints the signed-in user's
+session. Endpoint tuning belongs inside the same option:
+
+```ts
+const ablo = Ablo({
+  schema,
+  session: {
+    endpoint: '/api/ablo-session',
+    timeoutMs: 10_000,
+    // allowCrossOrigin: true,
+  },
+});
+```
+
+The client sends a cookie-bearing `POST`, validates the response, and renews
+before expiry. Cross-origin minting is off by default and should be enabled only
+after configuring CORS and CSRF protection.
 
 ## authToken
 
 A bearer token the caller already holds. This is mainly for self-hosted or
 custom authentication layers. Hosted applications normally use `apiKey` or
-`authEndpoint`.
+`session`.
 
 ## baseURL
 
@@ -68,7 +99,7 @@ local hosts.
 
 Allows a credential-bearing client to run in a browser. Defaults to `false`.
 
-Private API keys must not ship to browsers. Prefer `authEndpoint`; enable this
+Private API keys must not ship to browsers. Prefer `session.endpoint`; enable this
 option only when the browser receives a narrowly scoped session credential or
 all traffic passes through a controlled server proxy.
 
@@ -76,19 +107,6 @@ all traffic passes through a controlled server proxy.
 
 A custom `fetch` implementation for tests, proxies, or runtimes without the
 standard global implementation.
-
-## authTimeoutMs
-
-The deadline in milliseconds for a request to `authEndpoint`. Defaults to
-`10000`. This is separate from `timeoutMs`, which covers ordinary Ablo API
-requests.
-
-## allowCrossOriginAuthEndpoint
-
-Allows `authEndpoint` to use a different origin. Defaults to `false`.
-
-Keep the default unless the credential-minting service intentionally lives on a
-different trusted origin.
 
 ## bootstrapBaseUrl
 
@@ -108,7 +126,7 @@ const ablo = Ablo({
 ```
 
 Do not use this option to duplicate the credential header; authentication is
-owned by `apiKey`, `authEndpoint`, or `authToken`.
+owned by `session`, `apiKey`, or `authToken`.
 
 ## defaultQuery
 
@@ -160,9 +178,10 @@ workflow or deployment lanes.
 
 ## transport
 
-The package-root client defaults to request/response HTTP. Select
-`transport: 'websocket'` for a resident agent that needs pushed coordination;
-the model, commit, claim, and context vocabulary stays unchanged.
+Transport follows the configured identity. `apiKey` and `authToken` clients use
+request/response HTTP. `session` clients use one reconnecting WebSocket. Pass
+`transport: 'http'` only when bounded work needs a scoped session identity but
+must not hold a socket. The model, commit, claim, and context API stays unchanged.
 
 Local materialized state and reactive reads still belong to the human client
 described in the [React guide](./react.md); selecting WebSocket here adds a
@@ -172,3 +191,35 @@ carrier, not the human materializer.
 
 The deadline in milliseconds for an Ablo HTTP request. Defaults to `30000`. Pass
 `0` only when the surrounding runtime already enforces a deadline.
+
+## groups
+
+The initial groups observed by a WebSocket client. This can narrow what the
+connection follows, but it cannot widen the authority granted by
+`sessions.create({ groups })`.
+
+## collaborationEvents
+
+Application-defined WebSocket event names accepted by `subscribe()`.
+
+## cursorStore
+
+Persistent storage for the WebSocket observation cursor, used to resume after a
+disconnect without replaying already-consumed events.
+
+## cursorKey
+
+The stable name used for the persisted observation cursor. Defaults to
+`default`.
+
+## reconnectDelay
+
+Initial WebSocket reconnect delay in milliseconds.
+
+## maxReconnectDelay
+
+Maximum WebSocket reconnect delay in milliseconds after backoff.
+
+## connectTimeoutMs
+
+The deadline in milliseconds for establishing a WebSocket connection.

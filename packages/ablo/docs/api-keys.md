@@ -28,7 +28,7 @@ and remap them before each command.
 | Prepare a branch once, including CI | expiring `sk_` bound to that branch | `npx ablo dev --no-watch --branch <ref>`; headless CI supplies an `mk_` credential through `ABLO_API_KEY`. |
 | Run the production backend | `sk_` bound to the production root | Store it as the deployment's `ABLO_API_KEY`. |
 | Read in a browser | `pk_` | Publishable, read-only key. |
-| Write in a browser as a user | short-lived `ek_` | Your backend exposes `authEndpoint` and mints it. |
+| Write in a browser as a user | short-lived `ek_` | Your backend exposes a session endpoint and mints it. |
 
 The everyday loop is therefore:
 
@@ -71,16 +71,18 @@ already carries the target.
 
 ## Which credential to pass to the SDK
 
-There's **one field — `apiKey`** — and what you pass depends on **where the code runs**.
-Pick your row:
+There are two ordinary identity inputs: `apiKey` for a key the process owns and
+`session` for a scoped actor. Pick your row:
 
 | Where your code runs | What to pass | Example |
 |---|---|---|
 | **Server / worker / agent** (can hold a secret) | your secret `sk_`: it defaults to `ABLO_API_KEY`, so usually pass **nothing** | `Ablo({ schema })` |
 | **Browser: read-only** | a publishable `pk_` (safe to ship) | `Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY })` |
-| **Browser: writing as the signed-in user** | `authEndpoint`: the route on your own backend that mints a short-lived per-user token | `Ablo({ schema, authEndpoint: '/api/ablo-session' })` |
+| **Browser: writing as the signed-in user** | `session.endpoint`: the route on your own backend that mints a short-lived per-user token | `Ablo({ schema, session: { endpoint: '/api/ablo-session' } })` |
 
-That's the whole story: one knob, filled by audience.
+The names follow ownership: a process owns an API key; an actor runs through a
+session, regardless of whether that session is already minted, renewable, or
+fetched from a browser endpoint.
 
 The `mk_` credential created by `ablo login` is different: it is a CLI
 control-plane credential, not an application API key. It can manage projects
@@ -104,24 +106,28 @@ For an `ek_`, the server mints and the client holds the short-lived result.
 public `pk_` is **read-only** — it can't carry one specific user's write authority. So when
 the browser writes *as the logged-in user*, your backend (which holds the secret `sk_` and
 knows who's signed in) mints a short-lived per-user token with `sessions.create({ user, can })`,
-and the browser's `apiKey` function fetches it. You don't manage refresh — the SDK calls the
+and the browser's `session.endpoint` fetches it. You don't manage refresh — the SDK calls the
 function once before connecting and then keeps the token fresh (re-mint before expiry, and on
 tab-focus / network-online / device-wake). For a read-only app you don't need
 any of this — just the `pk_` above.
 
 Server-side, because `apiKey` defaults to `process.env.ABLO_API_KEY`, most backend and agent
 code passes nothing. The secret `sk_` is **server-only** — never in a
-browser bundle. There is no `getToken` or `as` option — `apiKey` (the key a server holds)
-and `authEndpoint` (the mint route a browser points at) are the two credential
-knobs, and you set exactly one.
+browser bundle. There is no `getToken`, `as`, or separate auth-endpoint option:
+`apiKey` is the key a process owns, while `session` is a minted resource, a
+renewal provider, or `{ endpoint }`. Set exactly one identity input.
 
 ### Minting per-user / agent tokens (server-side, with your `sk_`)
 
+Construct the dedicated issuer with
+`Sessions({ schema, apiKey: process.env.ABLO_API_KEY })` from
+`@abloatai/ablo/sessions`. It is server-only and does not create a participant
+connection.
+
 | Mint | Call | Result |
 |---|---|---|
-| Human end-user session | `await server.sessions.create({ user: { id }, can: { records: ['read'] } })` | `ek_` (scoped to `can`) |
-| Ready agent client | `await server.agents.create({ can: { records: ['update'] } })` | Auto-refreshing client scoped to `can` |
-| Raw delegated agent token | `await server.sessions.create({ agent: { id }, can: { records: ['update'] } })` | `rk_` for another runtime |
+| Human end-user session | `await sessions.create({ user: { id }, can: { records: ['read'] } })` | `ek_` (scoped to `can`) |
+| Agent session | `await sessions.create({ agent: { id }, can: { records: ['update'] } })` | Scoped `rk_` for the agent runtime |
 
 The principal kind comes from *which* shape you pass — `{ user, can }` → `user`, `{ agent, can }` → `agent`.
 

@@ -32,6 +32,11 @@ import type { CommitOutboxScope } from '@abloatai/transaction/commit';
  */
 export type { CredentialProvider } from '@abloatai/transaction/auth/apiKey';
 import type { CredentialProvider } from '@abloatai/transaction/auth/apiKey';
+import type {
+  SessionCredential,
+  SessionEndpoint,
+  SessionProvider,
+} from '@abloatai/transaction/sessions';
 import type { AbloPlugin } from '../../plugin.js';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 
@@ -74,18 +79,20 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    *    `ABLO_API_KEY` environment variable, so you usually pass nothing. A
    *    long-lived key needs no refresh; the client uses it as-is.
    *
-   *  - **An async resolver** `() => Promise<string | null>` — the escape hatch for
-   *    when the exchange needs custom headers, a request body, or a non-HTTP mint
-   *    (vault rotation, a cloud token service, an existing auth session). It uses
-   *    the same renewal machinery as the endpoint form.
-   *
-   * The endpoint and resolver forms share one contract: return a token; return
-   * `null` when the login itself is gone (terminal — the client signs out and
-   * fails `ready()` with `session_expired`); or throw on a transient failure, which
-   * backs off and retries without signing out. The endpoint form maps HTTP onto
-   * this for you: only a structured `401 session_expired` means signed out.
+   *  - **An async resolver** for advanced process-owned key rotation, such as a
+   *    vault or workload-identity exchange. Scoped actor renewal belongs in
+   *    `session` instead.
    */
   apiKey?: string | CredentialProvider | null | undefined;
+
+  /**
+   * Scoped actor identity. Pass a session returned by `sessions.create()` for
+   * bounded work, a provider that re-mints it for a long-lived client, or
+   * `{ endpoint: '/api/ablo-session' }` in a browser. Endpoint responses use
+   * the canonical credential protocol; only a structured `401
+   * session_expired` ends the underlying login.
+   */
+  session?: SessionCredential | SessionProvider | SessionEndpoint | null | undefined;
 
   /**
    * Pins this client to one Ablo project. During `ready()` the server resolves
@@ -104,33 +111,6 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * environment could reach this process.
    */
   branchId?: string | null | undefined;
-
-  /**
-   * The session-mint endpoint — the browser-side auth field, and the named
-   * endpoint for the route that mints the signed-in user's short-lived token:
-   *
-   * ```ts
-   * const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
-   * ```
-   *
-   * The client owns the whole exchange: it POSTs the route (same-origin, cookies
-   * included), validates the canonical auth response contract, keeps it fresh
-   * ahead of expiry, and re-mints when the server reports the token stale. Only
-   * a structured `401 session_expired` response means signed out. It also
-   * accepts an async resolver `() => Promise<string | null>` when the exchange
-   * needs custom headers or a body — the same contract as the resolver form of
-   * `apiKey`.
-   *
-   * Mutually exclusive with `apiKey`: a server holds a key, a browser holds a mint
-   * route, and passing both is a validation error.
-   */
-  authEndpoint?: string | CredentialProvider | null | undefined;
-
-  /** Timeout for a session-mint request. @default 10000 */
-  authTimeoutMs?: number | undefined;
-
-  /** Explicit opt-in for a cross-origin session-mint endpoint. */
-  allowCrossOriginAuthEndpoint?: boolean | undefined;
 
   /**
    * Local persistence mode. Pass `indexeddb` only when you want offline
@@ -264,14 +244,11 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    */
   apiKey?: string | CredentialProvider | null | undefined;
 
+  /** A scoped session, or a provider that re-mints it for a long-lived client. */
+  session?: SessionCredential | SessionProvider | SessionEndpoint | null | undefined;
+
   /** Expected project assertion; see {@link AbloOptions.projectId}. */
   projectId?: string | null | undefined;
-
-  /**
-   * Session-mint endpoint (string or async resolver) — see
-   * {@link AbloOptions.authEndpoint}. Mutually exclusive with `apiKey`.
-   */
-  authEndpoint?: string | CredentialProvider | null | undefined;
 
   /**
    * A bearer auth token, sent as `Authorization: Bearer <token>` on every request.

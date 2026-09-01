@@ -6,9 +6,9 @@ import {
 import { generateSyncConfig } from '../init/generators';
 
 describe('auth scaffold', () => {
-  it('configures the browser with the dedicated auth endpoint', () => {
+  it('configures the browser with the dedicated session endpoint', () => {
     const source = generateProviders();
-    expect(source).toContain("authEndpoint: '/api/ablo-session'");
+    expect(source).toContain("session: { endpoint: '/api/ablo-session' }");
     expect(source).not.toContain('apiKey:');
   });
 
@@ -19,19 +19,18 @@ describe('auth scaffold', () => {
     expect(generateSyncConfig('apikey')).not.toContain("import 'server-only';");
   });
 
-  it('generates one schema-backed, same-origin, no-store protocol', () => {
+  it('generates one authenticated session handler with server-derived access', () => {
     const source = generateSessionRoute();
-    expect(source).toContain('credentialEndpointSuccessSchema.parse');
-    expect(source).toContain('credentialEndpointErrorSchema.parse');
-    expect(source).toContain("'Cache-Control': 'no-store'");
-    expect(source).toContain("code: 'session_expired'");
-    expect(source).toContain("credentialKind: 'ephemeral'");
+    expect(source).toContain('sessions.handler({');
+    expect(source).toContain('async authenticate()');
+    expect(source).toContain('async grant({ principal: user })');
+    expect(source).toContain('auth.api.getSession');
     expect(source).toContain("can: { records: ['read', 'create', 'update'] }");
-    expect(source).toContain('isSameOrigin(request)');
     expect(source).toContain('authorizeActiveWorkspace(user.id)');
-    expect(source).toContain("code: 'policy_denied'");
-    expect(source).toContain('syncGroups: authorizedScope.syncGroups');
+    expect(source).toContain('groups: authorizedScope.groups');
     expect(source).toContain('Never take');
     expect(source).toContain('return null;');
+    expect(source).not.toContain('credentialEndpointSuccessSchema');
+    expect(source).not.toContain('isSameOrigin');
   });
 });

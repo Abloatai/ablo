@@ -36,7 +36,7 @@ import { schema } from '@/ablo/schema';
 // from your own server route (see Identity below).
 export const ablo = Ablo({
   schema,
-  authEndpoint: '/api/ablo-session',
+  session: { endpoint: '/api/ablo-session' },
 });
 
 // The typed binding: capture the schema once, and every component imports
@@ -191,52 +191,11 @@ imperative work after an event or effect.
 
 See [API reference](/api) for the full options surface.
 
-## useJoin: scoped presence + read interest
-
-`useJoin` is the React form of `ablo.<model>.join`. It joins multiplayer for a
-scope on the engine's existing socket (one TCP connection, N logical
-sub-syncgroup participants) and returns the reactive participant facade. Use it
-when a mount should both *see* who else is on an entity and, optionally, declare
-write interest in it.
-
-```tsx
-'use client';
-
-import { useJoin } from '@abloatai/ablo/react';
-
-export function CollectionPresence({ workspaceId }: { workspaceId: string }) {
-  const { peers, claims, status } = useJoin({
-    scope: { entryCollections: workspaceId },
-    claim: true,   // I intend to write — pin the scope + let peers observe the claim
-    hydrate: true, // backfill the workspace's current rows if not already loaded
-  });
-
-  if (status !== 'joined') return <span>connecting…</span>;
-  return <span>{peers.length} other{peers.length === 1 ? '' : 's'} here</span>;
-}
-```
-
-Options (`UseJoinOptions`):
-
-| Option | Default | Effect |
-| --- | --- | --- |
-| `scope` |: | Model-form scope (`{ entryCollections: id }`), resolved through the schema. Omit for engine-wide. |
-| `claim` | `false` | Acquire a write-claim on the scope (sent so peers observe it; pins the scope so it never warm-drops while held). A viewer is not a claimant: leave `false` for read-only. |
-| `hydrate` | `false` | Backfill the scope's current rows into the pool once on enter, then keep them fresh via the live tail. Set `true` for deep-linked / never-opened entities. Single-flight; soft-fails. |
-| `ttlSeconds` |: | Lease TTL for the scope claim. |
-| `paused` | `false` | Tear down and don't re-join while true. |
-
-Returns (`UseJoinReturn`): `{ participant, peers, claims, status, error }`.
-`peers` is everyone else on the scope's sync groups; `claims` is their active
-write-claims; `status` is the join lifecycle. Auto-cleans up on unmount or when
-`paused` flips true.
-
 ## usePeers: read-only presence
 
-`usePeers` is a *pure reader* of the presence stream already flowing on the
-connection. Unlike `useJoin`, it does **not** enter/leave a scope (no
-`update_subscription`, no warm-TTL churn) — so reading it never changes what the
-connection is subscribed to.
+`usePeers` reads the presence stream already flowing for the client's scoped
+groups. It does not create a second membership or lease and does not change the
+connection's subscriptions.
 
 ```tsx
 'use client';
@@ -250,15 +209,12 @@ export function CursorBroadcaster({ workspaceId }: { workspaceId: string }) {
 }
 ```
 
-Pass `scope` to narrow to a sync group's peers, or omit it for everyone on the
-engine's groups. Returns `ReadonlyArray<Peer>`, where each `Peer` carries
+Pass a schema-shaped group scope to filter the visible peers, or omit it for
+everyone on the client's groups. Returns `ReadonlyArray<Peer>`, where each `Peer` carries
 `participantKind` (`'user' | 'agent' | 'system'`), `participantId`, optional
 `label`, `syncGroups`, `activity`, `lastActive`, and optional `activeClaims`.
-
-Reach for `usePeers` (not a second `useJoin`) when some **other** mount already
-owns the scope's read interest — scope `leave` is not reference-counted, so a
-second `useJoin` on the same scope would warm-drop the owner's subscription on
-unmount.
+Use `ablo.<model>.claim` when the caller needs exclusion; reading presence does
+not claim anything.
 
 ## Next.js
 

@@ -225,7 +225,7 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
       const stale = jsx.getAttributes().some((a) =>
         Node.isJsxAttribute(a) && ['schema', 'teamIds', 'authEndpoint', 'scope', 'apiKey'].includes(a.getNameNode().getText()),
       );
-      if (stale) flag(jsx, '<AbloProvider> props', 'AbloProvider takes only `client` (+ userId/fallback/onError). Build `const ablo = Ablo({ schema, authEndpoint })` and pass `client={ablo}`.');
+      if (stale) flag(jsx, '<AbloProvider> props', 'AbloProvider takes only `client` (+ userId/fallback/onError). Build `const ablo = Ablo({ schema, session: { endpoint } })` and pass `client={ablo}`.');
     }
   }
 

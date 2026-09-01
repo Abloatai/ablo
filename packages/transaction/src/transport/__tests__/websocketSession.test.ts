@@ -2,6 +2,7 @@ import { createWebSocketSession } from '../websocket/session.js';
 import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, z } from '../../schema/index.js';
 import { PROTOCOL_VERSION } from '../../wire/protocolVersion.js';
+import type { CredentialProviderResult } from '../../auth/credentialResult.js';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 const NOW = '2026-08-30T12:00:00.000Z';
@@ -85,6 +86,18 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
+function access(
+  credential: CredentialProviderResult | (() => CredentialProviderResult | Promise<CredentialProviderResult>),
+  renewable = false,
+) {
+  return {
+    renewable,
+    credential: () => Promise.resolve(
+      typeof credential === 'function' ? credential() : credential,
+    ),
+  };
+}
+
 async function waitFor(assertion: () => void, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -119,12 +132,15 @@ describe('agent WebSocket transport', () => {
     jest.useRealTimers();
   });
 
-  it('selects WebSocket on the existing Ablo factory and keeps commit and claim on one socket', async () => {
+  it('defaults a session client to one WebSocket for commits and claims', async () => {
     const schema = defineSchema({ items: model({ done: z.boolean() }) });
     const client = Ablo({
       schema,
-      transport: 'websocket',
-      apiKey: 'rk_agent_1',
+      session: {
+        object: 'session',
+        token: 'rk_agent_1',
+        expiresAt: '2030-08-30T12:00:00.000Z',
+      },
       baseURL: 'https://cell.example.test',
       fetch: () => Promise.resolve(new Response(JSON.stringify({
         participantKind: 'agent',
@@ -194,10 +210,41 @@ describe('agent WebSocket transport', () => {
     await client.dispose();
   });
 
+  it('shares one renewable session across HTTP bootstrap and WebSocket setup', async () => {
+    const schema = defineSchema({ items: model({ done: z.boolean() }) });
+    const provideSession = jest.fn(async () => ({
+      object: 'session' as const,
+      token: 'rk_agent_renewable',
+      expiresAt: '2030-08-30T12:00:00.000Z',
+    }));
+    const client = Ablo({
+      schema,
+      session: provideSession,
+      groups: ['org:org-1'],
+      baseURL: 'https://cell.example.test',
+      fetch: async (_input, init) => {
+        expect(new Headers(init?.headers).get('Authorization')).toBe(
+          'Bearer rk_agent_renewable',
+        );
+        return jsonResponse(IDENTITY);
+      },
+    });
+
+    const opening = client.ready();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    expect(socket.protocols).toContain('ablo.bearer.rk_agent_renewable');
+    socket.open();
+    await opening;
+
+    expect(provideSession).toHaveBeenCalledTimes(1);
+    await client.dispose();
+  });
+
   it('opens one authenticated socket and multiplexes commits, row claims, and subscriptions', async () => {
     const opening = createWebSocketSession({
       baseUrl: 'https://cell.example.test',
-      getAuthToken: () => 'rk_agent_1',
+      access: access('rk_agent_1'),
       syncGroups: ['org:org-1'],
     });
     await flush();
@@ -319,8 +366,11 @@ describe('agent WebSocket transport', () => {
 
     const websocket = Ablo({
       schema,
-      transport: 'websocket',
-      apiKey: 'rk_agent_1',
+      session: {
+        object: 'session',
+        token: 'rk_agent_1',
+        expiresAt: '2030-08-30T12:00:00.000Z',
+      },
       baseURL: 'https://cell.example.test',
       fetch: () => Promise.resolve(jsonResponse(IDENTITY)),
     });
@@ -383,7 +433,7 @@ describe('agent WebSocket transport', () => {
   it('retains nothing while idle and catches up from the durable position when observation starts', async () => {
     const saved: string[] = [];
     const opening = createWebSocketSession({
-      getAuthToken: () => 'rk_agent_1',
+      access: access('rk_agent_1'),
       reconnectDelay: 0,
       maxReconnectDelay: 0,
       cursorStore: {
@@ -434,7 +484,7 @@ describe('agent WebSocket transport', () => {
   it('retries durable persistence when checkpointing fails and acknowledges only after success', async () => {
     let saves = 0;
     const opening = createWebSocketSession({
-      getAuthToken: () => 'rk_agent_1',
+      access: access('rk_agent_1'),
       reconnectDelay: 0,
       maxReconnectDelay: 0,
       cursorStore: {
@@ -481,7 +531,7 @@ describe('agent WebSocket transport', () => {
   });
 
   it('fails observation at a bounded backlog and resumes from the durable cursor', async () => {
-    const opening = createWebSocketSession({ getAuthToken: () => 'rk_agent_1' });
+    const opening = createWebSocketSession({ access: access('rk_agent_1') });
     await flush();
     const socket = FakeWebSocket.instances[0]!;
     socket.open();
@@ -506,7 +556,7 @@ describe('agent WebSocket transport', () => {
   it('refreshes an expired credential before reconnecting', async () => {
     let token = 'rk_old';
     const opening = createWebSocketSession({
-      getAuthToken: () => token,
+      access: access(() => token, true),
       reconnectDelay: 0,
       maxReconnectDelay: 0,
     });
@@ -516,17 +566,134 @@ describe('agent WebSocket transport', () => {
 
     token = 'rk_new';
     FakeWebSocket.instances[0]!.serverClose(4001, 'credential_expired');
-    await flush();
-    expect(FakeWebSocket.instances).toHaveLength(2);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
     expect(FakeWebSocket.instances[1]!.protocols).toContain('ablo.bearer.rk_new');
     FakeWebSocket.instances[1]!.open();
+    await session.close();
+  });
+
+  it('keeps an established session reconnecting after a replacement socket fails its handshake', async () => {
+    const opening = createWebSocketSession({
+      access: access('rk_agent_1'),
+      reconnectDelay: 0,
+      maxReconnectDelay: 0,
+    });
+    await flush();
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    const session = await opening;
+
+    first.serverClose(1006, 'network_lost');
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    FakeWebSocket.instances[1]!.serverClose(1006, 'replacement_handshake_failed');
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(3));
+
+    const third = FakeWebSocket.instances[2]!;
+    third.open();
+    await expect(session.ready()).resolves.toBeUndefined();
+    await session.close();
+  });
+
+  it('keeps durable observation alive across renewable credential expiry', async () => {
+    let token = 'rk_old';
+    const opening = createWebSocketSession({
+      access: access(() => token, true),
+      reconnectDelay: 0,
+      maxReconnectDelay: 0,
+    });
+    await flush();
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    const session = await opening;
+    const iterator = session.observe()[Symbol.asyncIterator]();
+    const next = iterator.next();
+    await flush();
+
+    token = 'rk_new';
+    first.serverClose(4001, 'credential_expired');
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const renewed = FakeWebSocket.instances[1]!;
+    expect(renewed.protocols).toContain('ablo.bearer.rk_new');
+    renewed.open();
+    renewed.receive({
+      type: 'delta',
+      payload: {
+        id: 1, actionType: 'C', modelName: 'items', modelId: 'item-renewed',
+        data: { id: 'item-renewed', done: false },
+        syncGroups: ['item:item-renewed'], createdAt: NOW,
+      },
+    });
+
+    await expect(next).resolves.toMatchObject({ value: { id: 1, modelId: 'item-renewed' } });
+    await iterator.return?.();
+    await session.close();
+  });
+
+  it('pre-rolls a renewable headless session before its credential expires', async () => {
+    jest.useFakeTimers();
+    const getCredential = jest.fn(async () => getCredential.mock.calls.length === 1
+      ? {
+          object: 'session' as const,
+          token: 'rk_short_lived',
+          expiresAt: new Date(Date.now() + 45_000).toISOString(),
+        }
+      : {
+          object: 'session' as const,
+          token: 'rk_prerolled',
+          expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+        });
+    const opening = createWebSocketSession({
+      access: access(getCredential, true),
+      reconnectDelay: 0,
+      maxReconnectDelay: 0,
+    });
+    await flush();
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    const session = await opening;
+
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(getCredential).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    first.serverClose(4001, 'credential_expired');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[1]!.protocols).toContain('ablo.bearer.rk_prerolled');
+    FakeWebSocket.instances[1]!.open();
+    await session.close();
+  });
+
+  it('treats expiry of a static session as terminal', async () => {
+    const opening = createWebSocketSession({ access: access('rk_static') });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    const session = await opening;
+    const iterator = session.observe()[Symbol.asyncIterator]();
+    const next = iterator.next();
+    await flush();
+
+    socket.serverClose(4001, 'credential_expired');
+    await expect(next).rejects.toMatchObject({ name: 'AbloSessionError' });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await session.close();
+  });
+
+  it('derives browser versus agent connection kind from the session credential', async () => {
+    const opening = createWebSocketSession({ access: access('ek_user_1') });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    expect(new URL(socket.url).searchParams.has('kind')).toBe(false);
+    socket.open();
+    const session = await opening;
     await session.close();
   });
 
   it('resumes from the persisted position, deduplicates replay, and never retries an ambiguous commit implicitly', async () => {
     const saved: string[] = [];
     const opening = createWebSocketSession({
-      getAuthToken: () => 'rk_agent_1',
+      access: access('rk_agent_1'),
       reconnectDelay: 0,
       maxReconnectDelay: 0,
       cursorStore: {
@@ -611,8 +778,11 @@ describe('agent WebSocket transport', () => {
     const schema = defineSchema({ items: model({ done: z.boolean() }) });
     const client = Ablo({
       schema,
-      transport: 'websocket',
-      apiKey: 'rk_agent_1',
+      session: {
+        object: 'session',
+        token: 'rk_agent_1',
+        expiresAt: '2030-08-30T12:00:00.000Z',
+      },
       baseURL: 'https://cell.example.test',
       fetch: () => Promise.resolve(new Response(JSON.stringify({
         participantKind: 'agent', participantId: 'agent-1', accountScope: 'org-1',
@@ -629,7 +799,7 @@ describe('agent WebSocket transport', () => {
   });
 
   it('rejects an incompatible protocol version explicitly', async () => {
-    const opening = createWebSocketSession({ getAuthToken: () => 'rk_agent_1' });
+    const opening = createWebSocketSession({ access: access('rk_agent_1') });
     await flush();
     FakeWebSocket.instances[0]!.serverClose(4010, 'protocol_version_unsupported');
     await expect(opening).rejects.toMatchObject({ code: 'protocol_version_unsupported' });

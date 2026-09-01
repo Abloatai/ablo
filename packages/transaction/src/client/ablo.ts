@@ -1,17 +1,16 @@
 /**
  * `Ablo` — the entry point to the coordination layer.
  *
- * The factory constructs the stateless client: typed model resources, commits,
- * claims, and session minting over request/response HTTP. It holds no socket,
- * no store, and no local copy of anything — the bearer credential is the
- * identity and the server resolves it on every request. This is the client a
- * server-side actor installs: an agent, a worker, a cron job, a route handler.
+ * The factory constructs the headless client: typed model resources, commits,
+ * and claims. API-key clients use request/response HTTP.
+ * Session clients use one reconnecting WebSocket by default; the session is
+ * the scoped identity and outlives any individual socket connection.
  *
  * ```ts
  * import { Ablo } from '@abloatai/ablo';
  * import { schema } from '../schema';
  *
- * const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: 'http' });
+ * const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
  * await ablo.items.update({ id: itemId, data: { status: 'done' } });
  * ```
  *
@@ -35,11 +34,17 @@ import type * as _Http from './resources/httpResources.js';
 /**
  * Create a coordination-layer client in one call.
  *
- * HTTP is the default. A resident process may select `transport: 'websocket'`
- * without changing the model, commit, or claim vocabulary.
+ * Transport follows identity by default: API keys use HTTP and sessions use a
+ * reconnecting WebSocket without changing the model, commit, or claim API.
  */
 export function Ablo<const S extends SchemaRecord>(
   options: PublicAbloOptions<S> & { readonly transport: 'websocket' },
+): AbloWebSocketClient<S>;
+export function Ablo<const S extends SchemaRecord>(
+  options: PublicAbloOptions<S> & {
+    readonly session: NonNullable<PublicAbloOptions<S>['session']>;
+    readonly transport?: undefined;
+  },
 ): AbloWebSocketClient<S>;
 export function Ablo<const S extends SchemaRecord>(
   options: PublicAbloOptions<S>,
@@ -51,10 +56,10 @@ export function Ablo<const S extends SchemaRecord>(
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  Ablo namespace — type access via namespace dots for stateless callers
+//  Ablo namespace — type access via namespace dots for headless callers
 // ─────────────────────────────────────────────────────────────────────
 //
-// The stateless subset of the type namespace the reactive package hangs off
+// The headless subset of the type namespace the reactive package hangs off
 // its own `Ablo` export: every entry a consumer of THIS client would write
 // out (`Ablo.Activity`, `Ablo.Commit.Receipt`, and so on), and nothing that
 // needs a store or a socket behind it. The

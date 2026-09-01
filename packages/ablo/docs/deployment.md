@@ -120,16 +120,17 @@ is genuinely unavailable.
 
 ## 2. The credential each runtime holds
 
-There is one field, `apiKey`, and what goes in it follows from where the code
-runs. In production that resolves to four rows:
+Credential configuration follows the runtime. Long-lived root keys use
+`apiKey`; scoped actors use `session`; browser login exchange uses
+`session.endpoint`:
 
 | Runtime | Credential | Notes |
 |---|---|---|
 | Server, worker, agent, cron | `sk_` in `ABLO_API_KEY` | Defaults from the environment, so most code passes nothing. |
-| Serverless function | `sk_` in `ABLO_API_KEY`, with `transport: 'http'` | Stateless request/response; nothing held open across invocations. |
-| Resident agent | restricted `rk_` or agent-scoped credential, with `transport: 'websocket'` | One multiplexed WebSocket per client and Ablo cell; checkpoint durable deltas before acknowledging. |
+| Serverless function | `sk_` in `ABLO_API_KEY` | Stateless request/response; nothing held open across invocations. |
+| Long-running agent | `session: () => sessions.create(...)` | One renewable identity and one multiplexed WebSocket per client and Ablo cell; checkpoint durable deltas before acknowledging. |
 | Browser, read-only | root-bound `pk_` | Publishable, safe to ship, and read-only. |
-| Browser, writing as the signed-in user | `authEndpoint` | A route on your backend mints a short-lived `ek_` per user. |
+| Browser, writing as the signed-in user | `session: { endpoint }` | A route on your backend mints a short-lived `ek_` per user. |
 
 [API Keys](./api-keys.md) covers the model; [Sessions](./sessions.md) covers
 minting. Two things bite specifically at deploy time.
@@ -284,7 +285,7 @@ and what each promises.
    browser bundle.
 3. `ablo plan` reviewed, followed by fingerprint-gated `ablo push --yes`.
 4. `ablo status --json` gating the deploy on an empty `blockers` array.
-5. Browser clients on a root-bound `pk_` or an `authEndpoint`, not a secret key.
+5. Browser clients on a root-bound `pk_` or `session.endpoint`, not a secret key.
 6. Webhook endpoints registered at their deployed URLs, with the signing secret
    in your environment.
 

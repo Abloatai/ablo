@@ -86,6 +86,15 @@ describe('SyncClient no-op UPDATE guard', () => {
     expect(pendingCount(client)).toBe(1);
   });
 
+  it('enqueues explicit guarded changes even when the live model already matches', () => {
+    const layer = createEntryLayerFixture({ id: 'layer-noop-guarded', entryId: 'entry-1' });
+    layer.clearChanges();
+
+    client.update(layer, undefined, { content: 'same-value-requested-by-caller' });
+
+    expect(pendingCount(client)).toBe(1);
+  });
+
   it('a non-Model object (hasChanges undefined) is NOT dropped — safe fallthrough', () => {
     // `rowAsModel` only casts, so a plain object can reach `update`. The guard
     // uses `=== false`, so `undefined` falls through to the normal enqueue path

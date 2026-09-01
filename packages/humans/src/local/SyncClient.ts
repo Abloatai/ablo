@@ -935,7 +935,8 @@ export class SyncClient extends EventEmitter {
     model: Model,
     poolAction: () => void,
     writeOptions?: WriteOptions,
-  ): void {
+    capturedChangesOverride?: Record<string, unknown>,
+  ): Promise<void> | undefined {
     // No-op UPDATE guard (O(1)). An update with no dirty fields would travel
     // to the server, get dropped by `coalesceOperations` Rule 4 (empty input),
     // and — if it was the only op — come back as `lastSyncId: 0`. That trips
@@ -949,24 +950,32 @@ export class SyncClient extends EventEmitter {
     // is false → we fall through to the normal path rather than risk dropping a
     // real write. Only a genuine Model with an empty dirty-set is skipped.
     const hasChanges: unknown = model.hasChanges;
-    if (type === 'update' && hasChanges === false) {
-      return;
+    if (
+      type === 'update' &&
+      hasChanges === false &&
+      capturedChangesOverride === undefined
+    ) {
+      return Promise.resolve();
     }
 
     // Capture changes before the pool action runs. Pool operations —
     // upsert in particular — can clear the model's local changes, so
     // capturing first ensures they are never lost.
-    const capturedChanges =
-      type === 'update' || type === 'create' ? this.captureModelChanges(model) : undefined;
+    const capturedChanges = capturedChangesOverride !== undefined
+      ? Object.freeze({ ...capturedChangesOverride })
+      : type === 'update' || type === 'create'
+        ? this.captureModelChanges(model)
+        : undefined;
 
     poolAction();
-    this.stageMutation(type, model, capturedChanges, writeOptions);
+    const confirmation = this.stageMutation(type, model, capturedChanges, writeOptions);
     this.notifyObservers({
       type,
       modelType: model.getModelName(),
       model: type !== 'delete' ? model : undefined,
       modelId: model.id,
     });
+    return confirmation;
 
     // QueryProcessor uses `models:changed` to invalidate caches. Coalesce
     // to one event per microtask: a paste of 100 rows should re-run
@@ -1004,13 +1013,23 @@ export class SyncClient extends EventEmitter {
   }
 
   /** Add new model (CREATE) - works offline */
-  add(model: Model, options?: WriteOptions): void {
-    this.mutate('create', model, () => { this.objectPool.add(model, ModelScope.live); }, options);
+  add(model: Model, options?: WriteOptions): Promise<void> | undefined {
+    return this.mutate('create', model, () => { this.objectPool.add(model, ModelScope.live); }, options);
   }
 
   /** Update existing model (UPDATE) - works offline */
-  update(model: Model, options?: WriteOptions): void {
-    this.mutate('update', model, () => { this.objectPool.upsert(model, ModelScope.live); }, options);
+  update(
+    model: Model,
+    options?: WriteOptions,
+    capturedChanges?: Record<string, unknown>,
+  ): Promise<void> | undefined {
+    return this.mutate(
+      'update',
+      model,
+      () => { this.objectPool.upsert(model, ModelScope.live); },
+      options,
+      capturedChanges,
+    );
   }
 
   /**
@@ -1055,10 +1074,10 @@ export class SyncClient extends EventEmitter {
   }
 
   /** Delete model (DELETE) - works offline */
-  delete(model: Model, options?: WriteOptions): void {
+  delete(model: Model, options?: WriteOptions): Promise<void> | undefined {
     // Clear pending mutations first to prevent "not found" errors on fast delete
     this.mutationQueue.cancelTransactionsForModel(model.id);
-    this.mutate('delete', model, () => this.objectPool.remove(model.id), options);
+    return this.mutate('delete', model, () => this.objectPool.remove(model.id), options);
   }
 
   /**
@@ -1204,8 +1223,8 @@ export class SyncClient extends EventEmitter {
     model: Model,
     capturedChanges?: Record<string, unknown>,
     writeOptions?: WriteOptions,
-  ): void {
-    if (this.isDisposed) return;
+  ): Promise<void> | undefined {
+    if (this.isDisposed) return Promise.resolve();
     if (!this.userId || !this.organizationId) {
       this.mutationQueue.deferMutation(type, model, capturedChanges, writeOptions);
       return;
@@ -1218,6 +1237,13 @@ export class SyncClient extends EventEmitter {
       capturedChanges,
       writeOptions,
     );
+    const confirmation = staging.then(async (transaction) => {
+      await transaction.confirmation;
+    });
+    // Most internal callers intentionally use fire-and-forget writes. Observe
+    // their rejection without replacing the exact promise returned to model
+    // operations that need authoritative per-transaction confirmation.
+    void confirmation.catch(() => undefined);
     const pending = staging.then(() => undefined).catch((error: Error) => {
       this.runtime.observability.captureMutationFailure({
         context: `stage-mutation-${type}`,
@@ -1228,6 +1254,7 @@ export class SyncClient extends EventEmitter {
     });
     this.pendingStages.add(pending);
     void pending.finally(() => this.pendingStages.delete(pending));
+    return confirmation;
   }
 
   private scheduleSync(): void {

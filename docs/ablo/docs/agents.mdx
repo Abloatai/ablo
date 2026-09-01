@@ -25,21 +25,33 @@ These are observational reads. Use `read({ id })` only when a later Ablo write
 depends on that exact version and will pass it through `reads`.
 
 Most agents wake on a trigger, read what they need, write a result, and go idle.
-That is a request/response workload, so they use plain HTTP. A resident agent
-that needs pushed deltas, queued-claim grants, or presence selects
-`transport: 'websocket'`. The credential is the identity on both carriers; the
-server resolves the org, scope, and actor from it.
+Trusted service work uses an API key and plain HTTP. An agent that needs its own
+scoped identity receives a session; session clients use one reconnecting
+WebSocket by default. The server resolves the org, scope, and actor from the
+credential on both carriers.
 
-Short-lived agents use HTTP. Long-running agents may add a multiplexed
-WebSocket without installing the human materializer. People add the `humans()`
-plugin for a local reactive graph. All three operate on the same typed,
+Create scoped credentials with the server-only issuer:
+
+```ts
+import Sessions from '@abloatai/ablo/sessions';
+
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_API_KEY });
+```
+
+API-key services use HTTP. Session agents use a multiplexed WebSocket without
+installing the human materializer. People add the `humans()` plugin for a local reactive graph. All three operate on the same typed,
 coordinated state and enter the same server-side commit and claim paths.
 
 ```ts
+const session = () => sessions.create({
+  agent: { id: stableWorkerId },
+  can: workerAccess,
+  groups: [workspaceGroup],
+});
+
 const ablo = Ablo({
   schema,
-  apiKey: process.env.ABLO_API_KEY,
-  transport: 'websocket',
+  session,
   cursorStore,
 });
 
@@ -76,14 +88,14 @@ authenticates; the [schema](/installation) defines what you can call.
 
 ## The agent client
 
-Same `Ablo()` entry point as everywhere else — pass `transport: 'http'`. No
-socket, no connection state — just your schema (for types) and an API key.
+Same `Ablo()` entry point as everywhere else. An API-key client is HTTP: no
+socket or connection state, just your schema and service credential.
 
 ```ts
 import Ablo from "@abloatai/ablo";
 import { schema } from "./schema";
 
-const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: "http" });
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
 // Reads + writes, fully typed off your schema.
 // `get` resolves to the row, or `undefined` when none matches.
@@ -102,12 +114,12 @@ and `claim`. It does **not** expose stateful-only `local` reads or model
 selected WebSocket transport, or holds one POST/SSE response until the context
 changes on the HTTP transport.
 
-## Managed scoped agents
+## Scoped agent sessions
 
-When this process owns the secret client and also runs the agent, prefer
-`agents.create`. It mints the restricted credential, returns a schema-typed
-client, and renews that credential for a long run. `sessions.create({ agent })`
-is the raw-token path for handing identity to another runtime.
+`Sessions(...).create({ agent })` is the one issuance path. It returns a restricted
+credential; construct the schema-typed client in the runtime that executes the
+agent. This keeps session minting, revocation, and rotation under one resource
+for both people and agents.
 
 Derive identity and groups from the run row or trusted job payload—not from
 model output or an HTTP request body. A serverless handler normally creates and
@@ -117,12 +129,14 @@ disposes one child per invocation:
 const run = await control.runs.read({ id: verifiedRunId });
 if (!run) throw new Error('run not found');
 
-const agent = await control.agents.create({
-  id: `run:${run.id}`,
-  name: 'run-worker',
+const session = await sessions.create({
+  agent: { id: `run:${run.id}` },
   can: { records: ['read', 'update'] },
-  syncGroups: [`workspace:${run.workspaceId}`],
+  groups: [`workspace:${run.workspaceId}`],
+  userMeta: { name: 'run-worker' },
 });
+
+const agent = Ablo({ schema, session, transport: 'http' });
 try {
   await executeRun(agent, run);
 } finally {
@@ -131,29 +145,32 @@ try {
 ```
 
 Use a stable id only when one logical run is serialized; two concurrent workers
-that share an id appear as the same participant. For independent concurrent
-work, omit `id` and let Ablo create distinct identities.
+that share an id appear as the same participant. Generate a different id for
+each independent concurrent run.
 
-A long-running worker may cache one managed client per stable scope, but the
-cache owns lifecycle: evict idle clients, call `dispose()` on eviction, and
-dispose every client during graceful shutdown. Never cache a client and later
-reuse it for a different workspace or capability set.
+A long-running worker may cache one client per stable scope and provide an
+async credential resolver that re-mints the same session identity. The cache
+owns lifecycle: evict idle clients, call `dispose()` on eviction, and dispose
+every client during graceful shutdown. Never reuse a client for a different
+workspace or capability set.
 
 ```ts
 const agents: Record<
   string,
-  Awaited<ReturnType<typeof control.agents.create>> | undefined
+  ReturnType<typeof Ablo> | undefined
 > = {};
 
 async function agentFor(run: Run) {
   const key = `${run.workspaceId}:${run.workerSlot}`;
   const cached = agents[key];
   if (cached) return cached;
-  const created = await control.agents.create({
-    id: `worker:${key}`,
+  const agentId = `worker:${key}`;
+  const session = () => sessions.create({
+    agent: { id: agentId },
     can: { records: ['read', 'update'] },
-    syncGroups: [`workspace:${run.workspaceId}`],
+    groups: [`workspace:${run.workspaceId}`],
   });
+  const created = Ablo({ schema, session });
   agents[key] = created;
   return created;
 }

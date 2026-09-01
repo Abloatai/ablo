@@ -10,15 +10,11 @@ export {
 
 export {
   AbloProvider,
-  useJoin,
   usePeers,
   useSync,
   useSyncStore,
   type AbloProviderProps,
-  type ParticipantScope,
-  type ParticipantStatus,
-  type UseJoinOptions,
-  type UseJoinReturn,
+  type GroupScope,
 } from './react/AbloProvider.js';
 
 export {

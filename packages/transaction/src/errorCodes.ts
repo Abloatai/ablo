@@ -511,17 +511,13 @@ export const ERROR_CODES = {
   // A claim payload that cannot be parsed is a malformed request, not
   // contention — it is filed with `malformed_subscription` below rather than
   // with the 409s above, so the claim category stays purely about a target
-  // being held. This is the code for a claim that fails to name its target,
-  // over either transport — and for the participant claim behind `join`, which
-  // names scopes rather than a row but fails the same way and to the same
-  // caller. The copy covers both because the caller sees one word, `claim`, and
-  // needs to be told which shape was expected without being handed a lecture on
-  // the two frames.
+  // being held. This is the code for a row claim that fails to name its target,
+  // over either transport.
   malformed_claim: wire(
     'validation',
     400,
     false,
-    'The claim payload could not be parsed. A claim on a row must name the model and the entity it targets; a claim on a scope, which is what `join` opens, must name sync groups spelled `kind:id` or `default`. Check the payload shape and resend.'
+    'The claim payload could not be parsed. A row claim must name the model and entity it targets. Check the payload shape and resend.'
   ),
   malformed_subscription: wire(
     'validation',
@@ -558,11 +554,6 @@ export const ERROR_CODES = {
     'claim',
     'Claiming is unavailable on this model client. Construct it through the standard Ablo({ schema, apiKey }) client and retry.'
   ),
-  model_join_not_configured: client(
-    'claim',
-    'join() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).'
-  ),
-
   // ── stale context / idempotency (409) ──────────────────────────────
   // Not retryable at the transport: the rejected request carries its frozen
   // `readAt`, so resending the identical payload can never succeed. Recovery

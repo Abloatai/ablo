@@ -18,9 +18,9 @@ import { ConnectionManager } from './sync/ConnectionManager.js';
 import { contextLogger, contextSocketObservability } from './sync/contextPorts.js';
 import { SubscriptionManager } from './sync/SubscriptionManager.js';
 import {
-  resolveParticipantSyncGroups,
-  type ParticipantScope,
-} from './sync/participants.js';
+  resolveScopeGroups,
+  type GroupScope,
+} from './sync/scopeGroups.js';
 import type { SyncClient } from './SyncClient.js';
 import type { Database, BootstrapResult, BootstrapRequirements } from './Database.js';
 import type { BootstrapData } from './sync/BootstrapFetcher.js';
@@ -394,8 +394,8 @@ export class BaseSyncedStore<
   // {@link SubscriptionManager.reconcile}); the on-connect `resync` pushes
   // whatever interest accumulated.
 
-  private scopeToGroups(scope: ParticipantScope): string[] {
-    return resolveParticipantSyncGroups(scope, this.schema);
+  private scopeToGroups(scope: GroupScope): string[] {
+    return resolveScopeGroups(scope, this.schema);
   }
 
   /**
@@ -406,7 +406,7 @@ export class BaseSyncedStore<
    * Hydration is best-effort — a failed backfill never rejects `enterScope`,
    * and the live delta stream keeps flowing regardless.
    */
-  enterScope(scope: ParticipantScope, opts?: { hydrate?: boolean }): Promise<void> {
+  enterScope(scope: GroupScope, opts?: { hydrate?: boolean }): Promise<void> {
     const groups = this.scopeToGroups(scope);
     const subscribed = Promise.all(groups.map((g) => this.areaOfInterest.enter(g))).then(
       () => undefined,
@@ -456,21 +456,21 @@ export class BaseSyncedStore<
   }
 
   /** Leave a scope → its groups go warm (hysteresis), then drop on sweep. */
-  leaveScope(scope: ParticipantScope): Promise<void> {
+  leaveScope(scope: GroupScope): Promise<void> {
     return Promise.all(
       this.scopeToGroups(scope).map((g) => this.areaOfInterest.leave(g)),
     ).then(() => undefined);
   }
 
   /** Pin a scope (active claim / prominence) → never warms while pinned. */
-  pinScope(scope: ParticipantScope): Promise<void> {
+  pinScope(scope: GroupScope): Promise<void> {
     return Promise.all(
       this.scopeToGroups(scope).map((g) => this.areaOfInterest.pin(g)),
     ).then(() => undefined);
   }
 
   /** Release a pin → the group transitions to warm rather than dropping. */
-  unpinScope(scope: ParticipantScope): Promise<void> {
+  unpinScope(scope: GroupScope): Promise<void> {
     return Promise.all(
       this.scopeToGroups(scope).map((g) => this.areaOfInterest.unpin(g)),
     ).then(() => undefined);

@@ -31,6 +31,7 @@ app/
       RecordEditor.tsx        # Client: live updates
 lib/
   ablo.ts                   # Server Ablo client (holds ABLO_API_KEY)
+  sessions.ts               # Server-only scoped-session issuer
   ablo.schema.ts            # shared schema
 ```
 
@@ -39,7 +40,7 @@ There are **two** Ablo clients, and the split is the whole point:
 - **Server** (`lib/ablo.ts`) holds the secret `apiKey` (`sk_`). Used by RSCs,
   Server Actions, and route handlers. Never imported into a client component.
 - **Browser** (`app/providers.tsx`) holds **no secret**. It fetches a
-  short-lived per-user token (`ek_`) from a backend route via `authEndpoint`.
+  short-lived per-user token (`ek_`) from a backend route via `session.endpoint`.
 
 Skipping the browser half is the most common setup mistake — the client then
 has no credential and the engine fails to initialize with `session_expired`.
@@ -60,6 +61,19 @@ export const ablo = Ablo({
 });
 ```
 
+```ts
+// lib/sessions.ts — server-only
+import 'server-only';
+
+import Sessions from '@abloatai/ablo/sessions';
+import { schema } from './ablo.schema';
+
+export const sessions = Sessions({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+```
+
 ## Session Route
 
 The browser can't hold `sk_`, so a backend route mints a scoped, short-lived
@@ -70,80 +84,33 @@ from the request body.
 
 ```ts
 // app/api/ablo-session/route.ts
-import { ablo } from '@/lib/ablo';
+import { sessions } from '@/lib/sessions';
 import { getCurrentUser } from '@/auth';
-import { headers } from 'next/headers';
-import {
-  credentialEndpointErrorSchema,
-  credentialEndpointSuccessSchema,
-} from '@abloatai/ablo/auth';
 
-const noStore = { 'Cache-Control': 'no-store' };
+export const POST = sessions.handler({
+  authenticate: () => getCurrentUser(),
+  async grant({ principal: user }) {
+    // Query your membership table now—not when the login session was created.
+    const scope = await authorizeActiveWorkspace(user.id);
+    if (!scope) return null;
 
-export async function POST(request: Request) {
-  if (!(await isSameOrigin(request))) {
-    return Response.json(
-      credentialEndpointErrorSchema.parse({
-        error: { code: 'origin_mismatch', message: 'Cross-origin mint rejected' },
-      }),
-      { status: 403, headers: noStore },
-    );
-  }
-
-  const user = await getCurrentUser();
-  if (!user) {
-    return Response.json(
-      credentialEndpointErrorSchema.parse({
-        error: { code: 'session_expired' },
-      }),
-      { status: 401, headers: noStore },
-    );
-  }
-
-  // Query your membership table now—not when the login session was created.
-  // The helper reads the active workspace from server-side session state and
-  // returns null when the membership is stale or revoked.
-  const scope = await authorizeActiveWorkspace(user.id);
-  if (!scope) {
-    return Response.json(
-      credentialEndpointErrorSchema.parse({
-        error: { code: 'policy_denied', message: 'Workspace membership is stale or revoked' },
-      }),
-      { status: 403, headers: noStore },
-    );
-  }
-
-  const { token, expiresAt } = await ablo.sessions.create({
-    user: { id: user.id },
-    syncGroups: scope.syncGroups,
-    can: { records: ['read', 'create', 'update'] },
-  });
-  return Response.json(
-    credentialEndpointSuccessSchema.parse({
-      token,
-      expiresAt,
-      credentialKind: 'ephemeral',
-    }),
-    { headers: noStore },
-  );
-}
-
-async function isSameOrigin(request: Request): Promise<boolean> {
-  const origin = request.headers.get('origin');
-  if (!origin) return request.headers.get('sec-fetch-site') !== 'cross-site';
-  const host = (await headers()).get('host');
-  return host !== null && new URL(origin).host === host;
-}
+    return {
+      user: { id: user.id },
+      groups: scope.groups,
+      can: { records: ['read', 'create', 'update'] },
+    };
+  },
+});
 ```
 
 `authorizeActiveWorkspace` is application code: it must query the authoritative
-membership store and return server-derived sync groups. If fifteen-minute token
+membership store and return server-derived groups. If fifteen-minute token
 expiry is too slow for your revocation requirements, mint a shorter
 `ttlSeconds` and revoke active sessions when membership changes.
 
 ## Provider
 
-The browser client points `authEndpoint` at that route and is handed to
+The browser client points `session.endpoint` at that route and is handed to
 `<AbloProvider>` as an instance. Build it once at module scope so the socket
 isn't torn down on every render.
 
@@ -157,7 +124,7 @@ import { schema } from '@/lib/ablo.schema';
 
 const ablo = Ablo({
   schema,
-  authEndpoint: '/api/ablo-session',
+  session: { endpoint: '/api/ablo-session' },
 });
 
 export function Providers({ children }: { children: React.ReactNode }) {

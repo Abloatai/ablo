@@ -22,28 +22,22 @@ import { EventEmitter } from 'events';
 import type { ParticipantKind } from '../../types/participant.js';
 import {
   AbloConnectionError,
-  AbloError,
   AbloSessionError,
   AbloValidationError,
   toAbloError,
 } from '../../errors.js';
-import {
-  participantClaimPayloadSchema,
-  updateSubscriptionPayloadSchema,
-} from '../../coordination/schema.js';
+import { updateSubscriptionPayloadSchema } from '../../coordination/schema.js';
 import type { BootstrapReason } from '../../wire/bootstrapReason.js';
 import type { ClientSyncDelta } from '../../observation/contract.js';
 import type {
   ClaimAcquired,
   PresenceUpdate,
-  ClaimExpired,
   ClaimGranted,
   ClaimHeartbeatAckPayload,
   ClaimLost,
   ClaimQueue,
   ClaimQueued,
   ClaimRejection,
-  ParticipantClaimPayload,
   ReadDependency,
   WireClaim,
 } from '../../coordination/schema.js';
@@ -60,7 +54,6 @@ import {
   readWsInboundFrame,
   type WsSession,
   type PendingCommit,
-  type PendingClaim,
   type PendingSubscription,
 } from './frameHandlers.js';
 import { HeartbeatController } from './heartbeat.js';
@@ -214,14 +207,6 @@ export interface CoreSyncEventMap {
   handshake_failed: [CloseEvent];
   reconnect_failed: [{ attempts: number }];
   /**
-   * Server-initiated notification that a previously-active claim's
-   * TTL has expired. Consumers (e.g., the participant SDK) re-mint
-   * a fresh capability and re-claim, OR accept the drop. The claim
-   * is already inactive on the server side by the time this fires —
-   * no client-side action needed unless re-claiming.
-   */
-  claim_expired: [ClaimExpired];
-  /**
    * Server rejected an `claim_begin` because another participant
    * already holds an open claim on the same target (cooperative
    * mutex enforced server-side). Surfaces to the participant-level
@@ -370,6 +355,10 @@ export class WsTransport<
    *  server rejected the upgrade" since browsers hide the HTTP status (e.g.
    *  401) behind the opaque 1006 close code. */
   private _everOpened = false;
+  /** True after any socket in this logical transport has opened. Unlike
+   * `_everOpened`, this survives socket replacement so a failed reconnect
+   * handshake is retried instead of being mistaken for a failed first login. */
+  private _hasConnected = false;
   /**
    * Diagnostic snapshot of the last connection lifecycle. Persisted across
    * the lifetime of the transport so that any subsequent "not connected"
@@ -404,14 +393,6 @@ export class WsTransport<
    * sent over the same socket that streams deltas.
    */
   private pendingMutations = new Map<string, PendingCommit>();
-
-  /**
-   * In-flight `claim` requests keyed by claimId. Resolved when the matching
-   * `claim_ack` arrives, or rejected on timeout or disconnect — the same
-   * request/response pattern as `pendingMutations`, multiplexed over the one
-   * connection.
-   */
-  private pendingClaims = new Map<string, PendingClaim>();
 
   /**
    * In-flight `update_subscription` frames awaiting `subscription_ack`.
@@ -483,7 +464,6 @@ export class WsTransport<
       logger: this.logger,
       observability: this.observability,
       pendingMutations: this.pendingMutations,
-      pendingClaims: this.pendingClaims,
       shiftPendingSubscription: () => this.pendingSubscriptions.shift(),
       options: this.options,
       collaborationEventTypes: this.collaborationEventTypes,
@@ -731,6 +711,7 @@ export class WsTransport<
       this.isConnecting = false;
       this.reconnectAttempts = 0;
       this._everOpened = true;
+      this._hasConnected = true;
       this.lastOpenAt = Date.now();
       this.emit('connected');
 
@@ -861,22 +842,6 @@ export class WsTransport<
         this.pendingMutations.clear();
       }
 
-      // Cancel in-flight claims — same rationale. Server-side
-      // claims are bound to the connection; a reconnect will need
-      // to re-claim. Higher-level retry belongs to whoever holds
-      // the participant handle (typically the SDK's claim manager).
-      if (this.pendingClaims.size > 0) {
-        for (const pending of this.pendingClaims.values()) {
-          clearTimeout(pending.timeout);
-          pending.reject(
-            new AbloConnectionError(
-              `WebSocket closed while claim was in flight (code=${event.code})`,
-            ),
-          );
-        }
-        this.pendingClaims.clear();
-      }
-
       // Cancel in-flight subscription updates — the reconnect handshake
       // re-sends `options.syncGroups` (the last acked interest) in the
       // upgrade URL, so a pending change that never acked is simply
@@ -946,7 +911,7 @@ export class WsTransport<
       // from a transient network issue and transition the UI accordingly.
       // Reconnecting blindly is what produced the infinite
       // "offline → reconnecting → offline" loop on stale cookies.
-      if (!everOpened && !this.isManualClose) {
+      if (!everOpened && !this._hasConnected && !this.isManualClose) {
         this.observability.captureWebSocketError({
           context: 'handshake-failed-close',
           code: event.code,
@@ -1173,100 +1138,6 @@ export class WsTransport<
   }
 
   /**
-   * Activates a participant claim on this connection. One connection can hold
-   * several concurrent claims at once, each scoped to a different set of sync
-   * groups, so the SDK reuses the existing connection instead of opening a
-   * separate socket per scope.
-   *
-   * Returns a promise that resolves with the server-canonicalized `syncGroups`
-   * and effective `ttlSeconds` once `claim_ack` arrives, or rejects with a typed
-   * error on a failed ack, a timeout, or a disconnect.
-   */
-  sendClaim(
-    claimId: string,
-    syncGroups: readonly string[],
-    options?: Pick<ParticipantClaimPayload, 'capabilityToken' | 'ttlSeconds'> & {
-      timeoutMs?: number;
-    },
-  ): Promise<{ syncGroups: string[]; ttlSeconds?: number }> {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
-      return Promise.reject(this.notConnectedError('claim'));
-    }
-    // Checked against the schema the server ingests it with, for the same
-    // reason `updateSubscription` below is: the two frames name their scopes
-    // identically, so a group that would be refused there is refused here, at
-    // the call that asked for it, rather than coming back as a failed ack a
-    // round trip later with nothing to point at.
-    const payload = participantClaimPayloadSchema.safeParse({
-      claimId,
-      syncGroups: [...syncGroups],
-      capabilityToken: options?.capabilityToken,
-      ttlSeconds: options?.ttlSeconds,
-    });
-    if (!payload.success) {
-      return Promise.reject(
-        new AbloValidationError(
-          `join was given a sync group the protocol does not accept: ${payload.error.issues[0]?.message ?? 'unreadable'}. A group is 'default' or 'kind:id'.`,
-          { code: 'malformed_claim' },
-        ),
-      );
-    }
-    const timeoutMs = options?.timeoutMs ?? 15_000;
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingClaims.delete(claimId);
-        reject(
-          new AbloConnectionError(`claim timed out after ${timeoutMs}ms (claimId=${claimId})`, {
-            code: 'wait_for_timeout',
-          }),
-        );
-      }, timeoutMs);
-      this.pendingClaims.set(claimId, { resolve, reject, timeout });
-      try {
-        this.ws!.send(JSON.stringify({ type: 'claim', payload: payload.data }));
-      } catch (error) {
-        clearTimeout(timeout);
-        this.pendingClaims.delete(claimId);
-        reject(toAbloError(error));
-      }
-    });
-  }
-
-  /**
-   * Drop a previously-active claim. Idempotent — `release` is
-   * fire-and-forget per the wire contract; the server accepts
-   * unknown claimIds silently so disconnect-time release storms
-   * never error. No ack is expected.
-   *
-   * If a claim's send promise is still pending (no claim_ack yet),
-   * we reject it locally — the user explicitly chose to release.
-   */
-  sendRelease(claimId: string): void {
-    // Cancel any in-flight claim that hadn't acked yet — the user
-    // changed their mind. Without this the timer would eventually
-    // reject; doing it now matches the user's claim immediately.
-    const pending = this.pendingClaims.get(claimId);
-    if (pending) {
-      clearTimeout(pending.timeout);
-      this.pendingClaims.delete(claimId);
-      pending.reject(
-        new AbloError(`claim ${claimId} released before ack`, {
-          code: 'claim_wait_aborted',
-          httpStatus: 409,
-        }),
-      );
-    }
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
-    try {
-      this.ws.send(
-        JSON.stringify({ type: 'release', payload: { claimId } }),
-      );
-    } catch {
-      // Idempotent contract — silent failure is acceptable here.
-    }
-  }
-
-  /**
    * Moves this connection's read interest — replaces the connection-level sync
    * groups mid-session as the user opens and closes entities. This is the
    * area-of-interest navigation primitive: the server fans out deltas only for
@@ -1443,8 +1314,13 @@ export class WsTransport<
     }
 
     if (this.ws) {
-      this.ws.close(1000, 'Manual disconnect');
+      // Detach before close: Node/undici may synchronously fire `onerror` from
+      // close(). The handler's stale-socket guard then suppresses that expected
+      // manual-close error instead of emitting EventEmitter's fatal unhandled
+      // `error` event. `onclose` deliberately accepts a null owner below.
+      const socket = this.ws;
       this.ws = null;
+      socket.close(1000, 'Manual disconnect');
     }
   }
 

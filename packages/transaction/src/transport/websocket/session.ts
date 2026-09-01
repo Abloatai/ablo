@@ -3,7 +3,14 @@ import {
   AbloConnectionError,
   AbloSessionError,
   errorFromWire,
+  isAccessCredentialExpiryCloseReason,
 } from '../../errors.js';
+import { classifyCredentialKind } from '../../auth/credentialKind.js';
+import {
+  credentialToken,
+  type CredentialProviderResult,
+} from '../../auth/credentialResult.js';
+import { CredentialLifecycle } from '../../sessions/lifecycle.js';
 import {
   clientSyncDeltaSchema,
   type ClientSyncDelta,
@@ -21,7 +28,6 @@ import type {
   WebSocketObserveOptions,
   WebSocketObservedDelta,
   WebSocketPresence,
-  WebSocketJoinInput,
   WebSocketSessionOptions,
   OpenCollaborationEvents,
 } from './sessionContract.js';
@@ -125,17 +131,29 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
   private closed = false;
   private currentToken: string;
   private acknowledgeLane: Promise<void> = Promise.resolve();
+  private terminalError: Error | null = null;
+  private readonly terminalListeners = new Set<(error: Error) => void>();
+  private readonly credentialLifecycle: CredentialLifecycle | null;
+  private pendingSessionError: Error | null = null;
 
   readonly presence: WebSocketPresence;
   readonly collaboration: WebSocketCollaboration<TEvents>;
 
-  constructor(options: WebSocketSessionOptions, position: StoredPosition, token: string) {
+  constructor(
+    options: WebSocketSessionOptions,
+    position: StoredPosition,
+    credential: CredentialProviderResult,
+  ) {
     this.options = options;
+    const token = credentialToken(credential);
+    if (!token) {
+      throw new AbloSessionError('The WebSocket transport requires an authenticated credential.');
+    }
     this.currentToken = token;
     this.cursorKey = options.cursorKey ?? 'websocket';
     this.socket = new AgentWebSocket<TEvents>({
       baseUrl: options.baseUrl,
-      kind: 'agent',
+      kind: classifyCredentialKind(token) === 'ephemeral' ? 'user' : 'agent',
       getAuthToken: () => this.currentToken,
       syncGroups: [...(options.syncGroups ?? [])],
       collaborationEvents: [...(options.collaborationEvents ?? [])],
@@ -148,23 +166,65 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     this.collaboration = {
       send: (event, payload) => this.socket.sendCollaborationEvent(event, payload),
     } as WebSocketCollaboration<TEvents>;
-    this.socket.subscribe('session_error', () => {
-      void this.refreshExpiredCredential();
+    this.socket.subscribe('session_error', (error) => {
+      this.handleSessionError(error);
     });
+    this.credentialLifecycle = options.access.renewable
+      ? new CredentialLifecycle({
+        setAuthToken: (freshToken) => {
+          this.currentToken = freshToken;
+        },
+        nudgeReconnect: () => {
+          if (this.closed || this.terminalError) return;
+          this.socket.clearSessionError();
+          this.socket.resetReconnectAttempts();
+          this.socket.connect();
+        },
+        reportSessionExpired: () => {
+          this.failTerminal(this.pendingSessionError ?? new AbloSessionError(
+            'The application session ended while renewing its Ablo session.',
+          ));
+        },
+      })
+      : null;
+    if (this.credentialLifecycle) {
+      this.credentialLifecycle.start(() => this.loadCredential(), { proactiveInNode: true });
+      this.credentialLifecycle.accept(credential);
+    }
   }
 
-  private async refreshExpiredCredential(): Promise<void> {
-    if (this.closed) return;
-    try {
-      const next = await this.options.getAuthToken();
-      if (!next || next === this.currentToken) return;
-      this.currentToken = next;
-      this.socket.clearSessionError();
-      this.socket.connect();
-    } catch {
-      // The terminal session_error remains the public signal. A later explicit
-      // ready() call can retry after the caller repairs its credential source.
+  private async loadCredential(): Promise<CredentialProviderResult> {
+    return this.options.access.credential();
+  }
+
+  private handleSessionError(error: Error): void {
+    if (
+      !this.credentialLifecycle
+      || !isAccessCredentialExpiryCloseReason(error.message)
+    ) {
+      this.failTerminal(error);
+      return;
     }
+    this.pendingSessionError = error;
+    void this.credentialLifecycle.recoverFromAuthRejection('access_credential_expiry');
+  }
+
+  private failTerminal(error: Error): void {
+    if (this.terminalError || this.closed) return;
+    this.terminalError = error;
+    this.socket.setSessionErrorDetected();
+    this.socket.disconnect();
+    for (const listener of this.terminalListeners) listener(error);
+  }
+
+  private onTerminal(listener: (error: Error) => void): () => void {
+    if (this.terminalError) {
+      const error = this.terminalError;
+      queueMicrotask(() => listener(error));
+      return () => undefined;
+    }
+    this.terminalListeners.add(listener);
+    return () => this.terminalListeners.delete(listener);
   }
 
   get connected(): boolean {
@@ -175,6 +235,7 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     if (this.closed) {
       return Promise.reject(new AbloConnectionError('The WebSocket session is closed.'));
     }
+    if (this.terminalError) return Promise.reject(this.terminalError);
     if (this.socket.isConnected()) return Promise.resolve();
     if (this.readyPromise) return this.readyPromise;
     this.readyPromise = new Promise<void>((resolve, reject) => {
@@ -190,7 +251,7 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
         cleanup();
         resolve();
       });
-      const failed = this.socket.subscribe('session_error', (error) => {
+      const failed = this.onTerminal((error) => {
         rejectConnection(error);
       });
       const mismatch = this.socket.subscribe('protocol_mismatch', () => {
@@ -311,19 +372,6 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     this.socket.send({ type: 'claim_abandon', payload: input });
   }
 
-  async join(input: WebSocketJoinInput) {
-    await this.ready();
-    return this.socket.sendClaim(input.claimId, input.syncGroups, {
-      capabilityToken: input.capabilityToken,
-      ttlSeconds: input.ttlSeconds,
-      timeoutMs: input.timeoutMs,
-    });
-  }
-
-  leave(claimId: string): void {
-    this.socket.sendRelease(claimId);
-  }
-
   subscribe<K extends keyof SyncWebSocketEventMap<TEvents>>(
     event: K,
     listener: (...args: SyncWebSocketEventMap<TEvents>[K]) => void,
@@ -357,7 +405,7 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
       wake?.();
       wake = undefined;
     });
-    const offError = this.socket.subscribe('session_error', (error) => {
+    const offError = this.onTerminal((error) => {
       failure = error;
       wake?.();
       wake = undefined;
@@ -421,6 +469,8 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.credentialLifecycle?.stop();
+    this.terminalListeners.clear();
     this.rejectReady?.(new AbloConnectionError('The WebSocket session was disposed.'));
     await this.acknowledgeLane;
     this.socket.disconnect();
@@ -439,11 +489,16 @@ export async function createWebSocketSession<
 ): Promise<AbloWebSocketSession<TEvents>> {
   const cursorKey = options.cursorKey ?? 'websocket';
   const stored = await options.cursorStore?.load(cursorKey) ?? null;
-  const token = await options.getAuthToken();
+  const credential = await options.access.credential();
+  const token = credentialToken(credential);
   if (!token) {
     throw new AbloSessionError('The WebSocket transport requires an authenticated credential.');
   }
-  const session = new WebSocketSession<TEvents>(options, parsePosition(stored), token);
+  const session = new WebSocketSession<TEvents>(
+    options,
+    parsePosition(stored),
+    credential,
+  );
   let rejectOpening: ((error: Error) => void) | undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
     rejectOpening = reject;

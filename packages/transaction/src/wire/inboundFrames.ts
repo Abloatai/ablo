@@ -28,7 +28,6 @@ import { commitReceiptSchema } from '../commit/contract.js';
 import { clientSyncDeltaSchema } from '../observation/contract.js';
 import {
   claimAcquiredSchema,
-  claimExpiredSchema,
   claimGrantedSchema,
   claimHeartbeatAckPayloadSchema,
   claimLostSchema,
@@ -111,10 +110,6 @@ export const WS_INBOUND_FRAMES = {
   },
 
   // ── Requests we made ───────────────────────────────────────────────────
-  claim_ack: {
-    validation: 'handler',
-    where: 'handleClaimAck narrows field by field, because a rejection carries a typed capability error it has to re-raise as CapabilityError',
-  },
   subscription_ack: {
     validation: 'handler',
     // Not parsed at dispatch because the handler must first claim the oldest
@@ -126,7 +121,6 @@ export const WS_INBOUND_FRAMES = {
 
   // ── Coordination ───────────────────────────────────────────────────────
   presence_update: { validation: 'schema', payload: presenceUpdateSchema },
-  claim_expired: { validation: 'schema', payload: claimExpiredSchema },
   claim_rejected: { validation: 'schema', payload: claimRejectionSchema },
   claim_acquired: { validation: 'schema', payload: claimAcquiredSchema },
   claim_queued: { validation: 'schema', payload: claimQueuedSchema },

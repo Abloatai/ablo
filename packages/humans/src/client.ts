@@ -27,8 +27,6 @@ import type { ModelOperations } from './local/client/createModelOperations.js';
 import type {
   ClaimResource,
   CommitResource,
-  CreateAgentClientParams,
-  SessionResource,
 } from '@abloatai/transaction/client/resources/httpResources';
 import type { EffectiveAuthority } from '@abloatai/transaction/auth';
 import type { ReadDependency } from '@abloatai/transaction/coordination';
@@ -124,55 +122,6 @@ export type AbloClient<S extends SchemaRecord> = {
    * the watchdog.
    */
   nudgeReconnect(): void;
-
-  /**
-   * Mint a short-lived, scoped session token for one end user. Call this on your
-   * backend, where the `sk_` secret key lives, then hand the returned `token` to
-   * that user's browser — typically through a token route the browser's `apiKey`
-   * resolver fetches. The browser presents the token as its bearer, and the
-   * server verifies it. The browser must never see the `sk_` key, only the
-   * per-user session token.
-   *
-   * Pass `{ user: { id }, can: { items: ['read', 'update'] } }` for an end-user
-   * session. It mints an `ek_` and attributes writes to a user (recorded as
-   * `actor_kind` on the delta row). Pass `{ agent: { id }, can: {
-   * items: ['update'] } }` for a scoped agent session, which mints an `rk_`.
-   * Both kinds require `can`, typed against your schema's model names. This
-   * always authenticates with the original `sk_`, never the client's exchanged
-   * sync credential.
-   */
-  sessions: SessionResource<S>;
-
-  /**
-   * Mint a scoped **agent identity** and return a ready-to-use client bound to
-   * it — the `ablo.<resource>.<verb>` shape for the agent use case. One call
-   * replaces `sessions.create({ agent, can })` + constructing a second
-   * `Ablo({ apiKey: token })`:
-   *
-   * ```ts
-   * const agent = await ablo.agents.create({
-   *   name: 'researcher',                  // readable label (optional)
-   *   can: { records: ['read', 'update'] },
-   *   // id omitted → a fresh uuid: a distinct, independent participant
-   * });
-   * await agent.records.update({ id, data, claim });
-   * await agent.dispose(); // when the agent is done
-   * ```
-   *
-   * Server-side only: it requires the `sk_` secret key (like `sessions.create`)
-   * and throws `AbloAuthenticationError` in the browser. The returned client
-   * holds its own auto-refreshing `rk_`, so a long run never hits token expiry,
-   * and the `sk_` never leaves this process. Each call is a distinct participant
-   * by default (omit `id` for a fresh uuid), so even two agents sharing a `name`
-   * queue behind one another on a contended row — `name` is display only and
-   * never collapses identity. Humans don't get a server-built client; ship them a
-   * token via `sessions.create({ user, can })`. If you need the raw token for
-   * revocation, or a stable re-attachable id, use `sessions.create({ agent, can })`
-   * or pass `id`.
-   */
-  agents: {
-    create(params: CreateAgentClientParams<S>): Promise<AbloClient<S>>;
-  };
 
   /**
    * The organization this client resolved to — `null` until `ready()`

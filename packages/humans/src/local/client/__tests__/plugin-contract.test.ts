@@ -190,7 +190,7 @@ describe('Ablo({ plugins }) configuration gates', () => {
     expect(() =>
       Ablo({
         schema,
-        authEndpoint: '/api/ablo-session',
+        session: { endpoint: '/api/ablo-session' },
         plugins: [],
       }),
     ).toThrow(/requires the humans\(\) materializer plugin/);
@@ -200,7 +200,7 @@ describe('Ablo({ plugins }) configuration gates', () => {
     const _typeOnly = (): void => {
       const client = Ablo({
         schema,
-        authEndpoint: '/api/ablo-session',
+        session: { endpoint: '/api/ablo-session' },
         plugins: [humans()],
       });
       void client.ready;
@@ -221,7 +221,7 @@ describe('Ablo({ plugins }) configuration gates', () => {
 
     const client = Ablo({
       schema,
-      authEndpoint: '/api/ablo-session',
+      session: { endpoint: '/api/ablo-session' },
       plugins: [humans(), metrics()],
     });
 
@@ -241,7 +241,7 @@ describe('Ablo({ plugins }) configuration gates', () => {
 
     const client = Ablo({
       schema,
-      authEndpoint: '/api/ablo-session',
+      session: { endpoint: '/api/ablo-session' },
       plugins: [humans(), hijack()],
     });
 
@@ -254,7 +254,7 @@ describe('Ablo({ plugins }) configuration gates', () => {
     expect(() =>
       Ablo({
         schema,
-        authEndpoint: '/api/ablo-session',
+        session: { endpoint: '/api/ablo-session' },
         plugins: [plugin('batching')],
       }),
     ).toThrow(/humans\(\)|empty list/);
@@ -262,7 +262,7 @@ describe('Ablo({ plugins }) configuration gates', () => {
 
   it('rejects humans() listed twice', () => {
     expect(() =>
-      Ablo({ schema, authEndpoint: '/api/ablo-session', plugins: [humans(), humans()] }),
+      Ablo({ schema, session: { endpoint: '/api/ablo-session' }, plugins: [humans(), humans()] }),
     ).toThrow(/listed twice/);
   });
 
@@ -317,7 +317,7 @@ describe('humans() constructs the store cluster', () => {
   });
 
   it('the factory path yields a cluster whose store and runtime are live', () => {
-    const client = Ablo({ schema, authEndpoint: '/api/ablo-session', plugins: [humans()] });
+    const client = Ablo({ schema, session: { endpoint: '/api/ablo-session' }, plugins: [humans()] });
     try {
       // The client works end-to-end (every reactive suite pins that); here,
       // pin that its store came from the plugin: the internal `_store`
@@ -336,7 +336,7 @@ describe('humans() constructs the store cluster', () => {
     const installed = humans();
     const client = Ablo({
       schema: itemSchema,
-      authEndpoint: '/api/ablo-session',
+      session: { endpoint: '/api/ablo-session' },
       plugins: [installed],
     });
     try {
@@ -356,10 +356,10 @@ describe('humans() constructs the store cluster', () => {
 
   it('one humans() instance serves one client — a second install fails', async () => {
     const shared = humans();
-    const clientA = Ablo({ schema, authEndpoint: '/api/ablo-session', plugins: [shared] });
+    const clientA = Ablo({ schema, session: { endpoint: '/api/ablo-session' }, plugins: [shared] });
     try {
       expect(() =>
-        Ablo({ schema, authEndpoint: '/api/ablo-session', plugins: [shared] }),
+        Ablo({ schema, session: { endpoint: '/api/ablo-session' }, plugins: [shared] }),
       ).toThrow(/already installed/);
     } finally {
       await clientA.dispose();
@@ -367,7 +367,7 @@ describe('humans() constructs the store cluster', () => {
   });
 
   it('the cluster never becomes a client member — the handoff is symbol-keyed', () => {
-    const client = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+    const client = Ablo({ schema, session: { endpoint: '/api/ablo-session' } });
     try {
       // The surface's symbol slot must not surface on the client, and no
       // string-keyed cluster members may leak through the layering proxy.

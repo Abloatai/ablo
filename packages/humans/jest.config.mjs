@@ -1,4 +1,3 @@
-import type { Config } from 'jest';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { transactionSourceModuleMapper } from '../transaction/sourceModuleMapper.mjs';
@@ -7,7 +6,7 @@ const require = createRequire(import.meta.url);
 const reactRoot = dirname(require.resolve('react'));
 const reactDomRoot = dirname(require.resolve('react-dom'));
 
-const config: Config = {
+const config = {
   testEnvironment: 'jest-environment-jsdom',
 
   setupFilesAfterEnv: ['<rootDir>/src/local/testing/setup/jest.setup.ts'],

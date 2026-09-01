@@ -46,9 +46,9 @@ import { resolveClientPrelude } from './local/client/clientPrelude.js';
 // The option types, the client's public shape, the pass over the options bag,
 // the resource-type surface, and the default WebSocket mutation executor each
 // live in their own module. The type-only ones (`options`, `abloClient`,
-// `resourceTypes`) carry no runtime imports, which lets the HTTP client and the
-// session-mint helpers reference the client types without importing this
-// factory back and creating an import cycle.
+// `resourceTypes`) carry no runtime imports, which lets the HTTP client
+// reference the client types without importing this factory back and creating
+// an import cycle.
 import type { AbloOptions } from './local/client/options.js';
 // `AbloReads` is named by `Ablo.Reads` in the namespace below as well as
 // re-exported, so it needs the import too — same reason as `AbloOptions`.
@@ -92,11 +92,11 @@ export type Ablo<S extends SchemaRecord> = AbloClient<S>;
  * ```
  *
  * In the browser (or any client that shouldn't hold a secret key), point
- * `authEndpoint` at your session-mint route instead — the SDK fetches it, keeps the
+ * `session.endpoint` at your session-mint route instead — the SDK fetches it, keeps the
  * short-lived token fresh, and re-mints on expiry:
  *
  * ```ts
- * const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+ * const ablo = Ablo({ schema, session: { endpoint: '/api/ablo-session' } });
  * ```
  *
  * Server-side agents, workers, and services use `@abloatai/transaction`.
@@ -214,7 +214,6 @@ export function Ablo<const S extends SchemaRecord>(
     transport,
     presence: humansSurface.presence,
     cluster,
-    createSibling: (siblingOptions) => Ablo(siblingOptions),
   }), installedPlugins);
 }
 
@@ -232,7 +231,6 @@ export function Ablo<const S extends SchemaRecord>(
 // continue to work for callers who prefer them.
 
 import type * as _Streams from '@abloatai/transaction/types/streams';
-import type * as _Participants from './local/sync/participants.js';
 import type * as _Mutators from './local/mutators/defineMutators.js';
 import type * as _Tx from './local/mutators/Transaction.js';
 import type * as _Undo from './local/mutators/UndoManager.js';
@@ -295,16 +293,6 @@ export namespace Ablo {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Auth {
     export type Actor = _Streams.ParticipantRef;
-  }
-
-  // ── Participant (sub-namespace — 5 names, shared concept) ─────────
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  export namespace Participant {
-    export type Manager = _Participants.ParticipantManager;
-    export type Joined = _Participants.JoinedParticipant;
-    export type Scope = _Participants.ParticipantScope;
-    export type Status = _Participants.ParticipantStatus;
-    export type JoinOptions = _Participants.ParticipantJoinOptions;
   }
 
   // ── Schema (type + sub-namespace via declaration merge) ───────────

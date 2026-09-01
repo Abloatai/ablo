@@ -1,6 +1,6 @@
 {
   "$generated": "packages/ablo/scripts/generate-error-docs.mts",
-  "version": "2026-08-15",
+  "version": "2026-08-30",
   "envelope": [
     "type",
     "code",
@@ -1212,7 +1212,7 @@
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "The claim payload could not be parsed. A claim on a row must name the model and the entity it targets; a claim on a scope, which is what `join` opens, must name sync groups spelled `kind:id` or `default`. Check the payload shape and resend.",
+      "message": "The claim payload could not be parsed. A row claim must name the model and entity it targets. Check the payload shape and resend.",
       "docUrl": "https://docs.abloatai.com/errors#malformed_claim"
     },
     {
@@ -1352,14 +1352,6 @@
       "retryable": false,
       "message": "The payload is missing the model's identifier, so the target row cannot be determined. Include the `id` field.",
       "docUrl": "https://docs.abloatai.com/errors#model_identifier_missing"
-    },
-    {
-      "code": "model_join_not_configured",
-      "category": "claim",
-      "surface": "client",
-      "retryable": false,
-      "message": "join() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).",
-      "docUrl": "https://docs.abloatai.com/errors#model_join_not_configured"
     },
     {
       "code": "model_not_found",
@@ -1515,6 +1507,14 @@
       "retryable": false,
       "message": "The database rejected the write because a required column was left empty — a not-null constraint. The error details name the column; supply a value and retry.",
       "docUrl": "https://docs.abloatai.com/errors#not_null_violation"
+    },
+    {
+      "code": "observation_buffer_overflow",
+      "category": "transport",
+      "surface": "client",
+      "retryable": false,
+      "message": "A WebSocket observer fell behind its bounded in-memory backlog. Restart observation to replay from the last durable checkpoint.",
+      "docUrl": "https://docs.abloatai.com/errors#observation_buffer_overflow"
     },
     {
       "code": "operational_warning",

@@ -127,6 +127,7 @@ export default defineConfig({
             "/coordination",
             "/concurrency-convention",
             "/context",
+            "/transports",
             "/guarantees",
             "/idempotency",
             "/identity",

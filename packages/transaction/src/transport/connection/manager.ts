@@ -42,7 +42,7 @@
 
 import { probeNetwork, type ProbeResult } from './networkProbe.js';
 import type { AuthTokenGetter } from '../../auth/credentialSource.js';
-import type { CredentialRefreshOutcome } from './credentialLifecycle.js';
+import type { CredentialRefreshOutcome } from '../../sessions/lifecycle.js';
 import { noopLogger, type Logger } from '../../logger.js';
 import {
   noopSocketObservability,

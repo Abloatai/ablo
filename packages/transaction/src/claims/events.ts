@@ -37,8 +37,7 @@ export interface ClaimEvent {
     | 'queued'
     | 'granted'
     | 'lost'
-    | 'rejected'
-    | 'expired';
+    | 'rejected';
   claimId?: string;
   model?: string;
   id?: string;

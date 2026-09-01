@@ -5,7 +5,7 @@ sidebar:
   icon: circle-alert
 ---
 
-Error contract version: `2026-08-15` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-08-30` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -467,12 +467,6 @@ Another participant holds a claim on this row. Read `claim.state` to see who hol
 
 Another participant held a claim on this row and did not release it in time. Retry, or read `claim.state` to see who holds it.
 
-### model_join_not_configured
-
-`client-only` · not sent over the network
-
-join() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo(&#123; schema, apiKey &#125;) client (default WebSocket transport).
-
 ## Conflict
 
 The write collided with concurrent state (stale read, idempotency mismatch, incompatible change).
@@ -773,7 +767,7 @@ An item id is required for this request.
 
 `HTTP 400` · not retryable
 
-The claim payload could not be parsed. A claim on a row must name the model and the entity it targets; a claim on a scope, which is what `join` opens, must name sync groups spelled `kind:id` or `default`. Check the payload shape and resend.
+The claim payload could not be parsed. A row claim must name the model and entity it targets. Check the payload shape and resend.
 
 ### malformed_subscription
 
@@ -1370,6 +1364,12 @@ The server is at connection capacity. Retry shortly — transient and not specif
 `HTTP 502` · not retryable
 
 The server sent a message this client could not read, so it was declined whole rather than applied in part. Nothing was changed locally. This normally means the client and the server are running different versions; upgrading the client resolves it.
+
+### observation_buffer_overflow
+
+`client-only` · not sent over the network
+
+A WebSocket observer fell behind its bounded in-memory backlog. Restart observation to replay from the last durable checkpoint.
 
 ### protocol_version_unsupported
 

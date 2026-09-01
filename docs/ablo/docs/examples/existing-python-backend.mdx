@@ -51,9 +51,15 @@ export const schema = defineSchema({
 ```ts
 // web/ablo.ts — SERVER-ONLY client (holds the sk_ key; never imported in the browser).
 import Ablo from '@abloatai/ablo';
+import Sessions from '@abloatai/ablo/sessions';
 import { schema } from './ablo/schema';
 
 export const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+
+export const sessions = Sessions({
   schema,
   apiKey: process.env.ABLO_API_KEY,
 });
@@ -72,11 +78,11 @@ import { Ablo } from '@abloatai/ablo/react';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
-// Browser client: no secret key — `authEndpoint` points at the session route
+// Browser client: no secret key — `session.endpoint` points at the session route
 // your server exposes (below); the SDK fetches and refreshes the token.
 const ablo = Ablo({
   schema,
-  authEndpoint: '/api/ablo-session',
+  session: { endpoint: '/api/ablo-session' },
 });
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -89,26 +95,17 @@ browser only ever sees the short-lived token:
 
 ```ts
 // web/app/api/ablo-session/route.ts
-import { ablo } from '@/ablo';
-import { credentialEndpointSuccessSchema } from '@abloatai/ablo/auth';
+import { sessions } from '@/ablo';
 
 export const runtime = 'nodejs';
 
-export async function POST() {
-  const userId = await currentUserId(); // your auth
-  const { token, expiresAt } = await ablo.sessions.create({
-    user: { id: userId },
+export const POST = sessions.handler({
+  authenticate: () => currentUser(), // your auth; null when signed out
+  grant: ({ principal: user }) => ({
+    user: { id: user.id },
     can: { records: ['read', 'update'] },
-  });
-  return Response.json(
-    credentialEndpointSuccessSchema.parse({
-      token,
-      expiresAt,
-      credentialKind: 'ephemeral',
-    }),
-    { headers: { 'Cache-Control': 'no-store' } },
-  );
-}
+  }),
+});
 ```
 
 ## 2. Add Live Reads In The UI

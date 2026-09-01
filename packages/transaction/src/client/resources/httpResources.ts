@@ -1,6 +1,6 @@
 /**
  * Shared resource types for the typed clients and private HTTP transport.
- * the commit and claim shapes, the session-mint params and resource, and the
+ * the commit and claim shapes, and the
  * {@link HttpClaimApi} derivation. This module holds only types and has no runtime
  * imports.
  */
@@ -38,15 +38,9 @@ import type { ModelTarget, ModelClaim } from '../../coordination/schema.js';
 export type { ModelTarget, ModelClaim };
 import type { ResolveClaimMeta } from '../../types/global.js';
 import type { ParticipantKind } from '../../types/participant.js';
-import type { SchemaRecord } from '../../schema/schema.js';
-import type { SyncGroupInput } from '../../schema/roles.js';
 // The capability vocabulary — `auth/capability.ts` owns what a grant is on both
 // axes, and these params are the surface a developer declares it through.
-import type {
-  CapabilityCan,
-  CapabilityOperation,
-  EffectiveAuthority,
-} from '../../auth/capability.js';
+import type { EffectiveAuthority } from '../../auth/capability.js';
 import type {
   Claim,
   ClaimStream,
@@ -495,170 +489,4 @@ export interface HttpTransportModel<
    * schema-agnostic shape stays inside the HTTP transport.
    */
   claim: HttpClaimApi<T, Fields>;
-}
-
-/** A single data operation a scoped **agent** session may perform on a model.
- *  The SDK-facing name for {@link CapabilityOperation}; the vocabulary itself is
- *  declared once, as a schema, in `auth/capability.ts`. */
-export type SessionOperation = CapabilityOperation;
-
-/** Parameters for minting an end-user session. Mints an `ek_` token.
- *  `user.id` is your end user's id from your
- *  own identity provider and becomes the session's `participantId`; Ablo does not
- *  model your users, so it is treated as an opaque string at the trust boundary. */
-export interface CreateUserSessionParams<S extends SchemaRecord> {
-  /** Your end user. `id` becomes the token's `participantId`. */
-  user: { id: string };
-  /** Mint the session into this organization instead of the key's own — for a
-   *  platform that serves many tenants from one backend. Requires the `sk_` key to
-   *  carry the `organization:act-as` scope; omit it for the normal
-   *  single-tenant case. */
-  organizationId?: string;
-  /** Resolve this session's schema from a shared project while its data stays
-   *  scoped to `organizationId`. Cross-organization mints default to the
-   *  platform key's own project, so most platforms can omit this. Specify it
-   *  only to override that default. Requires `organization:act-as`. */
-  schemaProject?: {
-    organizationId: string;
-    projectId: string;
-  };
-  /** Sync groups this session may subscribe to — typed (`'default'` or
-   *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
-   *  `@abloatai/transaction/schema`). Omit for the server default:
-   *  `[org:<your org>, user:<user.id>]`. */
-  syncGroups?: readonly SyncGroupInput[];
-  /** Required least-privilege grant. */
-  can: CapabilityCan<S>;
-  /** Token lifetime in seconds. Defaults to 900 (15 minutes). */
-  ttlSeconds?: number;
-  /** Opaque identity blob echoed back to the client as `ablo.user`. */
-  userMeta?: Record<string, unknown>;
-  agent?: never;
-}
-
-/** Mint params for a scoped **agent** session — mints a restricted `rk_` token
- *  gated to exactly the operations named in `can`. `can` is typed off your
- *  schema (no magic `'item.update'` strings): `{ Item: ['update'], Report: ['read'] }`
- *  — the SDK serializes each entry to the wire allowlist (`item.update`). */
-export interface CreateAgentSessionParams<S extends SchemaRecord> {
-  /** Your agent. `id` becomes the token's `participantId`. */
-  agent: { id: string };
-  /** The authenticated person who started this agent run. The backend holding
-   *  the secret key attests this identity, and every resulting delta records
-   *  the agent as actor plus this user as `onBehalfOf`. Persist the user id on
-   *  durable work before enqueueing it so a later worker can supply it here. */
-  onBehalfOf?: { readonly user: { readonly id: string } };
-  /** Per-model operation allowlist, typed against the schema's model names. */
-  can: CapabilityCan<S>;
-  /** Sync groups this session may subscribe to — typed (`'default'` or
-   *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
-   *  `@abloatai/transaction/schema`). Omit for the server default: the org
-   *  anchor (`org:<your org>`) + the agent's own anchor. */
-  syncGroups?: readonly SyncGroupInput[];
-  /** Token lifetime in seconds. Defaults to 900 (15 minutes). */
-  ttlSeconds?: number;
-  /** Opaque identity blob echoed back to the client as `ablo.agent`. */
-  userMeta?: Record<string, unknown>;
-  user?: never;
-}
-
-/** Params for {@link Ablo.sessions}.create — a discriminated union: pass
- *  `{ user, can }` for an end-user session (`ek_`) or `{ agent, can }`
- *  for a scoped agent session (`rk_`). */
-export type CreateSessionParams<S extends SchemaRecord> =
-  | CreateUserSessionParams<S>
-  | CreateAgentSessionParams<S>;
-
-/** Params for {@link Ablo.agents}.create — a flattened agent descriptor (no
- *  `{ agent }` discriminator: `agents.create` only ever mints an agent). Unlike
- *  {@link CreateSessionParams} it resolves to a connected, scoped {@link Ablo}
- *  client rather than a raw token. */
-export interface CreateAgentClientParams<S extends SchemaRecord> {
-  /** The wire participant identity (`agent:<id>`) that claim exclusion and the
-   *  FIFO queue gate on. Omit it to get a fresh random id — a distinct, independent
-   *  participant, which is the default and what you want for concurrent agents.
-   *  Pass a stable string only when one logical agent must re-attach to its own
-   *  held claims across reconnects or restarts. */
-  id?: string;
-  /** The authenticated person who started this run. Preserving it on durable
-   *  work and supplying it here gives every write dual-principal attribution. */
-  onBehalfOf?: { readonly user: { readonly id: string } };
-  /** A human-readable label for logs and attribution (carried in `userMeta.name`).
-   *  It is independent of `id`: two agents that share a `name` still receive
-   *  distinct ids and coordinate as separate participants — `name` never derives or
-   *  collapses identity. */
-  name?: string;
-  /** Per-model operation allowlist, typed against the schema's model names. */
-  can: CapabilityCan<S>;
-  /** Sync groups this agent may subscribe to — typed (`'default'` or
-   *  `<namespace>:<id>`). Omit for the server default (org anchor + the
-   *  agent's own anchor). */
-  syncGroups?: readonly SyncGroupInput[];
-  /** Token lifetime in seconds. Defaults to 900 (15 minutes); the returned client
-   *  re-mints before expiry, so a long-running agent never handles rotation
-   *  itself. */
-  ttlSeconds?: number;
-  /** Extra opaque identity blob echoed on the session scope. Merged with
-   *  `name` (the `name` param wins if you also set `userMeta.name`). */
-  userMeta?: Record<string, unknown>;
-}
-
-/** A minted session. `token` is the secret the holder presents as its bearer. */
-export interface AbloSession {
-  object: 'session';
-  /** Stable id of the minted credential (for revocation). */
-  id: string;
-  /** The short-lived session token — `ek_` for a `{ user }` session, `rk_`
-   *  for an `{ agent }` session. Hand this to the participant's runtime. */
-  token: string;
-  /** ISO-8601 expiry. */
-  expiresAt: string;
-  organizationId: string;
-  /** The grant this token carries, on both axes — the same shape the key row
-   *  stores and the gates enforce. */
-  scope: EffectiveAuthority;
-  userMeta: Record<string, unknown>;
-}
-
-/** Result of revoking a user or agent session. */
-export interface SessionRevocation {
-  id: string;
-  deleted: true;
-  activeSessionsClosed: number;
-}
-
-/** Rotation-with-overlap result for an agent session. */
-export interface SessionRotation {
-  id: string;
-  token: string;
-  expiresAt: string | null;
-  organizationId: string;
-  scope: EffectiveAuthority;
-  rotatedFrom: {
-    id: string;
-    expiresAt: string;
-  };
-}
-
-export interface RevokeSessionParams {
-  id: string;
-}
-
-export interface RotateSessionParams {
-  id: string;
-  /** How long the previous token remains valid. Defaults to 24 hours. */
-  graceSeconds?: number;
-  /** Optional lifetime for the replacement token. */
-  ttlSeconds?: number;
-}
-
-export interface SessionResource<S extends SchemaRecord> {
-  create(params: CreateSessionParams<S>): Promise<AbloSession>;
-  /** Immediately revoke an `ek_` or `rk_` session and close live connections. */
-  revoke(params: RevokeSessionParams): Promise<SessionRevocation>;
-  /**
-   * Rotate an agent `rk_` session with an overlap window. Browser `ek_`
-   * sessions rotate through their `authEndpoint` instead.
-   */
-  rotate(params: RotateSessionParams): Promise<SessionRotation>;
 }

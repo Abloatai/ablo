@@ -28,6 +28,7 @@ import {
   readProcessEnv,
   resolveApiKey,
   resolveApiKeyValue,
+  resolveCredentialValue,
   resolveAuthToken,
   resolveBaseURL,
   resolveBootstrapBaseUrl,
@@ -86,15 +87,10 @@ import type {
   HttpTransportList,
   HttpLogsResource,
   ModelTarget,
-  CreateSessionParams,
-  AbloSession,
-  SessionResource,
 } from '../../client/resources/httpResources.js';
-import { mintSession } from '../../auth/sessionMint.js';
-import {
-  revokeCapability,
-  rotateCapability,
-} from '../../auth/capabilityLifecycle.js';
+import type { CredentialProviderResult } from '../../auth/credentialResult.js';
+import { credentialToken } from '../../auth/credentialResult.js';
+import { createSessionAccess, type SessionAccess } from '../../sessions/index.js';
 import { parseIdentityResolveResponse } from '../../auth/schemas.js';
 import type { EffectiveAuthority } from '../../auth/capability.js';
 
@@ -103,7 +99,6 @@ import {
   heldHeartbeatReply,
   parseSuccessfulCommitResponse,
 } from './helpers.js';
-import type { SchemaRecord } from '../../schema/schema.js';
 import type {
   ClaimLookupParams,
   ClaimOptions,
@@ -180,8 +175,6 @@ import type { CommitFrameOperation } from '../websocket/commitFrames.js';
 /** @internal Private options for the schema-agnostic HTTP protocol transport. */
 export type HttpTransportOptions = Omit<HttpClientConfig, 'schema'> & {
   readonly bootstrapBaseUrl?: string | undefined;
-  /** Schema-key to wire-typename mapping used only when minting agent sessions. */
-  readonly modelTypenames?: Readonly<Record<string, string>> | undefined;
   /**
    * The observability provider forwarded from `Ablo({ observability })`. The HTTP
    * transport emits the same claim and conflict events as the WebSocket transport,
@@ -221,9 +214,6 @@ export type HttpTransportOptions = Omit<HttpClientConfig, 'schema'> & {
 /** @internal Default per-request deadline for the private HTTP transport. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const HTTP_CONFIRMATION_POLL_INTERVAL_MS = 250;
-// NOTE: end-user / agent session minting is `ablo.sessions.create(...)` (typed
-// against the schema, see Ablo.ts `CreateSessionParams`). There is no separate
-// `ephemeralKeys` resource — `sessions` is the one front door for both.
 
 /** @internal Private protocol surface wrapped by `AbloHttpClient`. */
 export interface HttpTransport {
@@ -255,12 +245,8 @@ export interface HttpTransport {
    * server with the credential this client already holds — no re-mint.
    */
   getAuthToken(): Promise<string | null>;
-  /**
-   * Mint a short-lived scoped session. Minting is a control-plane HTTP call (no
-   * socket), so it lives on this stateless client too, not only the realtime one.
-   * `{ user }` mints an `ek_`; `{ agent, can }` mints an `rk_`.
-   */
-  readonly sessions: SessionResource<SchemaRecord>;
+  /** @internal One normalized source shared by HTTP bootstrap and live transport. */
+  readonly access: SessionAccess;
 }
 
 type CommitResponse = CommitReceiptWire;
@@ -465,6 +451,12 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
 
     return headers;
   }
+
+  async function activeCredential(): Promise<CredentialProviderResult> {
+    return (await resolveCredentialValue(configuredApiKey)) ?? configuredAuthToken ?? null;
+  }
+
+  const access = createSessionAccess(options.session, activeCredential);
 
   function endpoint(path: string): string {
     const target = new URL(`${apiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`);
@@ -2222,64 +2214,12 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     claims,
     logs,
     model,
-    sessions: {
-      async create(params: CreateSessionParams<SchemaRecord>): Promise<AbloSession> {
-        // Stateless mint: the configured key is the control-plane credential here
-        // (no startup `rk_` exchange runs on this client). It reuses the resolved
-        // base URL and fetch; the shared `mintSession` handles the two server routes.
-        const apiKey = await resolveApiKeyValue(configuredApiKey);
-        if (!apiKey) {
-          throw new AbloAuthenticationError(
-            'sessions.create requires a secret (sk_) API key — call it from your backend, not the browser.',
-            { code: 'apikey_missing' }
-          );
-        }
-        // A transport built without a schema has no way to translate `can`'s
-        // schema keys into the type names the server gates on. Minting anyway
-        // would spell every override wrong and surface as
-        // `capability_scope_denied` on the agent's first write, so refuse here
-        // instead of guessing.
-        if (!options.modelTypenames) {
-          throw new AbloValidationError(
-            'sessions.create needs the schema this client is bound to. Construct it ' +
-              "through Ablo({ schema, apiKey, transport: 'http' }) rather than the " +
-              'bare transport.',
-            { code: 'invalid_options', param: 'schema' },
-          );
-        }
-        return mintSession(params, {
-          apiKey,
-          baseUrl: apiBaseUrl,
-          modelTypenames: options.modelTypenames,
-          ...(options.fetch ? { fetch: options.fetch } : {}),
-        });
-      },
-      async revoke({ id }) {
-        const apiKey = await resolveApiKeyValue(configuredApiKey);
-        return revokeCapability({
-          apiKey: apiKey ?? '',
-          baseUrl: apiBaseUrl,
-          id,
-          ...(options.fetch ? { fetch: options.fetch } : {}),
-        });
-      },
-      async rotate({ id, graceSeconds, ttlSeconds }) {
-        const apiKey = await resolveApiKeyValue(configuredApiKey);
-        return rotateCapability({
-          apiKey: apiKey ?? '',
-          baseUrl: apiBaseUrl,
-          id,
-          ...(graceSeconds !== undefined ? { graceSeconds } : {}),
-          ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
-          ...(options.fetch ? { fetch: options.fetch } : {}),
-        });
-      },
-    },
     async getAuthToken(): Promise<string | null> {
       // Mirror `authHeaders()`: a configured API key wins, else the
       // construction-time auth token. Resolve the (possibly async) key setter.
-      return (await resolveApiKeyValue(configuredApiKey)) ?? configuredAuthToken ?? null;
+      return credentialToken(await activeCredential());
     },
+    access,
   };
 }
 

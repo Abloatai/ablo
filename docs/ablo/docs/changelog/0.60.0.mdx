@@ -1,0 +1,66 @@
+---
+title: "v0.60.0"
+type: changelog
+date: 2026-09-01T16:01:09.000Z
+changelog:
+  version: "0.60.0"
+  category: "Features"
+---
+
+### Sessions are the connection boundary for people and agents
+
+`Sessions({ schema, apiKey })` is now the dedicated session issuer. Backends create scoped
+agent sessions with `sessions.create({ agent, can, groups })` and expose browser
+sessions with `sessions.handler({ authenticate, grant })`. Both return the same
+short-lived session contract, and both are supplied to clients through
+`Ablo({ schema, session })`:
+
+```ts
+const workerAccess = {
+  records: ['read', 'update'],
+} as const;
+
+import Sessions from '@abloatai/ablo/sessions';
+
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_API_KEY });
+
+const session = () =>
+  sessions.create({
+    agent: { id: stableWorkerId },
+    groups: [workspaceGroup],
+    can: workerAccess,
+  });
+
+const agent = Ablo({ schema, session });
+```
+
+Session clients default to one reconnecting WebSocket for commits, claims,
+observation, presence, and collaboration. API-key clients remain HTTP by
+default, and bounded session work can select `transport: 'http'` explicitly.
+Model calls do not open additional sockets.
+
+An async session provider represents one renewable logical identity. The client
+caches each short-lived credential until it approaches `expiresAt`, pre-mints a
+replacement, and reconnects with that replacement when necessary. Durable
+observation resumes from its acknowledged cursor across socket replacement.
+A provider resolving `null` means the application login ended and terminates the
+session; a thrown error remains transient. A static session object cannot renew
+itself and ends when its bearer expires. In-flight commits whose outcome became
+ambiguous still reject and can be retried with their original idempotency key.
+
+The browser client now names its session route as
+`session: { endpoint: '/api/ablo-session' }`; `authEndpoint` is removed. Public
+connection scope is `groups`; public `syncGroups` is removed. The overlapping
+`agents.create`, `join`, and `useJoin` lifecycles are also removed: connection
+groups define visibility, `usePeers` reads presence, and row claims own
+exclusion.
+
+Internally, session contract, creation, handler, source normalization, and
+credential renewal now live beneath one `sessions` boundary. HTTP bootstrap and
+the live socket consume the same normalized session access, so credential
+identity and renewal policy cannot diverge.
+
+Session issuance no longer occupies a property on `Ablo(...)`. That client owns
+the schema model namespace, so an application model named `sessions` works as
+`ablo.sessions` like any other model. Issuance and lifecycle administration stay
+server-only behind the explicit `@abloatai/ablo/sessions` import.

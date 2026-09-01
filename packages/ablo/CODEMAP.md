@@ -21,6 +21,8 @@ re-exports `@abloatai/humans`.
        |
        +-- default --------> packages/transaction  stateless HTTP client
        |
+       +-- /sessions -----> packages/transaction  server-only session issuer
+       |
        +-- /client, /react -> packages/humans      reactive client + React
 ```
 
@@ -32,6 +34,7 @@ follow the re-export to its owner below.
 | Application import | Client | Composition root |
 | --- | --- | --- |
 | `import { Ablo } from '@abloatai/ablo'` | Stateless HTTP client for agents, workers, cron jobs, and route handlers | [`packages/transaction/src/client/ablo.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/client/ablo.ts) |
+| `import Sessions from '@abloatai/ablo/sessions'` | Server-only scoped-session issuer; no participant connection or model namespace | [`packages/transaction/src/sessions/index.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/sessions/index.ts) |
 | `import Ablo from '@abloatai/ablo/client'` | Reactive client with WebSocket sync, a local graph, presence, offline persistence, and optimistic writes | [`packages/humans/src/Ablo.ts`](https://github.com/Abloatai/ablo/blob/main/packages/humans/src/Ablo.ts) |
 | `import { AbloProvider, useAblo } from '@abloatai/ablo/react'` | React bindings over the reactive client | [`packages/humans/src/react`](https://github.com/Abloatai/ablo/tree/main/packages/humans/src/react) |
 
@@ -61,7 +64,7 @@ await ablo.records.claim({ id });
 | `delete` | `HttpModelClient.delete` plus `ModelDeleteParams` | `createHttpModelClient.delete` delegates to `httpTransport.model(name).delete` | `operations.delete` in [`createModelOperations.ts`](https://github.com/Abloatai/ablo/blob/main/packages/humans/src/local/client/createModelOperations.ts), then `SyncClient.delete` and the mutation queue |
 | `claim`, `claim.state`, `claim.queue`, `claim.release`, `claim.reorder` | `ClaimApi`, `ClaimReadApi`, `ClaimParams`, and related types in [`client/resources/modelOperations.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/client/resources/modelOperations.ts); the awaited HTTP projection is `HttpClaimApi` in [`client/resources/httpResources.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/client/resources/httpResources.ts) | Claim acquisition and the callable claim namespace are assembled in [`transport/http/transport.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/transport/http/transport.ts) | `takeClaim`, `claimReaders`, and `claimApi` in [`createModelOperations.ts`](https://github.com/Abloatai/ablo/blob/main/packages/humans/src/local/client/createModelOperations.ts) |
 | `local.get`, `local.list`, `local.count` | `LocalReads` in [`createModelOperations.ts`](https://github.com/Abloatai/ablo/blob/main/packages/humans/src/local/client/createModelOperations.ts) | Not available: a stateless client has no local graph | The `local` object in that same file |
-| `join`, `onChange` | Reactive surface in [`createModelOperations.ts`](https://github.com/Abloatai/ablo/blob/main/packages/humans/src/local/client/createModelOperations.ts) | Not available: these require a persistent connection/local graph | `operations.join` and `operations.onChange` in that same file |
+| `onChange` | Reactive surface in [`createModelOperations.ts`](https://github.com/Abloatai/ablo/blob/main/packages/humans/src/local/client/createModelOperations.ts) | Not available: it requires a persistent connection/local graph | `operations.onChange` in that same file |
 
 The canonical input shapes deliberately live in `packages/transaction`, even
 for the reactive client. `packages/humans` binds those shared contracts to a
@@ -108,7 +111,7 @@ packages/ablo/src/client.ts
 | Claim target and wire schemas | [`coordination/schema.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/coordination/schema.ts) and [`claims/locator.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/claims/locator.ts) |
 | Claim heartbeat behavior | [`claims/heartbeat.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/claims/heartbeat.ts) |
 | Schema DSL (`defineSchema`, `model`, fields, relations) | [`packages/transaction/src/schema`](https://github.com/Abloatai/ablo/tree/main/packages/transaction/src/schema) |
-| Capabilities and scoped sessions | [`auth/capability.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/auth/capability.ts), [`auth/sessionMint.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/auth/sessionMint.ts), and resource types in `httpResources.ts` |
+| Capabilities and scoped sessions | [`sessions/index.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/sessions/index.ts) owns the session tree; [`auth/capability.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/auth/capability.ts) owns the underlying grant contract |
 | Errors and recovery metadata | [`errors.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/errors.ts) and [`errorCodes.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/errorCodes.ts) |
 | Durable observation and log pages | [`client/contract.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/client/contract.ts), [`observation/httpFeed.ts`](https://github.com/Abloatai/ablo/blob/main/packages/transaction/src/observation/httpFeed.ts), and `HttpLogsResource` in `client/resources/httpResources.ts` |
 | AI SDK model tools | [`packages/transaction/src/ai-sdk`](https://github.com/Abloatai/ablo/tree/main/packages/transaction/src/ai-sdk) |

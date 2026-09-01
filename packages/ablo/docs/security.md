@@ -13,7 +13,7 @@ credential, normally supplied through `ABLO_API_KEY`. Never include it in a
 browser bundle or agent-generated output.
 
 Browsers use either a publishable read-only `pk_` credential or a short-lived,
-scoped session minted by your backend through `authEndpoint`. See [API
+scoped session minted by your backend through `session.endpoint`. See [API
 Keys](./api-keys.md) and [Sessions](./sessions.md) for the credential classes and
 minting flow.
 

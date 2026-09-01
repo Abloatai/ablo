@@ -107,8 +107,8 @@ describe('runtime isolation between clients', () => {
     const b = recordingLogger();
 
     // Endpoint-form credential: safe under jsdom (no secret-key browser guard).
-    const clientA = Ablo({ schema, authEndpoint: '/api/ablo-session', logger: a.logger });
-    const clientB = Ablo({ schema, authEndpoint: '/api/ablo-session', logger: b.logger });
+    const clientA = Ablo({ schema, session: { endpoint: '/api/ablo-session' }, logger: a.logger });
+    const clientB = Ablo({ schema, session: { endpoint: '/api/ablo-session' }, logger: b.logger });
 
     try {
       // Constructing B moved the module-global bridge to B. A write staged on

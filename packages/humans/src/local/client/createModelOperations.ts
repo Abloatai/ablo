@@ -6,7 +6,7 @@
  * `read` and `list`, with the same point lookup restricted to the local graph under
  * `local`, the writes `create`, `update`, and `delete`, the coordination
  * namespace `claim` (callable as `claim({ id })`, plus `claim.state`,
- * `claim.queue`, `claim.release`, and `claim.reorder`), `join`, and `onChange`.
+ * `claim.queue`, `claim.release`, and `claim.reorder`), and `onChange`.
  * The factory returns a plain object; the client assembles the `ablo.<model>`
  * lookup table from one of these per model.
  */
@@ -66,7 +66,6 @@ import type { ModelRegistry } from '../ModelRegistry.js';
 import type { InstanceCache } from '../InstanceCache.js';
 import type { SyncClient } from '../SyncClient.js';
 import type { OnDemandLoader } from '../sync/OnDemandLoader.js';
-import type { JoinedParticipant } from '../sync/participants.js';
 import { ModelScope } from '@abloatai/transaction/types';
 import type {
   Duration,
@@ -112,7 +111,6 @@ export type {
   ModelCreateParams,
   ModelUpdateParams,
   ModelDeleteParams,
-  JoinOptions,
 } from '@abloatai/transaction/client/resources/modelOperations';
 export type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim, HeldLease };
 
@@ -126,7 +124,6 @@ import type {
   ClaimAttemptEvent,
   ClaimQueueView,
   ClaimReorderParams,
-  JoinOptions,
   LocalCountOptions,
   LocalReadOptions,
   ModelCreateManyParams,
@@ -284,17 +281,6 @@ export interface ModelCollaboration {
    * fire-and-forget, best-effort semantics as `enterScope`.
    */
   pinScope?(scope: Record<string, string>): void | Promise<void>;
-  /**
-   * Opens a presence and claim subscription on this model's sync group(s) and
-   * returns the live participant handle. Backs `ablo.<model>.join(ids)`.
-   * WebSocket only, since presence needs a live socket; it is absent on other
-   * client constructions, where the surface throws a clear error.
-   */
-  createJoin?(
-    modelKey: string,
-    ids: string | readonly string[],
-    options?: JoinOptions,
-  ): Promise<JoinedParticipant>;
 }
 
 
@@ -374,26 +360,6 @@ interface ReactiveModelSurface<T, Fields = T> {
    * ```
    */
   claim: ClaimApi<T, Fields>;
-
-  /**
-   * Joins the sync group(s) for one or more rows of this model and returns a
-   * live participant handle — presence (`.peers`), the scoped claim stream
-   * (`.claims`), and `.leave()` / `await using` disposal. This is a presence
-   * subscription: it reports who else is here and what they hold, not row
-   * values changing — for the latter, use `onChange`.
-   *
-   * WebSocket only: presence needs a live socket, so this is absent on HTTP
-   * clients and throws on any non-WebSocket construction.
-   *
-   * ```ts
-   * await using participant = await ablo.sections.join(sectionIds, { ttl: '5m' });
-   * participant.peers; // who else is here
-   * ```
-   */
-  join(
-    ids: string | readonly string[],
-    options?: JoinOptions,
-  ): Promise<JoinedParticipant>;
 
   /** Subscribe to changes; the callback runs on every change. */
   onChange(
@@ -546,7 +512,10 @@ export function createModelOperations<T, C>(
     return rows.map((row) => modelAsRow<T>(row));
   };
 
-  const waitForMutation = async (model: Model): Promise<void> => {
+  const waitForMutation = async (
+    model: Model,
+    exactConfirmation?: Promise<void>,
+  ): Promise<void> => {
     // Model writes are optimistic locally, but their promise has one stable
     // meaning: authoritative confirmation. Callers that do not need the
     // barrier can keep using the row immediately and leave the promise to the
@@ -558,7 +527,8 @@ export function createModelOperations<T, C>(
     // coalescer and producing one SQL transaction per delta.
     await Promise.resolve();
     await syncClient.syncNow();
-    await syncClient.waitForConfirmation(model.getModelName(), model.id);
+    if (exactConfirmation) await exactConfirmation;
+    else await syncClient.waitForConfirmation(model.getModelName(), model.id);
   };
 
   // Claims this model surface currently holds, keyed by the exact grant id.
@@ -1402,8 +1372,8 @@ export function createModelOperations<T, C>(
               }
             : {}),
         };
-        syncClient.add(model, effective);
-        await waitForMutation(model);
+        const confirmation = syncClient.add(model, effective);
+        await waitForMutation(model, confirmation);
         return modelAsRow<T>(model);
       } finally {
         await autoLease?.release?.().catch(() => {});
@@ -1528,8 +1498,12 @@ export function createModelOperations<T, C>(
                   : {}),
               };
               model.applyChanges(patch);
-              syncClient.update(model, effective);
-              await waitForMutation(model);
+              const confirmation = syncClient.update(
+                model,
+                effective,
+                patch as Record<string, unknown>,
+              );
+              await waitForMutation(model, confirmation);
               return modelAsRow<T>(model);
             },
           });
@@ -1585,8 +1559,12 @@ export function createModelOperations<T, C>(
         // the server. (`updateFromData` is the hydration path and would discard
         // the tracking, producing an empty `input: {}` no-op mutation.)
         model.applyChanges(params.data);
-        syncClient.update(model, effective);
-        await waitForMutation(model);
+        const confirmation = syncClient.update(
+          model,
+          effective,
+          params.data as Record<string, unknown>,
+        );
+        await waitForMutation(model, confirmation);
         const updated = modelAsRow<T>(model);
         await settleClaimsAfterWrite(id, handle);
         return updated;
@@ -1658,29 +1636,14 @@ export function createModelOperations<T, C>(
         ...opts,
         ...(selected ? { claimRef: { id: selected.id } } : {}),
       };
-      syncClient.delete(model, effective);
-      await waitForMutation(model);
+      const confirmation = syncClient.delete(model, effective);
+      await waitForMutation(model, confirmation);
       await settleClaimsAfterWrite(id, handle);
     }),
 
     // `claim` is a callable namespace (take a claim) carrying the coordination
     // readers (`claim.state` / `claim.queue` / `claim.release` / `claim.reorder`).
     claim: claimApi,
-
-    join: guard(
-      (
-        ids: string | readonly string[],
-        options?: JoinOptions,
-      ): Promise<JoinedParticipant> => {
-        if (!collaboration?.createJoin) {
-          throw new AbloValidationError(
-            `Model "${schemaKey}" was built without a WebSocket runtime, so join() is unavailable here. Presence needs a live socket — use the standard Ablo({ schema, apiKey }) client (not the HTTP transport).`,
-            { code: 'model_join_not_configured' },
-          );
-        }
-        return collaboration.createJoin(schemaKey, ids, options);
-      },
-    ),
 
     onChange(callback, options): () => void {
       return autorun(() => {

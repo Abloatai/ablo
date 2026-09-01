@@ -79,8 +79,11 @@ try {
   };
   const client = packed.Ablo({
     schema,
-    transport: 'websocket',
-    apiKey: 'rk_packed',
+    session: {
+      object: 'session',
+      token: 'rk_packed',
+      expiresAt: '2030-08-30T12:00:00.000Z',
+    },
     baseURL: 'https://packed.example.test',
     fetch: () => Promise.resolve(new Response(JSON.stringify({
       participantKind: 'agent', participantId: 'agent-packed', accountScope: 'org-packed',

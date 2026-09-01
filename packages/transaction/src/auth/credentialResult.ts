@@ -1,8 +1,10 @@
 import type { CredentialEndpointSuccess } from './credentialEndpointProtocol.js';
+import type { SessionCredential } from '../sessions/contract.js';
 
 export type CredentialProviderResult =
   | string
   | CredentialEndpointSuccess
+  | SessionCredential
   | null;
 
 /** Rotating secret provider or short-lived browser credential provider. */

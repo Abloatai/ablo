@@ -42,7 +42,7 @@ export function protectBrowserCredentialProvider(
 function throwBrowserSecretError(): never {
   throw new AbloAuthenticationError(
     'A secret `sk_` credential reached the browser. Keep it server-side and ' +
-      'configure the browser with `authEndpoint` instead.',
+      'configure the browser with `session: { endpoint }` instead.',
     { code: 'browser_apikey_blocked' },
   );
 }

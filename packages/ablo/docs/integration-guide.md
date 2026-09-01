@@ -30,7 +30,6 @@ The normal integration is one client:
 
 ```ts
 import Ablo from '@abloatai/ablo';
-import { credentialEndpointSuccessSchema } from '@abloatai/ablo/auth';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 ```
 
@@ -183,7 +182,7 @@ import { schema } from '@/ablo/schema';
 // from your session route (see below) and refreshes it before expiry.
 export const ablo = Ablo({
   schema,
-  authEndpoint: '/api/ablo-session',
+  session: { endpoint: '/api/ablo-session' },
 });
 ```
 
@@ -203,29 +202,24 @@ The session route mints the scoped token server-side, where the API key lives:
 
 ```ts
 // app/api/ablo-session/route.ts
-import Ablo from '@abloatai/ablo';
+import Sessions from '@abloatai/ablo/sessions';
 import { schema } from '@/ablo/schema';
 import { auth } from '@/auth';
 
 export const runtime = 'nodejs';
 
-const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_API_KEY });
 
-export async function POST() {
-  const session = await auth(); // your own auth — returns the signed-in user
-  const { token, expiresAt } = await sync.sessions.create({
-    user: { id: session.userId },
+export const POST = sessions.handler({
+  async authenticate() {
+    const session = await auth();
+    return session?.user ?? null;
+  },
+  grant: ({ principal: user }) => ({
+    user: { id: user.id },
     can: { records: ['read', 'update'] },
-  });
-  return Response.json(
-    credentialEndpointSuccessSchema.parse({
-      token,
-      expiresAt,
-      credentialKind: 'ephemeral',
-    }),
-    { headers: { 'Cache-Control': 'no-store' } },
-  );
-}
+  }),
+});
 ```
 
 ### Why two credential shapes

@@ -10,26 +10,31 @@ hands to one actor — a signed-in **person's browser** or a scoped **agent**. I
 the same primitive in both cases (backend-minted, short-lived, scoped); the only
 difference is the subject and how much authority it carries.
 
-One resource mints both:
+One server-only issuer mints both. It is separate from `Ablo(...)` so the
+participant client keeps every schema model name, including `ablo.sessions`:
 
 ```ts Your backend (sk_)
+import Sessions from '@abloatai/ablo/sessions';
+
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_API_KEY });
+
 // A logged-in person's browser session — only the operations this UI needs.
-const userSession = await ablo.sessions.create({
+const userSession = await sessions.create({
   user: { id: currentUser.id },
   can: { records: ['read', 'update'], workspaces: ['read'] },
 });
 
-// Recommended agent path — returns a ready, scoped client.
-const agent = await ablo.agents.create({
-  name: 'record-writer',
+// An agent session — hand its rk_ to the agent runtime.
+const agentSession = await sessions.create({
+  agent: { id: crypto.randomUUID() },
   can: { records: ['read', 'update'], workspaces: ['read'] },
+  userMeta: { name: 'record-writer' },
 });
 ```
 
-`sessions.create({ user, can })` mints an `ek_` (ephemeral key).
-`agents.create({ can })` mints and manages an `rk_` (restricted key). Use the
-lower-level `sessions.create({ agent, can })` only when another runtime needs
-the raw agent token.
+`sessions.create({ user, can })` mints an `ek_` (ephemeral key), while
+`sessions.create({ agent, can })` mints an `rk_` (restricted key). There is one
+issuance API; the subject selects the credential kind and attribution.
 
 It exists because of one rule: **the browser can never hold a secret.** Your
 `sk_` lives on the server; the browser only ever holds a minted session token
@@ -46,30 +51,39 @@ session token *is* that assertion: "this connection is acting as `U`, in org
 
 ## End-user sessions (`ek_`)
 
-For a logged-in person using your app. Mint on a backend route that has already
-authenticated the user:
+For a logged-in person using your app. Mount a session handler on a backend
+route and connect it to the authentication you already use:
 
 ```ts Your backend route (session-authed)
-import { credentialEndpointSuccessSchema } from '@abloatai/ablo/auth';
+import { headers } from 'next/headers';
+import { auth } from '@/lib/auth';
+import { sessions } from '@/ablo/sessions';
 
-const { token, expiresAt } = await ablo.sessions.create({
-  user: { id: currentUser.id },   // who the session acts as
-  can: { records: ['read', 'update'] },
-  // syncGroups: [...],           // optional; defaults to the user's org + user
+export const POST = sessions.handler({
+  async authenticate() {
+    const session = await auth.api.getSession({ headers: await headers() });
+    return session?.user ?? null;
+  },
+  async grant({ principal: user }) {
+    const membership = await findActiveMembership(user.id);
+    if (!membership) return null;
+
+    return {
+      user: { id: user.id },
+      groups: [`workspace:${membership.workspaceId}`],
+      can: { records: ['read', 'update'] },
+    };
+  },
 });
-return Response.json(
-  credentialEndpointSuccessSchema.parse({
-    token,
-    expiresAt,
-    credentialKind: 'ephemeral',
-  }),
-  { headers: { 'Cache-Control': 'no-store' } },
-);
 ```
 
-`can` is required. The mint fails closed when the grant is absent or empty.
+`authenticate` adapts Better Auth (or any other auth system) to an application
+principal. `grant` derives Ablo identity, groups, and permissions server-side.
+Returning `null` from either step fails closed. The handler owns same-origin
+checks, no-store responses, and the credential envelope; the application never
+handles the token. `can` is required and cannot be empty.
 
-Point a browser `Ablo` client's `authEndpoint` at that route, and pass
+Point a browser `Ablo` client's `session.endpoint` at that route, and pass
 the **instance** to [`<AbloProvider>`](/react). The client fetches the token,
 opens the connection, and re-mints before expiry — your app writes no token
 plumbing:
@@ -83,7 +97,7 @@ import { schema } from '@/ablo.schema';
 
 const ablo = Ablo({
   schema,
-  authEndpoint: '/api/ablo-session',
+  session: { endpoint: '/api/ablo-session' },
 });
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -95,8 +109,8 @@ The client owns auth, the credential lifecycle, and the connection; the provider
 is only the thin reactive binding over it.
 Build the client **once** at module scope — a new instance per render tears down
 the socket. Need custom headers or a
-body on the exchange? `authEndpoint` also accepts an async resolver that
-returns the token.
+body on the exchange? Pass an async `session` provider that performs the custom
+request and returns its credential response.
 
 ## Agents (`rk_`)
 
@@ -105,47 +119,61 @@ operations. The `can` map is the permission boundary, and it's **typed against
 your schema** — the model keys are your schema's models, so a typo is a compile
 error, not a silent over-grant:
 
+The examples below reuse the server-only `sessions` issuer constructed above.
+
 ```ts
-const agent = await ablo.agents.create({
-  name: 'record-writer',
+const session = await sessions.create({
+  agent: { id: crypto.randomUUID() },
   can: { records: ['update'] },  // typed off the schema — no magic strings
   ttlSeconds: 600,
+  userMeta: { name: 'record-writer' },
 });
 
+const agent = Ablo({ schema, session, transport: 'http' });
 await agent.records.update({ id, data });
 await agent.dispose();
 ```
 
-The returned client refreshes its own short-lived credential. A write grant
-automatically includes the corresponding read, so
+The session is the credential; construct the agent client in the runtime that
+will use it. A write grant automatically includes the corresponding read, so
 `can: { records: ['update'] }` is enforced as `record.update` plus `record.read`.
 Operations are `'read' | 'create' | 'update' | 'delete'`.
 
-For a reusable grant, use TypeScript's `satisfies`. It checks the object against
-the schema while preserving its narrow literals—there is no string parser or
-second permission model:
+Give reusable access a domain name and keep it next to the worker that owns it:
 
 ```ts
-import type { CapabilityGrant } from '@abloatai/ablo/auth';
-import { schema } from './ablo.schema';
-
-const recordWriterCan = {
+const workerAccess = {
   records: ['update'],
-} satisfies CapabilityGrant<typeof schema>;
+} as const;
 
-const agent = await ablo.agents.create({ can: recordWriterCan });
+const session = await sessions.create({
+  agent: { id: crypto.randomUUID() },
+  can: workerAccess,
+});
 ```
 
-`documents` instead of `records`, or `'write'` instead of `'update'`, is a compile
-error. At runtime the SDK parses the same grant with the schema-bound Zod
-contract before minting, and the server validates it again against the active
-pushed schema.
+The SDK checks the model names and operations against the bound schema before
+minting, and the server validates them again against the active pushed schema.
 
-:::note
-Use `sessions.create({ agent, can })` when a separate runtime, MCP process, or
-protocol integration needs the raw token. For an agent running in the current
-server process, prefer `agents.create({ can })`.
-:::
+For a long-running agent, pass an async session provider. It re-mints the same
+logical identity through the canonical resource; the client caches each result
+until it approaches `expiresAt` and uses the replacement for HTTP requests and
+WebSocket reconnects:
+
+```ts
+const session = () => sessions.create({
+  agent: { id: stableWorkerId },
+  can: workerAccess,
+  groups: [workspaceGroup],
+});
+
+const agent = Ablo({ schema, session });
+```
+
+A static `session` resource does not invent authority to renew itself. It lives
+until `expiresAt`; use a provider when the client must outlive that credential.
+Session clients use one reconnecting WebSocket by default. Pass
+`transport: 'http'` only for bounded scoped work that must not hold a socket.
 
 ## Mint
 
@@ -159,41 +187,42 @@ for the actor.
 | `can` | both | Required non-empty per-model operation allowlist, typed off the schema. |
 | `organizationId` | user | Mint into a customer organization instead of the key's own. Requires `organization:act-as`. |
 | `schemaProject` | user | Override the schema project for a cross-org mint. Usually omitted because the owning key's project is the default. |
-| `syncGroups` | both | Narrow the session below its default scope. Omit to inherit. |
+| `groups` | both | Narrow the session below its default scope. Omit to inherit. |
 | `ttlSeconds` | both | Lifetime in seconds. Defaults to `900` (15m). |
 | `userMeta` | both | Opaque identity blob echoed back to the client. |
 
 ## Lifecycle
 
-Sessions are **short-lived by design** (~15 minutes) and, for browsers,
-**auto-refreshed** — the provider re-mints ahead of expiry, so a session never
-drops at the boundary. Signing out stops refresh and the old token expires on
-its own.
+Sessions are **short-lived by design** (~15 minutes). A renewable browser or
+agent provider pre-mints ahead of expiry and reconnects with the replacement,
+so the logical session and durable observation continue even though an
+individual socket may be replaced. A static session ends at its credential's
+expiry. Signing out stops refresh and the old token expires on its own.
 
 Revoke immediately when a token is exposed or an actor loses access:
 
 ```ts
-await ablo.sessions.revoke({ id: session.id });
+await sessions.revoke({ id: session.id });
 ```
 
 Agent sessions can rotate with overlap so a worker can adopt the replacement
 before the previous token expires:
 
 ```ts
-const replacement = await ablo.sessions.rotate({
+const replacement = await sessions.rotate({
   id: session.id,
   graceSeconds: 300,
   ttlSeconds: 900,
 });
 ```
 
-Browser `ek_` sessions rotate through `authEndpoint`; do not distribute rotated
+Browser `ek_` sessions rotate through `session.endpoint`; do not distribute rotated
 browser tokens manually.
 
 ### Offline & sign-out
 
 The short session token is **not** your user's login — it's a minutes-long
-credential layered on top of whatever long-lived auth your `authEndpoint`
+credential layered on top of whatever long-lived auth your `session.endpoint`
 already enforces (your own session cookie, an IdP, etc.). The provider keeps
 those two lifetimes separate, which means:
 
@@ -203,7 +232,7 @@ those two lifetimes separate, which means:
   connectivity or tab focus returns. The user stays signed in for as long as
   your underlying session is valid, however brief or long the network drop.
 - **The user is signed out only when the underlying session is genuinely
-  gone** — your `authEndpoint` responds `401` with the canonical
+  gone** — your session endpoint responds `401` with the canonical
   `{ error: { code: 'session_expired' } }` body. An unrelated `401` or `403`
   is a policy/configuration failure, not proof that the login ended.
 
@@ -212,10 +241,9 @@ rejection of the *long-lived* credential ends the session — a network failure
 never does.
 
 :::note
-Use `credentialEndpointSuccessSchema` and `credentialEndpointErrorSchema` from
-`@abloatai/ablo/auth` on the route. Return `session_expired` only when the
-application login is actually gone, and let network/`5xx` failures surface as
-errors.
+`sessions.handler` returns `session_expired` only when `authenticate` reports
+that the application login is gone. Exceptions and network failures remain
+transient errors; they do not sign the user out.
 :::
 
 ## Scope
@@ -224,7 +252,7 @@ A user session carries the user's **base** sync-groups (`org:`/`user:`/`team:`),
 derived from the identity you minted it for. **Dynamic, relation-driven
 membership** (e.g. a `archive:<id>` the user was just added to) is resolved
 **server-side at connect** and unioned on top — so scope stays live, not frozen
-at mint time. Pass `syncGroups` only when you want to *narrow* below the default.
+at mint time. Pass `groups` only when you want to *narrow* below the default.
 
 ## Your schema, your users (the default)
 
@@ -271,7 +299,7 @@ project while its *data* stays in the customer's own org:
 
 ```ts
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_PLATFORM_KEY });
-const { token } = await ablo.sessions.create({
+const { token } = await sessions.create({
   user: { id: userId },
   organizationId, // DATA → this customer's isolated org
   can: { records: ['read', 'update'] },
@@ -308,5 +336,5 @@ compromise — which is exactly why it never leaves your server.
 |---|---|---|
 | For | a **person** in the browser | an **agent** / automation |
 | Authority | narrow (explicit `can` allowlist) | narrow (explicit `can` allowlist) |
-| Mint | `ablo.sessions.create({ user: { id }, can })` | `ablo.sessions.create({ agent: { id }, can })` |
+| Mint | `sessions.create({ user: { id }, can })` | `sessions.create({ agent: { id }, can })` |
 | Lives where | the user's **browser** | the agent runtime |

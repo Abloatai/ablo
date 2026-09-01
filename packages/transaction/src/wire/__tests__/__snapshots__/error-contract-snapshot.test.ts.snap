@@ -921,12 +921,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
-    "model_join_not_configured": {
-      "category": "claim",
-      "httpStatus": null,
-      "retryable": false,
-      "surface": "client",
-    },
     "model_not_found": {
       "category": "not_found",
       "httpStatus": 404,

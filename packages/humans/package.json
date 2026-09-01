@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/humans",
-  "version": "0.59.2",
+  "version": "0.60.0",
   "description": "The optional human-facing local-state package for Ablo: presence, live queries, and React bindings.",
   "license": "Apache-2.0",
   "type": "module",
@@ -91,7 +91,7 @@
     "directory": "packages/humans"
   },
   "dependencies": {
-    "@abloatai/transaction": "^0.59.2",
+    "@abloatai/transaction": "^0.60.0",
     "mobx": "^6.13.7",
     "uuid": "^11.1.0",
     "zod": "^4.4.3"
@@ -121,6 +121,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "ts-jest": "^29.4.5",
+    "ts-node": "^10.9.2",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "ws": "^8.18.3"
   }

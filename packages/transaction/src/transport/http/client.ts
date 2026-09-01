@@ -21,7 +21,6 @@ import {
   createHttpTransport,
   type HttpTransport,
 } from './transport.js';
-import { modelWireNames } from '../../auth/capability.js';
 import type { HttpClientConfig } from './options.js';
 import type {
   CommitResource,
@@ -33,9 +32,6 @@ import type {
   ModelReadOptions,
   ModelMutationOptions,
   ModelList,
-  CreateSessionParams,
-  AbloSession,
-  SessionResource,
 } from '../../client/resources/httpResources.js';
 import { collectModelList, modelList } from '../../client/resources/httpResources.js';
 import { resolveCreateId } from '../../client/resources/modelCreate.js';
@@ -91,8 +87,8 @@ export interface AbloHttpClientOptions<S extends SchemaRecord>
    * @default 30_000
    */
   readonly timeoutMs?: number;
-  /** Initial area of interest for `transport: 'websocket'`. */
-  readonly syncGroups?: readonly string[];
+  /** Initial groups observed by a session-backed WebSocket client. */
+  readonly groups?: readonly string[];
   /** Application frame names accepted by `subscribe` on the WebSocket transport. */
   readonly collaborationEvents?: readonly string[];
   /** Durable resume position for WebSocket observation. */
@@ -123,7 +119,7 @@ export type HttpModelMutationParams<P> = Omit<P, 'reads'> & {
  * coordinated writes.
  * It deliberately omits the stateful client's local-only
  * reads (the `local` namespace) and live subscriptions (`onChange`), which need
- * a resident graph and a persistent socket; those are absent from the type, so
+ * a local graph and a persistent socket; those are absent from the type, so
  * reaching for one is a compile error rather than a runtime gap.
  *
  * This is also the base the reactive per-model surface is composed from, rather
@@ -199,7 +195,7 @@ export interface HttpModelClient<T, C = T> {
 
 /**
  * The type of the stateless HTTP client: a typed {@link HttpModelClient} per
- * schema model, plus `commits`, `dispose`, and the session-mint surface. It
+ * schema model, plus `commits` and lifecycle operations. It
  * exposes only what request/response transport can do, so reaching for a
  * stateful-only capability — the `local` reads, `onChange`, or the synchronous
  * `claim.state`/`queue`/`reorder` reads — is a compile error rather than a value
@@ -235,13 +231,6 @@ export type AbloHttpClient<S extends SchemaRecord> = {
   dispose(): Promise<void>;
   /** Resolves the bearer credential this client authenticates with, or `null` if none is set. */
   getAuthToken(): Promise<string | null>;
-  /**
-   * Mints a short-lived, scoped session token. Minting is itself a stateless
-   * request, so it is available here even though the local-cache reads are not.
-   * Pass `{ user }` to mint an end-user key (`ek_`) or `{ agent, can }` to mint a
-   * scoped agent key (`rk_`). See {@link CreateSessionParams}.
-  */
-  readonly sessions: SessionResource<S>;
 };
 
 /** The same typed resource client, with server-pushed capabilities carried by WebSocket. */
@@ -252,9 +241,9 @@ export type AbloWebSocketClient<S extends SchemaRecord> = AbloHttpClient<S> & {
     listener: (...args: CoreSyncEventMap[K]) => void,
   ): () => void;
   updateSubscription(
-    syncGroups: readonly string[],
+    groups: readonly string[],
     options?: { timeoutMs?: number },
-  ): Promise<{ syncGroups: string[] }>;
+  ): Promise<{ groups: string[] }>;
   readonly presence: {
     update(input?: {
       readonly status?: 'online' | 'away' | 'offline';
@@ -281,7 +270,6 @@ const PROTOCOL_MEMBERS = new Set<string>([
   'logs',
   'identity',
   'getAuthToken',
-  'sessions',
 ]);
 
 /** Narrows a bare property name to a transport key so the facade can index it typed. */
@@ -538,23 +526,20 @@ function createHttpModelClient<T, C = T>(
 }
 
 /**
- * Builds the stateless, typed HTTP client. Each `client.<model>` resolves to the
- * protocol client's model accessor, while `commits`, `dispose`, and the other
- * protocol members pass through unchanged. No socket is ever opened; the bearer
- * credential is the identity.
+ * Builds the typed headless client. An API-key identity uses HTTP. A session
+ * identity uses one lazily opened WebSocket by default for commits and live
+ * coordination until `dispose()`; point reads and administration remain HTTP.
  */
-/** @internal Constructed only through the public `Ablo({ transport: 'http' })` factory. */
+/** @internal Constructed only through the public `Ablo()` factory. */
 export function createAbloHttpClient<S extends SchemaRecord>(
   options: AbloHttpClientOptions<S>,
 ): AbloHttpClient<S> | AbloWebSocketClient<S> {
   const { schema, onCommitReceipt, ...rest } = options;
-  const usesWebSocket = options.transport === 'websocket';
+  const usesWebSocket = options.transport === 'websocket'
+    || (options.transport === undefined && options.session != null);
   const readSetContext = createReadSetContext();
   const transport: HttpTransport = createHttpTransport({
     ...rest,
-    // Derived from the schema this client is bound to, never assembled by hand
-    // — see `auth/capability.ts`.
-    modelTypenames: modelWireNames(schema.models),
     onCommitReceipt: (observation) => {
       recordHttpCommitReceipt(readSetContext, observation);
       onCommitReceipt?.(observation);
@@ -597,8 +582,8 @@ export function createAbloHttpClient<S extends SchemaRecord>(
       await transport.ready();
       const session = await createWebSocketSession({
         baseUrl: rest.baseURL ?? undefined,
-        getAuthToken: async () => (await transport.getAuthToken()) ?? undefined,
-        syncGroups: options.syncGroups,
+        access: transport.access,
+        syncGroups: options.groups,
         collaborationEvents: options.collaborationEvents,
         cursorStore: options.cursorStore,
         cursorKey: options.cursorKey,
@@ -707,8 +692,13 @@ export function createAbloHttpClient<S extends SchemaRecord>(
         };
       }
       if (usesWebSocket && prop === 'updateSubscription') {
-        return async (groups: readonly string[], subscriptionOptions?: { timeoutMs?: number }) =>
-          (await webSocketSession()).updateSubscription(groups, subscriptionOptions);
+        return async (groups: readonly string[], subscriptionOptions?: { timeoutMs?: number }) => {
+          const result = await (await webSocketSession()).updateSubscription(
+            groups,
+            subscriptionOptions,
+          );
+          return { groups: result.syncGroups };
+        };
       }
       if (usesWebSocket && prop === 'presence') {
         return {

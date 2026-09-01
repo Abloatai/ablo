@@ -51,4 +51,32 @@ describe('WsTransport delivery routing', () => {
     expect(new URL(openedUrl).searchParams.get('deliveryPartition')).toBe('3-8');
     transport.disconnect();
   });
+
+  it('suppresses a synchronous socket error caused by manual disconnect', () => {
+    class ErrorOnCloseWebSocket {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      static readonly CLOSED = 3;
+
+      readonly readyState = ErrorOnCloseWebSocket.OPEN;
+      onopen: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onmessage: (() => void) | null = null;
+
+      close(): void { this.onerror?.(); }
+      send(): void {}
+    }
+
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: ErrorOnCloseWebSocket,
+    });
+
+    const transport = new WsTransport({ baseUrl: 'https://sync.example.test' });
+    transport.connect();
+    expect(() => transport.disconnect()).not.toThrow();
+  });
 });

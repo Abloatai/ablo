@@ -59,21 +59,22 @@ never does), then hand the short-lived token to the browser client:
 ```ts
 // server — mints a scoped agent session for one workspace
 import Ablo from '@abloatai/ablo';
+import Sessions from '@abloatai/ablo/sessions';
 import { syncGroup } from '@abloatai/ablo/schema';
 import { schema } from './schema';
 
-const server = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_API_KEY });
 
 export async function mintProjectAgentSession(
   workspaceId: string,
   agentId: string,
   requestingUserId: string,
 ) {
-  const { token } = await server.sessions.create({
+  const { token } = await sessions.create({
     agent: { id: agentId },
     onBehalfOf: { user: { id: requestingUserId } },
     can: { records: ['read', 'update'] }, // operation allowlist for this run
-    syncGroups: [syncGroup('workspace', workspaceId)], // narrowed to just this workspace
+    groups: [syncGroup('workspace', workspaceId)], // narrowed to just this workspace
   });
   return token;
 }

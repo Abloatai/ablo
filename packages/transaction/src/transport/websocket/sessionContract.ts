@@ -8,6 +8,7 @@ import type {
 } from '../../coordination/schema.js';
 import type { ClientSyncDelta } from '../../observation/contract.js';
 import type { ObserveCursorStore } from '../../client/contract.js';
+import type { SessionAccess } from '../../sessions/source.js';
 import type { CommitFrameOperation } from '../websocket/commitFrames.js';
 import type {
   CoreSyncEventMap,
@@ -18,7 +19,8 @@ import type {
 
 export interface WebSocketSessionOptions {
   readonly baseUrl?: string;
-  readonly getAuthToken: () => string | undefined | Promise<string | undefined>;
+  /** Normalized once at the client boundary; transports do not infer policy. */
+  readonly access: SessionAccess;
   readonly syncGroups?: readonly string[];
   readonly collaborationEvents?: readonly string[];
   readonly cursorKey?: string;
@@ -42,15 +44,6 @@ export interface WebSocketObservedDelta extends ClientSyncDelta {
 
 export interface WebSocketObserveOptions {
   readonly signal?: AbortSignal;
-}
-
-/** A multiplexed participant-scope registration on the shared socket. */
-export interface WebSocketJoinInput {
-  readonly claimId: string;
-  readonly syncGroups: readonly string[];
-  readonly capabilityToken?: string;
-  readonly ttlSeconds?: number;
-  readonly timeoutMs?: number;
 }
 
 /** A durable row/field claim carried over the same live protocol. */
@@ -95,8 +88,6 @@ export interface AbloWebSocketSession<
     readonly entityType?: string;
     readonly entityId?: string;
   }): void;
-  join(input: WebSocketJoinInput): Promise<{ syncGroups: string[]; ttlSeconds?: number }>;
-  leave(claimId: string): void;
   subscribe<K extends keyof SyncWebSocketEventMap<TEvents>>(
     event: K,
     listener: (...args: SyncWebSocketEventMap<TEvents>[K]) => void,

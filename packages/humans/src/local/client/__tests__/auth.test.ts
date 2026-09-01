@@ -48,6 +48,51 @@ describe('resolveApiKey', () => {
     ).toBe('sk_env');
   });
 
+  it('uses a session returned by sessions.create as the bearer', () => {
+    expect(
+      resolveApiKey({
+        options: {
+          session: {
+            object: 'session',
+            token: 'rk_worker',
+            expiresAt: '2030-01-01T00:00:00.000Z',
+          },
+        },
+        env: { ABLO_API_KEY: 'sk_env' },
+      }),
+    ).toBe('rk_worker');
+  });
+
+  it('caches a session provider until its credential approaches expiry', async () => {
+    const session = jest.fn().mockResolvedValue({
+      object: 'session' as const,
+      token: 'rk_worker',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    });
+    const resolved = resolveApiKey({ options: { session }, env: {} });
+    if (typeof resolved !== 'function') throw new Error('expected a session provider');
+
+    await expect(resolved()).resolves.toMatchObject({ token: 'rk_worker' });
+    await expect(resolved()).resolves.toMatchObject({ token: 'rk_worker' });
+    expect(session).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an ambiguous session and apiKey', () => {
+    expect(() =>
+      resolveApiKey({
+        options: {
+          session: {
+            object: 'session',
+            token: 'rk_worker',
+            expiresAt: '2030-01-01T00:00:00.000Z',
+          },
+          apiKey: 'sk_other',
+        },
+        env: {},
+      }),
+    ).toThrow(/not more than one/);
+  });
+
   it('returns null when neither is set', () => {
     expect(resolveApiKey({ options: {}, env: {} })).toBeNull();
   });

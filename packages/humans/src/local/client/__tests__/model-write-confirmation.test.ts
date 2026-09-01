@@ -162,4 +162,30 @@ describe('schema model write confirmation', () => {
       pool.stopGC();
     }
   });
+
+  it('awaits the exact staged transaction when it fails before model lookup', async () => {
+    const stale = new AbloStaleContextError('changed elsewhere', {
+      code: 'stale_context',
+    });
+    let lookupCalls = 0;
+    const { items, pool } = createItemsClient({
+      update() {
+        return Promise.reject(stale);
+      },
+      waitForConfirmation() {
+        lookupCalls += 1;
+        return Promise.resolve();
+      },
+    });
+
+    await items.create({ id: 'item-race', data: { title: 'original' } });
+    lookupCalls = 0;
+
+    await expect(items.update({
+      id: 'item-race',
+      data: { title: 'rejected' },
+    })).rejects.toBe(stale);
+    expect(lookupCalls).toBe(0);
+    pool.stopGC();
+  });
 });

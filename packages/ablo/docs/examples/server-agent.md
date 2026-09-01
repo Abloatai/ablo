@@ -19,6 +19,7 @@ fresh row, then hands it to you — so two writers serialize instead of clobberi
 
 ```ts
 import Ablo from '@abloatai/ablo';
+import Sessions from '@abloatai/ablo/sessions';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 const schema = defineSchema({
@@ -29,17 +30,17 @@ const schema = defineSchema({
   }),
 });
 
-const control = Ablo({
+const sessions = Sessions({
   schema,
   apiKey: process.env.ABLO_API_KEY,
 });
 
 async function clientForWorker(workerId: string) {
-  const { token } = await control.sessions.create({
+  const session = await sessions.create({
     agent: { id: workerId },
     can: { records: ['read', 'update'] },
   });
-  return Ablo({ schema, apiKey: token, transport: 'http' });
+  return Ablo({ schema, session, transport: 'http' });
 }
 
 export async function completeTask(recordId: string, workerId: string) {

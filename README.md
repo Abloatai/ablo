@@ -127,7 +127,7 @@ flattening the implementation into `packages/ablo`:
 - `packages/ablo` is the branded public facade. Its files mostly re-export the
   package that owns each API.
 - `packages/transaction` owns the shared model-operation contracts and the
-  stateless HTTP implementation.
+  headless HTTP/WebSocket transport implementation.
 - `packages/humans` owns the reactive WebSocket/local/React implementation.
 
 That means searching only inside `packages/ablo/src` will not find the

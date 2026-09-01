@@ -5,7 +5,7 @@ import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
-const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+const ablo = Ablo({ schema, session: { endpoint: '/api/ablo-session' } });
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return <AbloProvider client={ablo}>{children}</AbloProvider>;
@@ -15,77 +15,34 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
 export function generateSessionRoute(): string {
   return `import { headers } from 'next/headers';
-import {
-  credentialEndpointErrorSchema,
-  credentialEndpointSuccessSchema,
-} from '@abloatai/ablo/auth';
-import { sync } from '@/ablo';
+import Sessions from '@abloatai/ablo/sessions';
+import { schema } from '@/ablo/schema';
 import { auth } from '@/lib/auth';
 
-const noStore = { 'Cache-Control': 'no-store' };
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_API_KEY });
 
-export async function POST(request: Request): Promise<Response> {
-  if (!(await isSameOrigin(request))) {
-    return Response.json(
-      credentialEndpointErrorSchema.parse({
-        error: { code: 'origin_mismatch', message: 'Cross-origin mint rejected' },
-      }),
-      { status: 403, headers: noStore },
-    );
-  }
+export const POST = sessions.handler({
+  async authenticate() {
+    const session = await auth.api.getSession({ headers: await headers() });
+    return session?.user ?? null;
+  },
+  async grant({ principal: user }) {
+    const authorizedScope = await authorizeActiveWorkspace(user.id);
+    if (!authorizedScope) return null;
 
-  const user = await getCurrentUser();
-  if (!user) {
-    return Response.json(
-      credentialEndpointErrorSchema.parse({
-        error: { code: 'session_expired', message: 'Sign in again' },
-      }),
-      { status: 401, headers: noStore },
-    );
-  }
-
-  const authorizedScope = await authorizeActiveWorkspace(user.id);
-  if (!authorizedScope) {
-    return Response.json(
-      credentialEndpointErrorSchema.parse({
-        error: { code: 'policy_denied', message: 'Workspace membership is stale or revoked' },
-      }),
-      { status: 403, headers: noStore },
-    );
-  }
-
-  const { token, expiresAt } = await sync.sessions.create({
-    user: { id: user.id },
-    // These ids came from the server-side membership lookup below. Never take
-    // organization, workspace, team, or group ids from the request body.
-    syncGroups: authorizedScope.syncGroups,
-    can: { records: ['read', 'create', 'update'] },
-  });
-  return Response.json(
-    credentialEndpointSuccessSchema.parse({
-      token,
-      expiresAt,
-      credentialKind: 'ephemeral',
-    }),
-    { headers: noStore },
-  );
-}
-
-async function isSameOrigin(request: Request): Promise<boolean> {
-  const origin = request.headers.get('origin');
-  if (!origin) return request.headers.get('sec-fetch-site') !== 'cross-site';
-  const host = (await headers()).get('host');
-  return host !== null && new URL(origin).host === host;
-}
-
-async function getCurrentUser(): Promise<{ id: string } | null> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  return session?.user ? { id: session.user.id } : null;
-}
+    return {
+      user: { id: user.id },
+      // These ids came from the server-side membership lookup below. Never take
+      // organization, workspace, team, or group ids from the request body.
+      groups: authorizedScope.groups,
+      can: { records: ['read', 'create', 'update'] },
+    };
+  },
+});
 
 type AuthorizedWorkspace = {
   workspaceId: string;
-  syncGroups: readonly [\`workspace:\${string}\`, ...\`\${string}:\${string}\`[]];
+  groups: readonly [\`workspace:\${string}\`, ...\`\${string}:\${string}\`[]];
 };
 
 async function authorizeActiveWorkspace(userId: string): Promise<AuthorizedWorkspace | null> {
@@ -99,7 +56,7 @@ async function authorizeActiveWorkspace(userId: string): Promise<AuthorizedWorks
   // Example after your membership query:
   // return {
   //   workspaceId: membership.workspaceId,
-  //   syncGroups: [\`workspace:\${membership.workspaceId}\`],
+  //   groups: [\`workspace:\${membership.workspaceId}\`],
   // };
   return null;
 }

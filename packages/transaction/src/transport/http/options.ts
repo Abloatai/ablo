@@ -37,7 +37,10 @@ export interface HttpClientConfig<S extends SchemaRecord = SchemaRecord>
   commitOutbox?: DurableWriteStore;
   /** Compatibility input and internal child-client identity seam. */
   commitOutboxScope?: CommitOutboxScope;
-  /** Which transport carries this client's traffic. */
+  /**
+   * Which transport carries this client's traffic. Defaults to WebSocket for
+   * a scoped `session` and HTTP for an API key or direct auth token.
+   */
   transport?: 'websocket' | 'http' | undefined;
   /** @internal Exact receipt phases observed while dispatching one HTTP commit. */
   onCommitReceipt?: (observation: {

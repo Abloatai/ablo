@@ -1090,23 +1090,6 @@
       "count": 1
     }
   },
-  "src/local/sync/participants.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-argument": {
-      "count": 3
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 2
-    },
-    "@typescript-eslint/require-await": {
-      "count": 1
-    }
-  },
   "src/local/sync/reconnect.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 1

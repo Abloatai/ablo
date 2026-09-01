@@ -41,7 +41,6 @@ export {
   claimQueuedSchema,
   claimQueueSchema,
   claimQueueEntrySchema,
-  claimExpiredSchema,
   claimEventReasonSchema,
   modelTargetSchema,
   // The one claim record, and the peer-visible projection of it.
@@ -55,11 +54,8 @@ export {
   claimHeartbeatAckPayloadSchema,
   claimHeartbeatBatchPayloadSchema,
   claimHeartbeatBatchAckPayloadSchema,
-  // Read interest — what a connection receives, leased (`claim`/`release`,
-  // the frames behind `join`) and unleased (`update_subscription`).
+  // Read interest — what a connection receives.
   MAX_FRAME_SYNC_GROUPS,
-  participantClaimPayloadSchema,
-  participantReleasePayloadSchema,
   updateSubscriptionPayloadSchema,
   subscriptionAckPayloadSchema,
   // Commit operation — carries the optimistic write-guard
@@ -96,7 +92,6 @@ export type {
   ClaimQueued,
   ClaimQueue,
   ClaimQueueEntry,
-  ClaimExpired,
   ClaimEventReason,
   ModelTarget,
   ClaimRecord,
@@ -109,9 +104,7 @@ export type {
   ClaimHeartbeatAckPayload,
   ClaimHeartbeatBatchPayload,
   ClaimHeartbeatBatchAckPayload,
-  // Read interest — leased and unleased
-  ParticipantClaimPayload,
-  ParticipantReleasePayload,
+  // Read interest
   UpdateSubscriptionPayload,
   SubscriptionAckPayload,
   // Commit operation — carries the optimistic write-guard

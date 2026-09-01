@@ -1,5 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import { mintSession } from '../sessionMint.js';
+import { createSession } from '../create.js';
 
 describe('user session scope', () => {
   it('derives the wire operation grant from the schema contract', async () => {
@@ -28,7 +28,7 @@ describe('user session scope', () => {
       } as Response;
     });
 
-    const session = await mintSession(
+    const session = await createSession(
       {
         user: { id: 'user-1' },
         organizationId: 'org-customer',

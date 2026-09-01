@@ -26,16 +26,16 @@ describe('credential endpoint configuration', () => {
     expect(isCredentialEndpoint('sk_test_abc')).toBe(false);
   });
 
-  it('keeps apiKey and authEndpoint as distinct concepts', () => {
+  it('keeps apiKey and a session endpoint as distinct concepts', () => {
     expect(() =>
       resolveApiKey({
         options: { apiKey: '/api/ablo-session' },
         env: {},
       }),
-    ).toThrow('Move this value to `authEndpoint`');
+    ).toThrow('Use `session: { endpoint }`');
     expect(
       typeof resolveApiKey({
-        options: { authEndpoint: '/api/ablo-session' },
+        options: { session: { endpoint: '/api/ablo-session' } },
         env: {},
       }),
     ).toBe('function');
@@ -46,11 +46,11 @@ describe('credential endpoint configuration', () => {
       resolveApiKey({
         options: {
           apiKey: 'sk_test_abc',
-          authEndpoint: '/api/ablo-session',
+          session: { endpoint: '/api/ablo-session' },
         },
         env: {},
       }),
-    ).toThrow('not both');
+    ).toThrow('not more than one');
   });
 });
 

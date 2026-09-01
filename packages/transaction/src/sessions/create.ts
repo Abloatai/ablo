@@ -18,27 +18,28 @@
  *                 registered names.
  *
  * The caller supplies the already-resolved secret key and base URL in
- * {@link MintSessionContext}. Choosing which key to pass — the original secret
+ * {@link CreateSessionContext}. Choosing which key to pass — the original secret
  * key, not a derived key that an earlier exchange may have produced — is the
  * caller's responsibility.
  */
 import {
   exchangeApiKey,
   mintUserSessionKey,
-} from './runtime.js';
+} from '../auth/runtime.js';
 import {
   capabilityCanSchemaFor,
   grantedOperations,
-} from './capability.js';
+} from '../auth/capability.js';
 import type { SchemaRecord } from '../schema/schema.js';
-import type { AbloSession, CreateSessionParams } from '../client/resources/httpResources.js';
+import type { AbloSession, CreateSessionParams } from './contract.js';
+import { sessionScope } from './contract.js';
 
 /**
  * The resolved control-plane details a mint needs: a secret key, a base URL,
  * and an optional `fetch`. When `fetch` is omitted, the auth helpers fall back
  * to the runtime's global `fetch`.
  */
-export interface MintSessionContext {
+export interface CreateSessionContext {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly fetch?: typeof fetch;
@@ -59,9 +60,9 @@ export interface MintSessionContext {
  * Routes the `{ user }` or `{ agent }` request to the matching mint endpoint
  * and reshapes the response into an {@link AbloSession}.
  */
-export async function mintSession<S extends SchemaRecord>(
+export async function createSession<S extends SchemaRecord>(
   params: CreateSessionParams<S>,
-  ctx: MintSessionContext,
+  ctx: CreateSessionContext,
 ): Promise<AbloSession> {
   const { apiKey, baseUrl } = ctx;
   // Static typing and runtime validation consume the same schema-bound grant
@@ -77,7 +78,7 @@ export async function mintSession<S extends SchemaRecord>(
       userId: params.user.id,
       ...(params.organizationId ? { organizationId: params.organizationId } : {}),
       ...(params.schemaProject ? { schemaProject: params.schemaProject } : {}),
-      ...(params.syncGroups ? { syncGroups: [...params.syncGroups] } : {}),
+      ...(params.groups ? { syncGroups: [...params.groups] } : {}),
       operations,
       ttlSeconds: params.ttlSeconds ?? 900,
       ...(ctx.fetch ? { fetch: ctx.fetch } : {}),
@@ -90,7 +91,7 @@ export async function mintSession<S extends SchemaRecord>(
       organizationId: res.organizationId,
       // The ephemeral mint stores scope on the key row; reshape its flat
       // response into the session resource's scope block.
-      scope: {
+      scope: sessionScope({
         organizationId: res.organizationId,
         projectId: res.projectId,
         branchId: res.branchId,
@@ -99,7 +100,7 @@ export async function mintSession<S extends SchemaRecord>(
         participantKind: 'user',
         participantId: res.participantId,
         deliveryPartition: res.deliveryPartition,
-      },
+      }),
       userMeta: params.userMeta ?? { id: res.participantId },
     };
   }
@@ -113,7 +114,7 @@ export async function mintSession<S extends SchemaRecord>(
     participantKind: 'agent',
     participantId: params.agent.id,
     ...(params.onBehalfOf ? { onBehalfOf: params.onBehalfOf } : {}),
-    ...(params.syncGroups ? { syncGroups: [...params.syncGroups] } : {}),
+    ...(params.groups ? { syncGroups: [...params.groups] } : {}),
     operations,
     ttlSeconds: params.ttlSeconds ?? 900,
     ...(params.userMeta ? { userMeta: params.userMeta } : {}),
@@ -125,7 +126,7 @@ export async function mintSession<S extends SchemaRecord>(
     token: res.token,
     expiresAt: res.expiresAt,
     organizationId: res.organizationId,
-    scope: res.scope,
+    scope: sessionScope(res.scope),
     userMeta: res.userMeta,
   };
 }

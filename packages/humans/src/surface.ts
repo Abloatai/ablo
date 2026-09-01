@@ -41,7 +41,6 @@ export const PUBLIC_MODEL_VERBS = [
   'update',
   'delete',
   'claim',
-  'join',
   'onChange',
 ] as const;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -76,11 +75,9 @@ type _ListOptionKeysExact = Expect<
 export const PUBLIC_ABLO_OPTION_KEYS = [
   'schema',
   'apiKey',
+  'session',
   'projectId',
   'branchId',
-  'authEndpoint',
-  'authTimeoutMs',
-  'allowCrossOriginAuthEndpoint',
   'persistence',
   'durableWrites',
   'commitOutbox',

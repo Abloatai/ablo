@@ -143,7 +143,12 @@ export function startStoreLifecycle<S extends SchemaRecord>(
   // unambiguously a deliberate server client). User-kind clients in Node (an
   // SSR/RSC module evaluating scaffolded browser code) stay reactive-only.
   if (credentialResolver) {
-    const rawEndpoint = internalOptions.authEndpoint ?? internalOptions.apiKey;
+    const rawEndpoint =
+      internalOptions.session &&
+      typeof internalOptions.session === 'object' &&
+      'endpoint' in internalOptions.session
+        ? internalOptions.session.endpoint
+        : internalOptions.apiKey;
     const absoluteEndpoint =
       typeof rawEndpoint === 'string' && /^https?:\/\//i.test(rawEndpoint);
     store.startCredentialLifecycle(credentialResolver, {

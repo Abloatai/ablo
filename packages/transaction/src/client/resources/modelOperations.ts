@@ -623,13 +623,3 @@ export interface ModelDeleteParams<T, Fields = T>
   readonly id: string;
   readonly claim?: Claim<T> | ClaimTargetOptions<Fields> | null;
 }
-
-/** Options for the WebSocket-only `ablo.<model>.join(ids, options?)`. */
-export interface JoinOptions {
-  /**
-   * Lease TTL for the underlying presence claim — the participant
-   * auto-releases after this if the holder dies. Compact duration string
-   * (`'5m'`) or ms number, mirroring the claim `ttl`.
-   */
-  ttl?: Duration;
-}

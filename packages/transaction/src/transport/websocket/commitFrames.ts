@@ -17,7 +17,6 @@ import type {
   ClaimQueued,
   ClaimLost,
   ClaimRejection,
-  ClaimExpired,
 } from '../../coordination/schema.js';
 import type { ClaimEvent, ClaimCounterparty } from '../../claims/events.js';
 import type { AssertExact } from '../../types/assertExact.js';
@@ -105,7 +104,6 @@ interface ClaimFrameByPhase {
   queued: ClaimQueued;
   lost: ClaimLost;
   rejected: ClaimRejection;
-  expired: ClaimExpired;
 }
 
 // The phases this map covers and the phases a ClaimEvent can report are the

@@ -26,6 +26,11 @@ Then:
 - write with `ablo.weatherReports.update`
 - dispose the client when the worker finishes
 
+`terminal-showcase/` is the technical product walkthrough. It
+mints one human and one agent participant, rejects a stale agent write, queues
+the agent behind the human's claim, and prints the durable confirmed commit.
+Nothing in its Ablo path is simulated, and it does not call a model provider.
+
 For read-reason-write work, pass the exact returned rows that informed the
 decision. Their watermarks stay opaque:
 
@@ -66,6 +71,8 @@ root and a bare `quickstart.ts` won't be found.
 ```bash
 cd packages/ablo
 ABLO_API_KEY=sk_... npx tsx examples/quickstart.ts
+npx ablo push --schema examples/terminal-showcase/schema.ts
+ABLO_API_KEY=sk_... npx tsx examples/terminal-showcase/index.ts
 ABLO_API_KEY=sk_... RECORD_ID=record_... npx tsx examples/agent-turn.ts
 ABLO_API_KEY=sk_... JOB_ID=job_... npx tsx examples/expensive-agent-turn.ts
 ABLO_API_KEY=sk_... RECORD_ID=record_... npx tsx examples/stale-context-agent-turn.ts

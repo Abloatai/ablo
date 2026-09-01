@@ -19,6 +19,7 @@ import {
   updateTool,
 } from '../src/ai-sdk.js';
 import { context } from '../src/context/index.js';
+import Sessions from '../src/sessions.js';
 
 describe('@abloatai/ablo public entry points', () => {
   it('publishes the intentional branded subpaths', () => {
@@ -33,6 +34,7 @@ describe('@abloatai/ablo public entry points', () => {
       './react',
       './schema',
       './server',
+      './sessions',
       './source',
       './source/conformance',
       './source/drizzle',
@@ -51,6 +53,10 @@ describe('@abloatai/ablo public entry points', () => {
   it('keeps the reactive client and React bindings on explicit subpaths', () => {
     expect(typeof ReactiveAblo).toBe('function');
     expect(typeof useAblo).toBe('function');
+  });
+
+  it('serves the server-only session issuer through its explicit subpath', () => {
+    expect(typeof Sessions).toBe('function');
   });
 
   it('serves schema builders through the branded schema path', () => {

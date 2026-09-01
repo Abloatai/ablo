@@ -2,9 +2,9 @@
  * The reactive engine assembly (ADR 0016). `Ablo({ ... })` resolves auth and
  * capabilities; `humans().init` constructs the store cluster; the lifecycle
  * — first mint, identity, ready() — lives in `./storeLifecycle.ts`. What
- * remains here is assembly around those parts: the claim stream and
- * participant manager, options validation, the typed model proxies, and the
- * commit/claim/session resources — composed into the reactive client.
+ * remains here is assembly around those parts: the claim and presence streams,
+ * options validation, the typed model proxies, and the
+ * commit and claim resources — composed into the reactive client.
  *
  * Extracted from the factory so the composition root stays a root: resolve,
  * dispatch, return. The remaining assembly converts to decoration of a
@@ -12,13 +12,13 @@
  * design step (docs/plans/package-split.md).
  */
 
-import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
+import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
 import { omittedModelError } from '@abloatai/transaction/schema/select';
 import {
   durableCommitOperationSchema,
   type DurableCommitOperation,
 } from '@abloatai/transaction/commit';
-import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, claimedError } from '@abloatai/transaction/errors';
+import { AbloConnectionError, AbloValidationError, claimedError } from '@abloatai/transaction/errors';
 import type { ModelTarget, ModelClaim } from '@abloatai/transaction/coordination/schema';
 import type { BatchFence } from '@abloatai/transaction/coordination';
 import {
@@ -30,13 +30,6 @@ import {
 	subTarget,
 } from '@abloatai/transaction/coordination';
 import { validateAbloOptions } from './validateAbloOptions.js';
-import { mintSession } from '@abloatai/transaction/auth/sessionMint';
-import type { MintSessionContext } from '@abloatai/transaction/auth/sessionMint';
-import {
-  revokeCapability,
-  rotateCapability,
-} from '@abloatai/transaction/auth/capabilityLifecycle';
-import { modelWireNames } from '@abloatai/transaction/auth/capability';
 import type { StoreCluster } from './storeCluster.js';
 import { startStoreLifecycle } from './storeLifecycle.js';
 import type { SyncWebSocket, CoreSyncEventMap } from '../sync/SyncWebSocket.js';
@@ -46,25 +39,19 @@ import {
   bindClaimLifetime,
   claimLifetimeOf,
 } from '@abloatai/transaction/claims/lifetime';
-import { createParticipantManager } from '../sync/participants.js';
 import type { AttachablePresenceStream } from '../../presenceStream.js';
 import type { ClaimWaitOptions } from '@abloatai/transaction/types/streams';
 import type { Claim } from '@abloatai/transaction/types/streams';
-import type { CredentialProvider } from '@abloatai/transaction/auth/apiKey';
 import { resolveApiKeyValue, resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
 import type { AbloOptions } from './options.js';
 import type { ClientPrelude } from './clientPrelude.js';
 import type {
-  AbloSession,
   ClaimCreateOptions,
   ClaimResource,
   CommitCreateOptions,
   CommitOperationInput,
   CommitReceipt,
   CommitResource,
-  CreateAgentClientParams,
-  CreateAgentSessionParams,
-  CreateSessionParams,
 } from './resourceTypes.js';
 import {
   claimAttemptFailure,
@@ -116,12 +103,6 @@ export interface ReactiveEngineInputs<S extends SchemaRecord> extends ClientPrel
    * assembles around it and constructs none of it.
    */
   cluster: StoreCluster;
-  /**
-   * Constructs a sibling client (`ablo.agents.create(...)` mints a scoped key
-   * and builds a second engine with it). Injected by the factory — a direct
-   * import back into it would close a runtime cycle.
-   */
-  createSibling: (options: AbloOptions<S>) => Ablo<S>;
 }
 
 export function buildReactiveEngine<const S extends SchemaRecord>(
@@ -141,7 +122,6 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     kind,
     presence,
     cluster,
-    createSibling,
   } = inputs;
   const schema = options.schema;
   const pointReadBaseUrl = resolveBootstrapBaseUrl({
@@ -231,7 +211,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     logger.warn(
       'Ablo: `kind` / `agentId` are ignored when an `apiKey` is configured — ' +
         'the server derives participant identity from the key’s scope. Remove ' +
-        'them (or mint a scoped session via `ablo.sessions.create({ agent })` ' +
+        'them (or mint a scoped session with `Sessions({ schema, apiKey }).create({ agent })` ' +
         'for a distinct agent identity). They apply only to the self-hosted ' +
         '`capabilityToken` path.',
     );
@@ -273,14 +253,6 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     },
   });
   const ready = lifecycle.ready;
-
-  const participantManager = createParticipantManager({
-    ready,
-    transport,
-    presence: presenceStream,
-    claims: claimStream,
-    schema,
-  });
 
   // 9b. waitForFlush — drains pending mutations using the store's
   //     pendingChanges counter (already maintained by BaseSyncedStore based
@@ -644,17 +616,6 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
         // reconcile errors so read interest never makes a read reject or stall.
         enterScope: (scope) => store.enterScope(scope),
         pinScope: (scope) => store.pinScope(scope),
-        // `ablo.<model>.join(ids, { ttl })` performs a scoped participant join
-        // on this model's sync group(s). WebSocket only — `join` throws
-        // `AbloConnectionError` if the socket isn't ready.
-        // `ttl` passes straight through — both surfaces spell the lease the
-        // same way now, so there is no rename here to make a field's name
-        // disagree with the value it carries.
-        createJoin: (modelKey, ids, options) =>
-          participantManager.join({
-            scope: { [modelKey]: ids },
-            ...(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
-          }),
       },
       readSetContext,
     );
@@ -667,7 +628,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      await ready();
 	      const prepared = prepareReadSet(
           cluster.readSetContext,
-          syncClient as object,
+          syncClient,
           commitOptions.readAt,
           commitOptions.idempotencyKey,
           commitOptions.reads,
@@ -752,50 +713,6 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	    },
 	  };
 
-	  /**
-	   * The control-plane credential: always the original configured secret key.
-	   * Never reads `authCredentials` — that holds the exchanged sync credential
-	   * (a wide-scope `rk_` on the hosted path), which control-plane routes
-	   * rightly refuse (e.g. the user-session mint is sk_-gated). Counterpart to
-	   * `getAuthToken()`, which resolves the sync-plane token.
-	   *
-	   * The secret-key-only rule is enforced on the server; the credential-kind taxonomy
-	   * (secret/restricted/ephemeral/publishable) lives in `auth/credentialPolicy`.
-	   */
-	  async function controlPlaneApiKey(): Promise<string | null> {
-	    return resolveApiKeyValue(configuredApiKey);
-	  }
-
-	  /**
-	   * Resolve the control-plane context a session/agent mint needs (sk_ +
-	   * bootstrap base URL + the schema-key→typename map the server gates on).
-	   * Shared by `sessions.create` and `agents.create` so the two mint doors
-	   * can never drift on how a token is minted. Throws if no `sk_` is present —
-	   * minting is a backend-only operation.
-	   */
-	  async function buildMintContext(resource: string): Promise<MintSessionContext> {
-	    const apiKey = await controlPlaneApiKey();
-	    if (!apiKey) {
-	      throw new AbloAuthenticationError(
-	        `${resource} requires a secret (sk_) API key — call it from your backend, not the browser.`,
-	        { code: 'apikey_missing' },
-	      );
-	    }
-	    return {
-	      apiKey,
-	      baseUrl: resolveBootstrapBaseUrl({
-	        url,
-	        bootstrapBaseUrl: internalOptions.bootstrapBaseUrl,
-	      }),
-	      ...(internalOptions.fetch ? { fetch: internalOptions.fetch } : {}),
-	      // Map every `can` schema-key to the wire typename the server gates on, so a
-	      // typename override (`documents` → `Document`) doesn't mint a capability
-	      // the server then denies. Derived from this client's schema by the one rule
-	      // the HTTP client and the mint route also read. See `MintSessionContext`.
-	      modelTypenames: modelWireNames(schema.models),
-	    };
-	  }
-
 	  const engine = {
     ...modelProxies,
 
@@ -826,11 +743,6 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       // is the canonical credential; fall back to a configured API key.
       //
       // This is the sync-plane token (bootstrap, WebSocket, query HTTP). Control-plane
-      // calls (sessions.create, datasource registration) never use it — they
-      // present the original secret key via `controlPlaneApiKey()` below. The
-      // split matters: after the startup exchange this resolver returns the
-      // derived wide-scope `rk_`, a credential the control-plane routes
-      // correctly refuse (an agent token must never mint humans).
       return (
         authCredentials.getAuthToken() ??
         (await resolveApiKeyValue(configuredApiKey)) ??
@@ -855,90 +767,6 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 
     nudgeReconnect() {
       store.nudgeReconnect();
-    },
-
-    sessions: {
-      // A backend (holding `sk_`) mints a short-lived scoped token for one end
-      // user or one agent.
-      //
-      // Both arms authenticate with the original secret key
-      // (`controlPlaneApiKey()`), never the wide-scope `rk_` the startup exchange
-      // installed as the sync credential. A derived agent credential silently
-      // replacing the secret key on control-plane calls is how humans would get
-      // minted as agents — and correct attribution is the point.
-      async create(params: CreateSessionParams<S>): Promise<AbloSession> {
-        // Both mint paths (`{ user }` → /v1/ephemeral_keys → `ek_`,
-        // `{ agent, can }` → /v1/capabilities → scoped `rk_`) resolve their
-        // control-plane context through the shared `buildMintContext`, so this
-        // client, `agents.create`, and the stateless HTTP client can't drift on
-        // how a token is minted.
-        return mintSession(params, await buildMintContext('sessions.create'));
-      },
-      async revoke({ id }) {
-        const context = await buildMintContext('sessions.revoke');
-        return revokeCapability({
-          apiKey: context.apiKey,
-          baseUrl: context.baseUrl,
-          id,
-          ...(context.fetch ? { fetch: context.fetch } : {}),
-        });
-      },
-      async rotate({ id, graceSeconds, ttlSeconds }) {
-        const context = await buildMintContext('sessions.rotate');
-        return rotateCapability({
-          apiKey: context.apiKey,
-          baseUrl: context.baseUrl,
-          id,
-          ...(graceSeconds !== undefined ? { graceSeconds } : {}),
-          ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
-          ...(context.fetch ? { fetch: context.fetch } : {}),
-        });
-      },
-    },
-
-    // Mint a scoped agent identity and hand back a connected client bound to it —
-    // `sessions.create({ agent })` plus a typed `Ablo({ schema, apiKey })` client,
-    // for agents that run in this (secret-key-holding) process. Omitting `id`
-    // yields a fresh uuid per call, so concurrent agents are distinct participants
-    // that queue behind each other (even when they share a `name`). Humans don't
-    // get a server-built client — ship them a token via `sessions.create({ user })`.
-    agents: {
-      async create(params: CreateAgentClientParams<S>): Promise<Ablo<S>> {
-        // Distinct participant by default: omit `id` → a fresh uuid, so even two
-        // agents that share a `name` are independent participants and queue
-        // behind one another. `name` is display only (→ userMeta.name); it never
-        // derives the id. Pass an explicit `id` only to re-attach an agent to
-        // its own held claims.
-        const id = params.id ?? globalThis.crypto.randomUUID();
-        const userMeta =
-          params.name !== undefined ? { ...params.userMeta, name: params.name } : params.userMeta;
-        const sessionParams = {
-          agent: { id },
-          can: params.can,
-          ...(params.onBehalfOf ? { onBehalfOf: params.onBehalfOf } : {}),
-          ...(params.syncGroups ? { syncGroups: params.syncGroups } : {}),
-          ...(params.ttlSeconds !== undefined ? { ttlSeconds: params.ttlSeconds } : {}),
-          ...(userMeta ? { userMeta } : {}),
-        } satisfies CreateAgentSessionParams<S>;
-        // Re-mint the `rk_` on every resolver call so a long-lived agent client
-        // never hits token expiry; the `sk_` stays in this process — the child
-        // only ever sees its own short-lived `rk_`.
-        const mintToken = async (): Promise<string> =>
-          (await mintSession(sessionParams, await buildMintContext('agents.create')))
-            .token;
-        // Mint once up front so a bad key / denied scope throws HERE, not later
-        // inside the child's bootstrap; reuse that first token, re-mint on refresh.
-        let pending: string | null = await mintToken();
-        const apiKey: CredentialProvider = async () => {
-          if (pending !== null) {
-            const token = pending;
-            pending = null;
-            return token;
-          }
-          return mintToken();
-        };
-        return createSibling({ ...(internalOptions as AbloOptions<S>), apiKey });
-      },
     },
 
     async dispose() {

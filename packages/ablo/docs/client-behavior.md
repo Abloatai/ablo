@@ -28,10 +28,12 @@ const ablo = Ablo({
 });
 ```
 
-The package-root export is the stateless HTTP client for agents, workers, route
-handlers, and other server operations. See [Options](./options.md) for its exact
-constructor reference. Live state and local reads are added through the
-[React client](./react.md).
+The package-root export is the headless coordination client for agents, workers,
+route handlers, and other server operations. Trusted API-key clients use HTTP.
+Scoped session clients use one reconnecting WebSocket for commits and live
+coordination; point reads and administration remain HTTP. See [Transports](./transports.md)
+for the lifecycle and [Options](./options.md) for the constructor. A human-facing
+local graph is added through the [React client](./react.md).
 
 Your database connects out of band — through logical replication (`npx ablo
 connect`), or the signed [Data Source](./data-sources.md) endpoint as the

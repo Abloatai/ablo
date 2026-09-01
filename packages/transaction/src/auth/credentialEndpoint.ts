@@ -23,7 +23,7 @@ function assertEndpointOrigin(endpoint: string, allowCrossOrigin: boolean): void
   if (endpointOrigin !== window.location.origin) {
     throw new Error(
       'credential endpoint must be same-origin; set ' +
-        '`allowCrossOriginAuthEndpoint: true` only after configuring CORS and CSRF protection',
+        '`session.allowCrossOrigin: true` only after configuring CORS and CSRF protection',
     );
   }
 }

@@ -12,7 +12,6 @@ export {
   wsFrameHandlers,
   dispatchWsFrame,
   type PendingCommit,
-  type PendingClaim,
   type PendingSubscription,
   type WsInboundFrame,
   type WsSession,

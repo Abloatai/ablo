@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.59.2",
+  "version": "0.60.0",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -76,6 +76,12 @@
       "import": "./dist/auth.js",
       "default": "./dist/auth.js"
     },
+    "./sessions": {
+      "@ablo/source": "./src/sessions.ts",
+      "types": "./dist/sessions.d.ts",
+      "import": "./dist/sessions.js",
+      "default": "./dist/sessions.js"
+    },
     "./coordination": {
       "@ablo/source": "./src/coordination.ts",
       "types": "./dist/coordination.d.ts",
@@ -131,8 +137,8 @@
     "verify:context-package": "node scripts/verify-context-package.mjs",
     "typecheck": "tsc --noEmit && tsc -p typetests/tsconfig.json && tsc -p examples/tsconfig.json",
     "test": "vitest run",
-    "generate:errors": "tsx scripts/generate-error-docs.mts",
-    "lint:errors": "tsx scripts/check-error-docs.mts",
+    "generate:errors": "tsx --conditions=@ablo/source scripts/generate-error-docs.mts",
+    "lint:errors": "tsx --conditions=@ablo/source scripts/check-error-docs.mts",
     "generate:pricing": "tsx scripts/generate-pricing-docs.mts",
     "lint:pricing": "tsx scripts/check-pricing-docs.mts",
     "generate:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts",
@@ -156,8 +162,8 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.59.2",
-    "@abloatai/transaction": "^0.59.2",
+    "@abloatai/humans": "^0.60.0",
+    "@abloatai/transaction": "^0.60.0",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

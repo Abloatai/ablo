@@ -25,7 +25,7 @@ import { Ablo } from '@abloatai/ablo/client';
 
 const ablo = Ablo({
   schema,
-  authEndpoint: '/api/ablo-session',
+  session: { endpoint: '/api/ablo-session' },
 });
 
 await ablo.ready();

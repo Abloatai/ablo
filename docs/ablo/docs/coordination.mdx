@@ -209,11 +209,15 @@ same credential represent the same participant and do not exclude one another.
 Mint a distinct scoped session for each independently coordinated agent:
 
 ```ts
-const { token } = await server.sessions.create({
+import Sessions from '@abloatai/ablo/sessions';
+
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_API_KEY });
+const session = await sessions.create({
   agent: { id: `forecast-agent-${workerId}` },
+  can: { records: ['read', 'update'] },
 });
 
-const agent = Ablo({ schema, apiKey: token });
+const agent = Ablo({ schema, session });
 ```
 
 Functional updates do not require distinct participant identities because they
@@ -308,7 +312,6 @@ The main methods are:
 | `claim.state({ id })` | Read the current holder without blocking. |
 | `claim.queue({ id })` | Read the current wait order. |
 | `claim.release({ id })` | Release early when you do not hold a handle. |
-| `join({ scope })` | Observe presence for a broader scope. |
 
 This page owns row-backed claims: `model.claim({ id })` reads and claims an Ablo
 model row, and the handle carries fresh data. Identifier-only claims before an

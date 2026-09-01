@@ -9,7 +9,8 @@ import type {
   RotateSessionParams,
   SessionRevocation,
   SessionRotation,
-} from '../client/resources/httpResources.js';
+} from '../sessions/contract.js';
+import { sessionScope } from '../sessions/contract.js';
 
 export const sessionRevocationResponseSchema = z.object({
   id: z.string().min(1),
@@ -166,7 +167,7 @@ export async function rotateCapability(
     token: parsed.data.token,
     expiresAt: parsed.data.expiresAt,
     organizationId: parsed.data.organizationId,
-    scope: parsed.data.scope,
+    scope: sessionScope(parsed.data.scope),
     rotatedFrom: {
       id: parsed.data.rotatedFrom.capabilityId,
       expiresAt: parsed.data.rotatedFrom.expiresAt,

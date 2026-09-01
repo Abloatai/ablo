@@ -75,11 +75,12 @@ await ablo.ready();
 ```
 
 The secret `apiKey` is server-only. Browser clients must not receive it; live UIs
-use the default WebSocket transport with a minted user/session token.
+use the reactive client with `session.endpoint`, which owns their WebSocket and
+short-lived user-session renewal.
 
 If your backend mints restricted agent tokens, register the database once from a
 secret-key server process as above. Workers using the restricted token can then
-construct `Ablo({ schema, authToken, transport: "http" })` because the project
+construct `Ablo({ schema, session, transport: "http" })` because the project
 already has a registered data plane.
 
 ## Link a message to a claim

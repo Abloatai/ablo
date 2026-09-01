@@ -6,18 +6,16 @@
  * initialize both a sync engine and a mesh client that each open
  * their own WebSocket for the same user." Pre-collapse, the
  * `<AbloProvider>` constructed both `createSyncEngine` AND
- * `createMesh` eagerly, and `useJoin` called `mesh.join()`
- * which constructed a SyncAgent that opened a SECOND socket.
+ * `createMesh` eagerly, and presence observation constructed a SyncAgent
+ * that opened a SECOND socket.
  *
- * Post-collapse: `useJoin` reads `presence` + `claims`
- * directly off the engine. Reading either does NOT open a new
+ * Post-collapse: presence + claims live directly on the engine. Reading either
+ * does NOT open a new
  * connection — they ride the engine's existing socket. This pin
  * asserts that fact at the SDK level.
  *
- * Out of scope: `mesh.join()` (the headless-bot pattern, e.g.,
- * `mesh-demo-4`) DOES open a separate socket — that's correct
- * because a bot is a SEPARATE identity from the human user. That's
- * a feature, not the duplication this pin tests for.
+ * A separate client for a bot still owns a separate socket because it is a
+ * separate identity. That is not the duplication this pin tests for.
  */
 
 import { z } from 'zod';
@@ -96,10 +94,8 @@ describe('Architectural pin — one WebSocket per engine', () => {
     const engine = Ablo(opts);
     void engine.ready().catch(() => {});
 
-    // Reading presence + claims from the engine. Pre-collapse this
-    // would have required `useJoin` → `mesh.join()` →
-    // SyncAgent → second socket. Post-collapse, these are properties
-    // on the engine that ride its existing transport.
+    // Reading presence + claims from the engine. Pre-collapse this opened a
+    // second presence client. These properties now ride the existing transport.
     const presence = engine.presence;
     const claims = engine.claims;
 

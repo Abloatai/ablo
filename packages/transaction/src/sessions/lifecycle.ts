@@ -1,20 +1,20 @@
 /**
  * Keeps the short-lived access credential fresh. It owns the re-mint hook, a
  * single-flight guard that stops concurrent triggers from minting more than
- * once, and a browser-only proactive refresh — a timer plus an OS-wake listener
- * — that renews the credential ahead of expiry. It reaches the rest of the
+ * once, and proactive refresh — an expiry-aware timer plus a browser OS-wake
+ * listener — that renews the credential ahead of expiry. It reaches the rest of the
  * client only through the small {@link CredentialLifecycleContext} interface,
  * so the two can reference each other without an import cycle.
  */
 
-import type { RecoveryClass } from '../../errorCodes.js';
-import { noopLogger, type Logger } from '../../logger.js';
+import type { RecoveryClass } from '../errorCodes.js';
+import { noopLogger, type Logger } from '../logger.js';
 import {
   credentialExpiry,
   credentialToken,
   type CredentialProvider,
   type CredentialProviderResult,
-} from '../../auth/credentialResult.js';
+} from '../auth/credentialResult.js';
 
 /**
  * Tri-state outcome of a credential re-mint, mirroring the `getToken`

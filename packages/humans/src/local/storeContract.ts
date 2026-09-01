@@ -14,7 +14,7 @@ import type { Model } from './Model.js';
 import type { ModelScope } from '@abloatai/transaction/types';
 import type { QueryView, QueryViewOptions } from './views/QueryView.js';
 import type { ViewRegistry } from './views/ViewRegistry.js';
-import type { ParticipantScope } from './sync/participants.js';
+import type { GroupScope } from './sync/scopeGroups.js';
 
 /**
  * A snapshot of the client's synchronization state, shaped for binding to UI.
@@ -132,10 +132,10 @@ export interface SyncStoreContract {
    * read subscriptions and write claims always agree on which group they refer
    * to. These are optional and do nothing until the connection is open.
    */
-  enterScope?(scope: ParticipantScope, opts?: { hydrate?: boolean }): Promise<void>;
-  leaveScope?(scope: ParticipantScope): Promise<void>;
-  pinScope?(scope: ParticipantScope): Promise<void>;
-  unpinScope?(scope: ParticipantScope): Promise<void>;
+  enterScope?(scope: GroupScope, opts?: { hydrate?: boolean }): Promise<void>;
+  leaveScope?(scope: GroupScope): Promise<void>;
+  pinScope?(scope: GroupScope): Promise<void>;
+  unpinScope?(scope: GroupScope): Promise<void>;
   /**
    * The full reactive {@link SyncStatus} record. The `useSyncStatus()` hook
    * reads its fields — `state`, `progress`, `pendingChanges`, `isSessionError`,

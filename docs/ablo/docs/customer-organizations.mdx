@@ -50,27 +50,16 @@ export const schema = defineSchema(
 ```ts
 // 2. app/api/ablo-session/route.ts — mint for one customer, on your backend.
 import { syncGroup } from '@abloatai/ablo/schema';
-import { credentialEndpointSuccessSchema } from '@abloatai/ablo/auth';
-import { ablo } from '@/ablo/server';
+import { sessions } from '@/ablo/sessions';
 
-export async function POST() {
-  const member = await requireSignedInMember();
-
-  const session = await ablo.sessions.create({
+export const POST = sessions.handler({
+  authenticate: () => currentSignedInMember(),
+  grant: ({ principal: member }) => ({
     user: { id: member.userId },
     can: { customers: ['read'], decks: ['read', 'create', 'update'] },
-    syncGroups: [syncGroup('customer', member.customerId)],
-  });
-
-  return Response.json(
-    credentialEndpointSuccessSchema.parse({
-      token: session.token,
-      expiresAt: session.expiresAt,
-      credentialKind: 'ephemeral',
-    }),
-    { headers: { 'Cache-Control': 'no-store' } },
-  );
-}
+    groups: [syncGroup('customer', member.customerId)],
+  }),
+});
 ```
 
 That is the whole integration. The rest of this page is why each line is where
@@ -133,7 +122,7 @@ kind is the one you declared in `groups.root`, and the id is your own
 identifier for the customer.
 
 ```ts
-syncGroups: [syncGroup('customer', member.customerId)]
+groups: [syncGroup('customer', member.customerId)]
 ```
 
 Resolve `member.customerId` from the membership you just authenticated on the

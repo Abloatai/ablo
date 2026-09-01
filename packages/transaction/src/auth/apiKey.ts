@@ -17,15 +17,18 @@ import { classifyCredentialKind } from './credentialKind.js';
 import { ABLO_DEFAULT_BASE_URL } from './hostedEndpoints.js';
 import { normalizeAbloBaseUrl } from './baseUrl.js';
 import type { KeyEnvironment } from '../environment.js';
-import { isCredentialEndpoint, createEndpointCredentialResolver } from './credentialEndpoint.js';
+import { isCredentialEndpoint } from './credentialEndpoint.js';
 import {
   credentialToken,
   type CredentialProvider,
+  type CredentialProviderResult,
 } from './credentialResult.js';
+import type { SessionSource } from '../sessions/contract.js';
 import {
   assertBrowserSafety,
   protectBrowserCredentialProvider,
 } from './browserCredentialSafety.js';
+import { resolveSessionCredential } from '../sessions/source.js';
 export { assertBrowserSafety };
 
 /**
@@ -40,22 +43,18 @@ export type { CredentialProvider } from './credentialResult.js';
  * The client options that decide a credential.
  *
  * This is the ONE declaration of that set. The resolvers below read it, and the
- * transport configs that accept these options derive from it rather than listing
- * the fields again — a second list is how `authEndpoint` came to be supported at
- * runtime, named in an error message, and absent from the type a caller writes
- * against.
+ * transport configs that accept these options derive from it rather than
+ * listing the fields again.
  */
 export interface AuthClientOptions {
   readonly apiKey?: string | CredentialProvider | null;
-  /** A route that mints the token, instead of a key the process holds. */
-  readonly authEndpoint?: string | CredentialProvider | null;
+  /** A scoped session, its renewal provider, or a browser session endpoint. */
+  readonly session?: SessionSource | null;
   /** A token the caller already has, used as-is. */
   readonly authToken?: string | null;
   readonly baseURL?: string | null;
   readonly dangerouslyAllowBrowser?: boolean;
   readonly fetch?: typeof globalThis.fetch;
-  readonly authTimeoutMs?: number;
-  readonly allowCrossOriginAuthEndpoint?: boolean;
 }
 
 export interface AuthResolveInput {
@@ -83,45 +82,20 @@ export function readProcessEnv(): Record<string, string | undefined> {
 export function resolveApiKey(
   input: AuthResolveInput,
 ): string | CredentialProvider | null {
-  // `authEndpoint` is the option that names a session-mint route: a URL the
-  // client exchanges for a short-lived token, or an async resolver for custom
-  // exchanges. It is resolved into a `CredentialProvider` here — the single point
-  // shared by every client variant (WebSocket, HTTP, and protocol clients) — so
-  // every downstream consumer sees the same resolver and the credential
-  // lifecycle drives renewal off it.
-  const endpoint = input.options.authEndpoint;
   const configured = input.options.apiKey;
-  if (endpoint != null) {
-    if (configured != null) {
+  const session = input.options.session;
+  if (session != null) {
+    if (configured != null || input.options.authToken != null) {
       throw new AbloValidationError(
-        'Ablo: pass either `apiKey` (a key the process holds) or `authEndpoint` ' +
-          '(a route that mints the token) — not both; the client cannot know ' +
-          'which credential to use.',
-        { code: 'invalid_options', param: 'authEndpoint' },
+        'Ablo: pass `session`, `apiKey`, or `authToken` — not more than one.',
+        { code: 'invalid_options', param: 'session' },
       );
     }
-    if (typeof endpoint === 'function') {
-      return protectBrowserCredentialProvider(
-        endpoint,
-        input.options.dangerouslyAllowBrowser,
-      );
-    }
-    if (!isCredentialEndpoint(endpoint)) {
-      throw new AbloValidationError(
-        '`authEndpoint` expects a URL or path (e.g. \'/api/ablo-session\') or an ' +
-          'async resolver — a key string belongs in `apiKey`.',
-        { code: 'invalid_options', param: 'authEndpoint' },
-      );
-    }
-    return protectBrowserCredentialProvider(createEndpointCredentialResolver(endpoint, {
-      fetch: input.options.fetch,
-      timeoutMs: input.options.authTimeoutMs,
-      allowCrossOrigin: input.options.allowCrossOriginAuthEndpoint,
-    }), input.options.dangerouslyAllowBrowser);
+    return resolveSessionCredential(session, input.options);
   }
   if (typeof configured === 'string' && isCredentialEndpoint(configured)) {
     throw new AbloValidationError(
-      '`apiKey` no longer accepts an endpoint. Move this value to `authEndpoint`.',
+      '`apiKey` does not accept an endpoint. Use `session: { endpoint }`.',
       { code: 'invalid_options', param: 'apiKey' },
     );
   }
@@ -139,8 +113,8 @@ export function resolveApiKey(
  * needs: an async `() => token | null`, or `null` when auth is static — a plain
  * long-lived key string with no refresh, which is the common case.
  *
- * The short-lived per-user browser path passes a credential provider, and the
- * SDK then drives the whole credential lifecycle
+ * A renewable session or browser session endpoint resolves to a credential
+ * provider, and the SDK then drives the whole credential lifecycle
  * from it: mint-before-connect, the proactive refresh timer with its
  * wake/online/focus re-mint, and the reactive `credential_stale` re-mint. The
  * resolver follows the provider contract end to end: resolve a token,
@@ -434,8 +408,15 @@ export function rejectRemovedDatabaseUrlOption(options: object): void {
 export async function resolveApiKeyValue(
   apiKey: string | CredentialProvider | null,
 ): Promise<string | null> {
+  return credentialToken(await resolveCredentialValue(apiKey));
+}
+
+/** Resolve without discarding session expiry metadata needed by live clients. */
+export async function resolveCredentialValue(
+  apiKey: string | CredentialProvider | null,
+): Promise<CredentialProviderResult> {
   if (apiKey == null) return null;
-  if (typeof apiKey === 'function') return credentialToken(await apiKey());
+  if (typeof apiKey === 'function') return apiKey();
   return apiKey;
 }
 
