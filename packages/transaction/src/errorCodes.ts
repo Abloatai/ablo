@@ -178,6 +178,23 @@ const wire = (
   observability: observabilityPolicy(category, httpStatus, operational),
 });
 
+/** Expected customer-controlled 5xx state: visible as a log, never an issue/page. */
+const expectedOperationalWire = (
+  category: ErrorCategory,
+  httpStatus: number,
+  retryable: boolean,
+  message: string,
+): ErrorCodeSpec => ({
+  ...wire(category, httpStatus, retryable, message),
+  observability: {
+    severity: 'warning',
+    sentry: 'log',
+    pagingEligible: false,
+    expectedVolume: 'normal',
+    owner: 'product',
+  },
+});
+
 const client = (
   category: ErrorCategory,
   message: string,
@@ -1133,7 +1150,7 @@ export const ERROR_CODES = {
     false,
     'The Data Source key is not allowed to perform this operation.'
   ),
-  source_connector_not_attached: wire(
+  source_connector_not_attached: expectedOperationalWire(
     'transport',
     503,
     true,

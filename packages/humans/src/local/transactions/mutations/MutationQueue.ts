@@ -108,12 +108,8 @@ import { enqueueTransaction, type QueueCoalescingContext } from './queueCoalesci
 import { processBatch, type BatchProcessingContext } from './batchProcessing.js';
 import { handleFailure, type FailureHandlingContext } from './failureHandling.js';
 import { handleConflict as resolveConflict, isPermanentError as classifyPermanentError, isDefinitiveRejection as classifyDefinitiveRejection, type ConflictResolutionContext } from './failurePolicy.js';
-import { takeNextExecutionBatch as selectExecutionBatch, takePendingDrainBatch as selectPendingDrainBatch } from './executionSelection.js';
+import { takeNextExecutionBatch as selectExecutionBatch } from './executionSelection.js';
 import { scheduleProcessing as scheduleProcessingExternal, type ProcessingSchedulerContext } from './processingScheduler.js';
-import {
-  drainPendingConfirmations,
-  type PendingDrainContext,
-} from './pendingDrain.js';
 import { restoreDurableCommits as restoreDurableCommitsExternal, type DurableCommitRestoreContext } from './durableCommitRestore.js';
 
 // The queue is split across sibling modules (`commitPayload`,
@@ -244,6 +240,7 @@ export class MutationQueue extends EventEmitter {
   }[] = [];
   private persistenceStageScheduled = false;
   private pendingDrainPromise: Promise<void> | null = null;
+  private modelProcessingPromise: Promise<void> | null = null;
 
   private executionQueue: QueuedMutation[] = [];
   private isProcessing = false;
@@ -493,33 +490,6 @@ export class MutationQueue extends EventEmitter {
       batchDelay: this.config.batchDelay,
       processBatch: () => { void this.processBatch(); },
       logger: this.runtime.logger,
-    };
-  }
-
-  private get pendingDrainContext(): PendingDrainContext {
-    return {
-      runtime: this.runtime,
-      config: { deltaConfirmationTimeout: this.config.deltaConfirmationTimeout },
-      store: this.store,
-      executionQueue: this.executionQueue,
-      optimisticUpdates: this.localMutationPort.updates,
-      assertDurableReplayOpen: () => { this.assertDurableReplayOpen(); },
-      processCommitLane: () => this.processCommitLane(),
-      takePendingDrainBatch: (pending) => this.takePendingDrainBatch(pending),
-      ensureCommitEnvelope: (batch) => this.ensureCommitEnvelope(batch),
-      ensureDerivedFields: (transaction) => { this.ensureDerivedFields(transaction); },
-      sourceMutationIdsFor: (batch) => this.sourceMutationIdsFor(batch),
-      sealDurableCommit: (input) => this.sealDurableCommit(input),
-      assertEnvelopeInsideReplayWindow: (envelope) => { this.assertEnvelopeInsideReplayWindow(envelope); },
-      parseMutationCommitResult: (value) => this.parseMutationCommitResult(value),
-      dispatchCommitBounded: (...args) => this.dispatchCommitBounded(...args),
-      persistDurableCommitAcceptance: (envelope, result) => this.persistDurableCommitAcceptance(envelope, result),
-      removeDurableCommit: (idempotencyKey) => this.removeDurableCommit(idempotencyKey),
-      scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => { this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId); },
-      scheduleDeltaConfirmationTimeout: (transaction, timeoutMs) => { this.scheduleDeltaConfirmationTimeout(transaction, timeoutMs); },
-      enqueue: (transaction) => { this.enqueue(transaction); },
-      recentDeltaCorrelations: this.recentDeltaCorrelations,
-      emit: (event, payload) => this.emit(event, payload),
     };
   }
 
@@ -1064,10 +1034,6 @@ export class MutationQueue extends EventEmitter {
     return selected.batch;
   }
 
-  private takePendingDrainBatch(pending: QueuedMutation[]): QueuedMutation[] {
-    return selectPendingDrainBatch(pending, this.config.maxBatchSize);
-  }
-
   /**
    * Resolvers for per-transaction `confirmation` promises. Populated in
    * `attachConfirmation` at staging time, consumed by the constructor-time
@@ -1361,22 +1327,15 @@ export class MutationQueue extends EventEmitter {
   }
 
   private async drainPendingInternal(): Promise<void> {
-    // The normal batch scheduler and the explicit/reconnect drain are two
-    // ways to drive the same durable queue. They must never seal the same
-    // staged source records concurrently: the first seal consumes those
-    // records, so the second would correctly reject them as already claimed.
-    //
-    // `isProcessing` is acquired synchronously before either path awaits,
-    // making it the queue-wide execution lock. If the normal lane already
-    // owns it, that lane will finish the pending work; callers waiting on a
-    // specific confirmation remain attached to the exact transaction.
-    if (this.isProcessing) return;
-    this.isProcessing = true;
-    try {
-      await drainPendingConfirmations(this.pendingDrainContext);
-    } finally {
-      this.isProcessing = false;
-      if (this.executionQueue.length > 0) this.scheduleProcessing(true);
+    // Explicit flushes and reconnects are merely another trigger for the one
+    // model-mutation execution lane. A second sealing implementation can race
+    // the scheduled lane, consume its journal sources, and later dispatch the
+    // same transaction again. Move every staged row to the owned queue, then
+    // drive the normal lane until the queue has handed off all current work.
+    this.commitCreatedTransactions();
+    await this.processCommitLane();
+    while (this.executionQueue.length > 0 || this.modelProcessingPromise) {
+      await this.processBatch();
     }
   }
   async create(
@@ -1445,7 +1404,19 @@ export class MutationQueue extends EventEmitter {
   }
 
   private async processBatch(): Promise<void> {
-    await processBatch(this.batchProcessingContext);
+    if (this.modelProcessingPromise) {
+      await this.modelProcessingPromise;
+      if (this.executionQueue.length > 0) await this.processBatch();
+      return;
+    }
+    const processing = processBatch(this.batchProcessingContext);
+    const tracked = processing.finally(() => {
+      if (this.modelProcessingPromise === tracked) {
+        this.modelProcessingPromise = null;
+      }
+    });
+    this.modelProcessingPromise = tracked;
+    await tracked;
   }
 
   private rememberDeltaCorrelation(correlationId: string, syncId: number): void {

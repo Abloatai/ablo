@@ -844,8 +844,19 @@ export const claimAbandonPayloadSchema = z.object({
   claimId: z.string(),
   entityType: z.string().optional(),
   entityId: z.string().optional(),
+  /** Correlates the server acknowledgement requested by current clients. */
+  requestId: z.string().optional(),
 });
 export type ClaimAbandonPayload = z.infer<typeof claimAbandonPayloadSchema>;
+
+/** Server confirmation that a held or queued claim is no longer retained. */
+export const claimAbandonAckPayloadSchema = z.object({
+  claimId: z.string(),
+  requestId: z.string(),
+});
+export type ClaimAbandonAckPayload = z.infer<
+  typeof claimAbandonAckPayloadSchema
+>;
 
 /**
  * The `claim_reorder` payload a client sends. A privileged participant, such as

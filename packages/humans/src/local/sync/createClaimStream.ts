@@ -468,7 +468,7 @@ export function createClaimStream(
         }
         ownClaims.clear();
         for (const claimId of [...pendingHeartbeats.keys()]) {
-          settleHeartbeat(claimId, ({ reject }) => reject(error));
+          settleHeartbeat(claimId, ({ reject }) => { reject(error); });
         }
       }),
     );

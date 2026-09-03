@@ -135,6 +135,27 @@ npx ablo connect apply --env-file .env.local --yes
 The explicit flag makes the credential choice visible and loads both the
 branch-bound key and database URL. Shell environment variables take precedence.
 
+### Two schema flags, two ownership boundaries
+
+`migrate` and `push` read your Ablo TypeScript contract. `connect apply` also
+reads it to derive the mapped Postgres tables; `--tables` is an explicit
+override:
+
+```bash
+# TypeScript contract and export; app-schema selects its Postgres namespace.
+npx ablo migrate --schema ablo/schema.ts --export schema --app-schema public
+
+# Existing Postgres namespace only. Never pass ablo/schema.ts here.
+npx ablo connect apply --schema public --yes
+
+# Activate the TypeScript contract after the database is connected.
+npx ablo push --schema ablo/schema.ts --export schema
+```
+
+If the database uses its default namespace, omit `connect --schema`; it defaults
+to `public`. Keep the three operations in this order in deployment automation:
+expand tables, connect the database, then activate the hosted schema.
+
 ### One database, several projects
 
 Provider database URLs and Postgres schemas solve different isolation jobs:
@@ -193,13 +214,18 @@ npx ablo connect apply --url postgres://admin:...@host:5432/db --schema mail
 ```
 
 Pass an admin connection string with `--url` and select the application namespace
-with `--schema` (default `public`). It creates a per-binding publication, two
-per-binding scoped roles, and the grants, turns on logical decoding where it can, registers
-both scoped roles with Ablo, and proves the setup by reconnecting and reading back.
+with `--schema` (default `public`). It inspects and reconciles a per-binding
+publication, two per-binding scoped roles, grants, replica identity,
+registration, and the initial snapshot. On an existing healthy registration it
+is a no-op and preserves both passwords. A policy-only repair also preserves
+them; credential rotation happens only through the explicit `connect rotate`
+operation.
+
 The admin credential is used on this machine only and never persisted — nothing is
-written to your `.env`, which keeps holding only `ABLO_API_KEY`. Pass `--show-sql`
-to see every statement first, or drop `--apply` to print the SQL and run it
-yourself. Rotate the scoped passwords any time with `ablo connect rotate`.
+written to your `.env`, which keeps holding only `ABLO_API_KEY`. Pass
+`--show-sql` to see every statement first, `--json` for stable result and step
+codes, or drop `--apply` to print the SQL and run it yourself. Rotate the scoped
+passwords any time with `ablo connect rotate`.
 
 The rest of this page is what that command sets up, step by step, for when you want
 to run it by hand or review exactly what changes.
@@ -218,19 +244,20 @@ the row to be visible already, and touching application rows is neither necessar
 nor a safe bootstrap mechanism.
 
 If a connection was snapshotted with an older replication role whose row-level
-security hid historical rows, repair that role and request the load again without
-deregistering or rotating credentials:
+security hid historical rows, rerun the same operation. It repairs the owned
+policy and requests the necessary fresh load without deregistering or rotating
+credentials:
 
 ```bash
-npx ablo connect rotate      # reasserts BYPASSRLS and safely re-registers both roles
-npx ablo connect resnapshot  # recreates only the slot; the load is asynchronous
-npx ablo connect check       # repeat until the existing-row load is complete
+npx ablo connect apply --url postgres://owner:...@host/db --yes --json
+# Rerun the same command: loading becomes ready; a healthy rerun is a no-op.
 ```
 
-Use the same `resnapshot` step after adding an existing populated table to the
-publication. Following its future WAL changes is not enough to load rows written
-before publication membership; the snapshot coverage guard therefore refuses to
-record completion when even one mapped table is absent. Relation matching is
+Rerun `connect apply` after adding an existing populated table to the contract.
+Following its future WAL changes is not enough to load rows written before
+publication membership, so reconciliation updates membership and requests the
+fresh snapshot together. The snapshot coverage guard refuses to record
+completion when even one mapped table is absent. Relation matching is
 schema-qualified using the DataSource's configured `schema` (default `public`):
 an identically named table in another Postgres schema neither counts as coverage
 nor enters the snapshot or WAL stream for your model.

@@ -23,26 +23,7 @@ import { createItemFixture } from '../../testing/fixtures/models.js';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import { ModelScope } from '@abloatai/transaction/types';
-import { AbloError } from '@abloatai/transaction/errors';
-import type {
-  DurableWriteStore,
-  PendingWrite,
-} from '../mutations/durableWriteStore.js';
-
-function memoryOutbox(): DurableWriteStore {
-  const records = new Map<string, PendingWrite>();
-  return {
-    seal(record): Promise<void> {
-      records.set(record.id, record);
-      return Promise.resolve();
-    },
-    list: () => Promise.resolve([...records.values()]),
-    remove(id): Promise<void> {
-      records.delete(id);
-      return Promise.resolve();
-    },
-  };
-}
+import { AbloConnectionError, AbloError } from '@abloatai/transaction/errors';
 
 /**
  * The journal/persistence surface the drain path actually touches. Records are
@@ -67,6 +48,24 @@ function memoryDatabase(): Database {
     removeTransaction: (id: string) => {
       rows.delete(id);
       return Promise.resolve();
+    },
+    sealTransactionRecord: (
+      record: { id: string },
+      consumedRecordIds: readonly string[],
+    ) => {
+      const existing = rows.get(record.id);
+      if (
+        existing === undefined &&
+        consumedRecordIds.some((id) => !rows.has(id))
+      ) {
+        return Promise.reject(new AbloError(
+          'Pending-write source mutations were already claimed by another write',
+          { code: 'idempotency_conflict' },
+        ));
+      }
+      if (existing === undefined) rows.set(record.id, structuredClone(record));
+      for (const id of consumedRecordIds) rows.delete(id);
+      return Promise.resolve(existing);
     },
   };
   return db as Database;
@@ -123,6 +122,28 @@ function pendingStagesOf(client: SyncClient): Set<Promise<void>> {
   return Reflect.get(client, 'pendingStages') as Set<Promise<void>>;
 }
 
+interface JournalRecordAccess {
+  id: string;
+  status: string;
+}
+
+interface MutationQueueTestAccess {
+  scheduleCommit(): void;
+  commitCreatedTransactions(): void;
+  enqueue(transaction: JournalRecordAccess): void;
+  store: {
+    getAll(): JournalRecordAccess[];
+    getByStatus(status: string): JournalRecordAccess[];
+    updateStatus(id: string, status: string): void;
+  };
+}
+
+function mutationQueueTestAccess(
+  queue: ReturnType<SyncClient['getMutationQueue']>,
+): MutationQueueTestAccess {
+  return queue as ReturnType<SyncClient['getMutationQueue']> & MutationQueueTestAccess;
+}
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Poll until `predicate` holds or `timeoutMs` elapses. */
@@ -144,7 +165,7 @@ describe('staged-batch drain liveness', () => {
 
   beforeEach(async () => {
     harness = createTestHarness();
-    syncClient = new SyncClient(harness.pool, memoryDatabase(), memoryOutbox());
+    syncClient = new SyncClient(harness.pool, memoryDatabase());
     await syncClient.initialize('user-1', 'org-1');
   });
 
@@ -225,7 +246,7 @@ describe('staged-batch drain liveness', () => {
       position: { x: 250, y: 300, width: 200, height: 200 },
     });
 
-    syncClient.update(layer);
+    void syncClient.update(layer);
 
     expect(await eventually(() => calls.length >= 1, 3_000)).toBe(true);
     const op = calls[0]?.ops[0];
@@ -240,16 +261,146 @@ describe('staged-batch drain liveness', () => {
     syncClient.getMutationQueue().setMutationExecutor(executor);
 
     const first = makeDirtyItem('first');
-    syncClient.update(first);
+    void syncClient.update(first);
     await eventually(() => calls.length >= 1, 3_000);
 
     const second = makeDirtyItem('second');
-    syncClient.update(second);
+    void syncClient.update(second);
 
     expect(await eventually(() => calls.length >= 2, 3_000)).toBe(true);
     expect(
       await eventually(() => pendingStagesOf(syncClient).size === 0, 3_000),
     ).toBe(true);
+  });
+
+  it('reconnect waits for the journal source row before draining it', async () => {
+    syncClient.dispose();
+
+    const database = memoryDatabase();
+    const saveTransaction = database.saveTransaction.bind(database);
+    let releaseSave: (() => void) | undefined;
+    const saveBlocked = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    database.saveTransaction = async (record) => {
+      await saveBlocked;
+      await saveTransaction(record);
+    };
+
+    syncClient = new SyncClient(harness.pool, database);
+    await syncClient.initialize('user-1', 'org-1');
+    const { calls, executor } = scriptedExecutor(['resolve']);
+    syncClient.getMutationQueue().setMutationExecutor(executor);
+
+    const item = makeDirtyItem('reconnect barrier');
+    const confirmation = syncClient.update(item);
+    syncClient.markConnected();
+
+    // Reconnect used to bypass `pendingStages` and dispatch here while the
+    // strict outbox source row was still absent.
+    await wait(50);
+    expect(calls).toHaveLength(0);
+
+    releaseSave?.();
+    await confirmation;
+    expect(await eventually(() => calls.length === 1, 3_000)).toBe(true);
+  });
+
+  it('an explicit drain takes staging ownership and seals a journal row once', async () => {
+    const queue = syncClient.getMutationQueue();
+    const queueAccess = mutationQueueTestAccess(queue);
+    const scheduleCommit = queueAccess.scheduleCommit.bind(queueAccess);
+    queueAccess.scheduleCommit = () => undefined;
+    const { calls, executor } = scriptedExecutor(['resolve']);
+    queue.setMutationExecutor(executor);
+
+    const item = makeDirtyItem('staging ownership');
+    const confirmation = syncClient.update(item);
+    expect(
+      await eventually(() => pendingStagesOf(syncClient).size === 0, 3_000),
+    ).toBe(true);
+    const store = queueAccess.store;
+    const transaction = store.getAll()[0];
+    expect(transaction).toBeDefined();
+
+    // Persistence is complete, but the scheduled staging microtask has been
+    // held back. The explicit drain must take that staging ownership itself.
+    await syncClient.syncNow();
+    expect(calls).toHaveLength(1);
+
+    // Releasing the original scheduler and flushing again must not expose a
+    // second copy. With the old dedicated drain, the first seal left the same
+    // transaction in `createdTransactions`; this step re-enqueued it and the
+    // strict outbox rejected its already-consumed source row.
+    queueAccess.scheduleCommit = scheduleCommit;
+    queueAccess.commitCreatedTransactions();
+    await syncClient.syncNow();
+    await confirmation;
+    expect(calls).toHaveLength(1);
+    expect(transaction?.status).toBe('completed');
+  });
+
+  it('an executing transaction cannot be re-enqueued for a second seal', async () => {
+    const queue = syncClient.getMutationQueue();
+    const queueAccess = mutationQueueTestAccess(queue);
+    const { calls, executor } = scriptedExecutor(['resolve']);
+    const commit = executor.commit.bind(executor);
+    let attemptedReentry = false;
+    executor.commit = (operations, options) => {
+      const result = commit(operations, options);
+      if (!attemptedReentry) {
+        attemptedReentry = true;
+        const store = queueAccess.store;
+        const executing = store.getByStatus('executing')[0];
+        expect(executing).toBeDefined();
+        if (executing) queueAccess.enqueue(executing);
+      }
+      return result;
+    };
+    queue.setMutationExecutor(executor);
+
+    const item = makeDirtyItem('single execution owner');
+    const confirmation = syncClient.update(item);
+    await confirmation;
+    await syncClient.syncNow();
+
+    expect(calls).toHaveLength(1);
+    const store = queueAccess.store;
+    expect(store.getAll()[0]?.status).toBe('completed');
+  });
+
+  it('a late transport failure cannot resurrect a delta-completed transaction', async () => {
+    const queue = syncClient.getMutationQueue();
+    const queueAccess = mutationQueueTestAccess(queue);
+    const config = Reflect.get(queue, 'config') as {
+      retryBackoff: { baseMs: number; capMs: number };
+    };
+    config.retryBackoff = { baseMs: 1, capMs: 1 };
+    const { calls, executor } = scriptedExecutor(['resolve', 'resolve']);
+    const commit = executor.commit.bind(executor);
+    let first = true;
+    executor.commit = (operations, options) => {
+      const recorded = commit(operations, options);
+      if (!first) return recorded;
+      first = false;
+      const store = queueAccess.store;
+      const transaction = store.getByStatus('executing')[0];
+      expect(transaction).toBeDefined();
+      if (transaction) {
+        store.updateStatus(transaction.id, 'completed');
+        queue.emit('transaction:completed', transaction);
+      }
+      return Promise.reject(new AbloConnectionError('commit acknowledgement arrived late'));
+    };
+    queue.setMutationExecutor(executor);
+
+    const item = makeDirtyItem('delta won the race');
+    await syncClient.update(item);
+    await wait(50);
+
+    expect(calls).toHaveLength(1);
+    const store = queueAccess.store;
+    expect(store.getAll()[0]?.status).toBe('completed');
   });
 
   it('a non-cloneable journal row does not discard a valid same-tick sibling', async () => {
@@ -262,8 +413,8 @@ describe('staged-batch drain liveness', () => {
     // These enter one journal flush. The shared JSON boundary rejects
     // `invalid` before IndexedDB; the client must still persist and dispatch
     // `valid` from the same event-loop burst.
-    syncClient.update(invalid);
-    syncClient.update(valid);
+    void syncClient.update(invalid);
+    void syncClient.update(valid);
 
     expect(
       await eventually(
@@ -286,11 +437,11 @@ describe('staged-batch drain liveness', () => {
     syncClient.getMutationQueue().setMutationExecutor(executor);
 
     const doomed = makeDirtyItem('doomed');
-    syncClient.update(doomed);
+    void syncClient.update(doomed);
     await eventually(() => calls.length >= 1, 3_000);
 
     const survivor = makeDirtyItem('survivor');
-    syncClient.update(survivor);
+    void syncClient.update(survivor);
 
     const survivorDispatched = await eventually(
       () => calls.some((call) => call.ops.some((op) => op.id === survivor.id)),
@@ -338,7 +489,7 @@ describe('staged-batch drain liveness', () => {
     };
 
     const item = makeDirtyItem('survives promotion');
-    syncClient.update(item);
+    void syncClient.update(item);
 
     expect(await eventually(() => calls.length >= 4, 5_000)).toBe(true);
     expect(
@@ -347,6 +498,47 @@ describe('staged-batch drain liveness', () => {
     expect(new Set(calls.map((call) => call.idempotencyKey)).size).toBe(1);
     expect(calls.every((call) => call.ops[0]?.id === item.id)).toBe(true);
   }, 15_000);
+
+  it('an in-session retry uses its sealed request after durable cleanup starts', async () => {
+    syncClient.dispose();
+
+    const database = memoryDatabase();
+    syncClient = new SyncClient(harness.pool, database);
+    await syncClient.initialize('user-1', 'org-1');
+    const queue = syncClient.getMutationQueue();
+    const config = Reflect.get(queue, 'config') as {
+      retryBackoff: { baseMs: number; capMs: number };
+    };
+    config.retryBackoff = { baseMs: 1, capMs: 1 };
+
+    let attempts = 0;
+    const executor = scriptedExecutor([]).executor;
+    executor.commit = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const records = await database.getPersistedTransactions();
+        const envelope = records.find(
+          (record) => (record as { type?: string }).type === 'commit_envelope',
+        ) as { id?: string } | undefined;
+        expect(envelope?.id).toBeDefined();
+        if (envelope?.id) await database.removeTransaction(envelope.id);
+        throw new AbloConnectionError('acknowledgement lost during durable cleanup');
+      }
+      return {
+        lastSyncId: 1,
+        status: 'confirmed' as const,
+        statusAt: '2026-08-05T10:00:00.058Z',
+      };
+    };
+    queue.setMutationExecutor(executor);
+
+    const item = makeDirtyItem('replay the sealed request');
+    await syncClient.update(item);
+
+    expect(attempts).toBe(2);
+    const store = mutationQueueTestAccess(queue).store;
+    expect(store.getAll()[0]?.status).toBe('completed');
+  });
 
   it('a commit the transport never answers must not block writes to other rows', async () => {
     const { calls, executor } = scriptedExecutor(['hang']);
@@ -357,11 +549,11 @@ describe('staged-batch drain liveness', () => {
     config.commitDispatchTimeoutMs = 500;
 
     const stuck = makeDirtyItem('stuck');
-    syncClient.update(stuck);
+    void syncClient.update(stuck);
     await eventually(() => calls.length >= 1, 3_000);
 
     const survivor = makeDirtyItem('survivor');
-    syncClient.update(survivor);
+    void syncClient.update(survivor);
 
     // The unanswered dispatch times out as a retryable no-receipt failure; the
     // retry (scripted to resolve, as a recovered transport would) settles the

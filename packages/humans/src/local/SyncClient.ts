@@ -18,7 +18,7 @@ import { deepEqual, snapshotJsonValue } from '@abloatai/transaction/utils/json';
 import { LoadStrategy } from '@abloatai/transaction/types';
 import { globalRuntime } from './context.js';
 import type { RuntimeContext } from './RuntimeContext.js';
-import { AbloAuthenticationError, AbloError, AbloValidationError } from '@abloatai/transaction/errors';
+import { AbloError, AbloValidationError } from '@abloatai/transaction/errors';
 import { EventEmitter } from 'events';
 import { NetworkMonitor } from './NetworkMonitor.js';
 import {
@@ -51,9 +51,16 @@ import {
   type SyncState,
 } from './syncClientTypes.js';
 import type { BootstrapSnapshot } from './syncClientTypes.js';
+import {
+  batchUploadFiles,
+  uploadFile,
+  type BatchFileUploadOptions,
+  type FileUploadContext,
+  type FileUploadOptions,
+} from './fileUploads.js';
 
 export type { BootstrapSnapshot, RehydrationStats } from './syncClientTypes.js';
-
+const ignoreSeparatelyObservedMutationFailure = (): undefined => undefined;
 export class SyncClient extends EventEmitter {
   private objectPool: InstanceCache;
   private database: Database;
@@ -1057,7 +1064,7 @@ export class SyncClient extends EventEmitter {
     if (capturedChanges === undefined) return;
 
     this.objectPool.upsert(model, ModelScope.live);
-    this.stageMutation('update', model, capturedChanges);
+    void this.stageMutation('update', model, capturedChanges);
     this.notifyObservers({
       type: 'update',
       modelType: model.getModelName(),
@@ -1080,128 +1087,30 @@ export class SyncClient extends EventEmitter {
     return this.mutate('delete', model, () => this.objectPool.remove(model.id), options);
   }
 
-  /**
-   * Upload a file and create its attachment record. The upload runs through
-   * the {@link MutationQueue}, and a model is built from the server's
-   * response and added to the pool.
-   */
-  async uploadFile(
-    file: File,
-    options: {
-      id: string;
-      attachableType: string;
-      attachableId: string;
-      metadata?: Record<string, unknown>;
-    }
-  ): Promise<Model | null> {
-    if (!this.userId || !this.organizationId) {
-      throw new AbloAuthenticationError('Authentication required for file uploads', {
-        code: 'file_upload_auth_required',
-      });
-    }
-
-    try {
-      // Use MutationQueue to handle the upload mutation
-      const result = await this.mutationQueue.uploadAttachment(
-        file,
-        {
-          id: options.id,
-          attachableType: options.attachableType,
-          attachableId: options.attachableId,
-          metadata: options.metadata,
-        },
-        {
-          userId: this.userId,
-          organizationId: this.organizationId,
-        }
-      );
-
-      if (result) {
-        // Create model from response using ModelRegistry (generic — no concrete class import)
-        const model = this.objectPool.createFromData({
-          id: options.id,
-          ...result,
-        });
-
-        if (model) {
-          this.objectPool.add(model, ModelScope.live);
-          this.notifyObservers({
-            type: 'create',
-            modelType: model.getModelName(),
-            model,
-          });
-          return model;
-        }
-      }
-
-      return null;
-    } catch (error) {
-      this.runtime.observability.captureMutationFailure({
-        context: 'file-upload',
-        error: error instanceof Error ? error : new Error(String(error)),
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Batch upload files — single GraphQL call + parallel S3 PUTs.
-   *
-   * Returns the raw `Model[]` built by the object pool (typename is
-   * determined by the payload the server returns — currently always
-   * `Attachment`). The SDK has no knowledge of app-specific model classes,
-   * so it cannot honestly claim a narrower return type; consumers that
-   * need an `Attachment[]` project through their own typed accessor
-   * (e.g. `store.query.attachments.findMany({ where: { id: IN ids } })`)
-   * after the upload resolves.
-   */
-  async batchUploadFiles(
-    files: File[],
-    options: {
-      ids: string[];
-      attachableType: string;
-      attachableId: string;
-      metadata?: Record<string, unknown>;
-    }
-  ): Promise<Model[]> {
-    if (!this.userId || !this.organizationId) {
-      throw new AbloAuthenticationError('Authentication required for file uploads', {
-        code: 'file_upload_auth_required',
-      });
-    }
-
-    const items = options.ids.map((id) => ({
-      id,
-      attachableType: options.attachableType,
-      attachableId: options.attachableId,
-      metadata: options.metadata,
-    }));
-
-    const results = await this.mutationQueue.batchUploadAttachments(files, items, {
+  private fileUploadContext(): FileUploadContext {
+    return {
       userId: this.userId,
       organizationId: this.organizationId,
-    });
+      mutationQueue: this.mutationQueue,
+      objectPool: this.objectPool,
+      observability: this.runtime.observability,
+      notifyCreated: (model) => {
+        this.notifyObservers({ type: 'create', modelType: model.getModelName(), model });
+      },
+    };
+  }
 
-    const models: Model[] = [];
-    for (const result of results) {
-      const model = this.objectPool.createFromData({ ...result });
-      if (model) {
-        this.objectPool.add(model, ModelScope.live);
-        this.notifyObservers({
-          type: 'create',
-          modelType: model.getModelName(),
-          model,
-        });
-        models.push(model);
-      }
-    }
+  uploadFile(file: File, options: FileUploadOptions): Promise<Model | null> {
+    return uploadFile(this.fileUploadContext(), file, options);
+  }
 
-    return models;
+  batchUploadFiles(files: File[], options: BatchFileUploadOptions): Promise<Model[]> {
+    return batchUploadFiles(this.fileUploadContext(), files, options);
   }
 
   /** Archive model (ARCHIVE) - works offline */
-  archive(model: Model): void {
-    this.mutate('archive', model, () => { this.objectPool.updateScope(model.id, ModelScope.archived); });
+  archive(model: Model): Promise<void> | undefined {
+    return this.mutate('archive', model, () => { this.objectPool.updateScope(model.id, ModelScope.archived); });
   }
 
   /**
@@ -1243,7 +1152,7 @@ export class SyncClient extends EventEmitter {
     // Most internal callers intentionally use fire-and-forget writes. Observe
     // their rejection without replacing the exact promise returned to model
     // operations that need authoritative per-transaction confirmation.
-    void confirmation.catch(() => undefined);
+    void confirmation.catch(ignoreSeparatelyObservedMutationFailure);
     const pending = staging.then(() => undefined).catch((error: Error) => {
       this.runtime.observability.captureMutationFailure({
         context: `stage-mutation-${type}`,
@@ -1495,14 +1404,11 @@ export class SyncClient extends EventEmitter {
   markConnected(): void {
     this.setConnectionState('connected');
     // Browser online state may have marked the client connected before the
-    // WebSocket itself was ready. Always kick both durable lanes on the real
-    // socket event, even when the high-level state did not change.
-    void this.drainPendingConfirmations().catch((error: unknown) => {
-      this.runtime.observability.captureMutationFailure({
-        context: 'restore-commit-outbox',
-        error: error instanceof Error ? error : new Error(String(error)),
-      });
-    });
+    // WebSocket itself was ready. Kick the durable lanes through the staging
+    // barrier: a model mutation enters the in-memory store before its journal
+    // row finishes saving, so a direct reconnect drain can otherwise try to
+    // seal a source record that does not exist yet. The pending drain also
+    // starts the atomic commit lane, so one ordered entry point covers both.
     void this.processPendingMutations();
   }
 

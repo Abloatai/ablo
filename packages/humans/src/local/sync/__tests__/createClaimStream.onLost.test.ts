@@ -59,7 +59,6 @@ function frameSession(onEmit: (event: string, payload: unknown) => void): WsSess
     logger: noopLogger,
     observability: noopSocketObservability,
     pendingMutations: new Map(),
-    pendingClaims: new Map(),
     shiftPendingSubscription: () => undefined,
     options: { syncGroups: [] },
     collaborationEventTypes: new Set<string>(),

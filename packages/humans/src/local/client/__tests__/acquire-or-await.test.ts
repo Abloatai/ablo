@@ -35,7 +35,7 @@ import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';
 import type { Claim } from '@abloatai/transaction/types/streams';
 import { AbloClaimedError } from '@abloatai/transaction/errors';
 
-interface ItemRow { id: string; title: string }
+interface ItemRow { id: string; title: string; status: string }
 
 const ItemModel = class extends Model {
   override getModelName(): string {
@@ -58,7 +58,7 @@ function makeProxy(collaboration: ModelCollaboration, seedId?: string) {
       ModelScope.live,
     );
   }
-  const fetchSpy = jest.fn(async () => []);
+  const fetchSpy = jest.fn(() => Promise.resolve([]));
   const hydration: Pick<OnDemandLoader, 'fetch'> = { fetch: fetchSpy };
   const proxy = createModelOperations<ItemRow, Omit<ItemRow, 'id'>>(
     'items',
@@ -75,25 +75,27 @@ function makeProxy(collaboration: ModelCollaboration, seedId?: string) {
 function fakeCollaboration(
   overrides?: Partial<ModelCollaboration>,
 ): ModelCollaboration {
-  return {
-    createClaim: jest.fn(async () => ({
+  const collaboration: ModelCollaboration = {
+    readPoint: jest.fn(() => Promise.reject(new Error('not used'))),
+    commitBatch: jest.fn(() => Promise.reject(new Error('not used'))),
+    createClaim: jest.fn(() => Promise.resolve({
       object: 'claim' as const,
       id: 'lease-1',
       description: 'editing',
       target: { type: 'items', id: 't1' },
-      release: jest.fn(async () => undefined),
+      release: jest.fn(() => Promise.resolve()),
       revoke: jest.fn(),
-      [Symbol.asyncDispose]: async () => undefined,
+      [Symbol.asyncDispose]: () => Promise.resolve(),
     })),
     currentReadAt: () => 1,
     state: jest.fn(() => null),
     holders: jest.fn(() => []),
     queue: jest.fn(() => []),
     reorder: jest.fn(),
-    waitFor: jest.fn(async () => undefined),
+    waitFor: jest.fn(() => Promise.resolve()),
     selfParticipantId: 'me',
-    ...overrides,
   };
+  return Object.assign(collaboration, overrides);
 }
 
 function queuedClaim(id: string, heldBy: string, position: number): Claim {
@@ -199,12 +201,12 @@ describe('ModelOperations.claim', () => {
   });
 
   it('keeps disjoint grants on one row distinct and releases by claim id', async () => {
-    const releaseTitle = jest.fn(async () => undefined);
-    const releaseStatus = jest.fn(async () => undefined);
+    const releaseTitle = jest.fn(() => Promise.resolve());
+    const releaseStatus = jest.fn(() => Promise.resolve());
     let next = 0;
-    const createClaim = jest.fn(async () => {
+    const createClaim = jest.fn(() => {
       const title = next++ === 0;
-      return {
+      return Promise.resolve({
         object: 'claim' as const,
         id: title ? 'lease-title' : 'lease-status',
         description: title ? 'editing title' : 'editing status',
@@ -215,20 +217,20 @@ describe('ModelOperations.claim', () => {
         },
         release: title ? releaseTitle : releaseStatus,
         revoke: jest.fn(),
-        [Symbol.asyncDispose]: async () => undefined,
-      };
+        [Symbol.asyncDispose]: () => Promise.resolve(),
+      });
     });
     const collab = fakeCollaboration({ createClaim });
     const { proxy } = makeProxy(collab, 't1');
 
     const title = await proxy.claim({
       id: 't1',
-      field: 'title',
+      fields: (item) => item.title,
       description: 'editing title',
     });
     const status = await proxy.claim({
       id: 't1',
-      field: 'status',
+      fields: (item) => item.status,
       description: 'editing status',
     });
 

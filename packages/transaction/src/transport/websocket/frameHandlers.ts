@@ -425,6 +425,13 @@ const validatedFrameHandlers: Record<
       session.emit('claim_acquired', payload);
     },
   ),
+  claim_abandon_ack: validating(
+    WS_INBOUND_FRAMES.claim_abandon_ack.payload,
+    'claim_abandon_ack',
+    (session, payload) => {
+      session.emit('claim_abandon_ack', payload);
+    },
+  ),
   claim_queued: validating(
     WS_INBOUND_FRAMES.claim_queued.payload,
     'claim_queued',

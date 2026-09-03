@@ -202,11 +202,26 @@ describe('agent WebSocket transport', () => {
     await expect(committing).resolves.toMatchObject({ status: 'confirmed', lastSyncId: 9 });
     const claim = await claiming;
     expect(claim).toMatchObject({ id: claimId, fenceToken: 5 });
-    await claim.release();
+    const releasing = claim.release();
     await flush();
-    expect(socket.sent.at(-1)).toMatchObject({
-      type: 'claim_abandon', payload: { claimId, entityType: 'items', entityId: 'item-1' },
+    const abandon = socket.sent.at(-1);
+    expect(abandon).toMatchObject({
+      type: 'claim_abandon',
+      payload: {
+        claimId,
+        entityType: 'items',
+        entityId: 'item-1',
+        requestId: expect.any(String),
+      },
     });
+    socket.receive({
+      type: 'claim_abandon_ack',
+      payload: {
+        claimId,
+        requestId: (abandon?.payload as { requestId: string }).requestId,
+      },
+    });
+    await releasing;
     await client.dispose();
   });
 
@@ -324,6 +339,141 @@ describe('agent WebSocket transport', () => {
     await expect(committed).resolves.toMatchObject({ status: 'confirmed', lastSyncId: 8 });
     await expect(claimed).resolves.toMatchObject({ claimId: 'claim-1', fenceToken: 4 });
     await expect(subscribed).resolves.toEqual({ syncGroups: ['item:item-1'] });
+    await session.close();
+  });
+
+  it('does not invent a WebSocket claim timeout when timeoutMs is omitted', async () => {
+    const opening = createWebSocketSession({
+      baseUrl: 'https://cell.example.test',
+      access: access('rk_agent_1'),
+      syncGroups: ['org:org-1'],
+    });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    const session = await opening;
+    jest.useFakeTimers();
+
+    const claimed = session.claim({
+      claimId: 'claim-indefinite',
+      entityType: 'items',
+      entityId: 'item-1',
+      queue: true,
+    });
+    let settled = false;
+    void claimed.finally(() => { settled = true; }).catch(() => undefined);
+    await jest.advanceTimersByTimeAsync(15_001);
+    expect(settled).toBe(false);
+
+    socket.receive({
+      type: 'claim_granted',
+      payload: {
+        claimId: 'claim-indefinite',
+        fenceToken: 4,
+        readAt: 8,
+        target: { entityType: 'items', entityId: 'item-1' },
+      },
+    });
+    await expect(claimed).resolves.toMatchObject({ claimId: 'claim-indefinite' });
+    await session.close();
+  });
+
+  it('waits for server queue cleanup before rejecting an aborted WebSocket claim', async () => {
+    const opening = createWebSocketSession({
+      baseUrl: 'https://cell.example.test',
+      access: access('rk_agent_1'),
+      syncGroups: ['org:org-1'],
+    });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    const session = await opening;
+    const controller = new AbortController();
+
+    const claimed = session.claim({
+      claimId: 'claim-cancelled',
+      entityType: 'items',
+      entityId: 'item-1',
+      queue: true,
+      signal: controller.signal,
+    });
+    let settled = false;
+    void claimed.finally(() => { settled = true; }).catch(() => undefined);
+    const rejection = expect(claimed).rejects.toMatchObject({ code: 'claim_wait_aborted' });
+    controller.abort();
+    await flush();
+
+    const abandon = socket.sent.find((frame) => frame.type === 'claim_abandon');
+    expect(abandon).toMatchObject({
+      payload: {
+        claimId: 'claim-cancelled',
+        requestId: expect.any(String),
+      },
+    });
+    expect(settled).toBe(false);
+
+    socket.receive({
+      type: 'claim_abandon_ack',
+      payload: {
+        claimId: 'claim-cancelled',
+        requestId: (abandon?.payload as { requestId: string }).requestId,
+      },
+    });
+    await rejection;
+    await session.close();
+  });
+
+  it('preserves the full WebSocket conflict when claim admission is rejected', async () => {
+    const opening = createWebSocketSession({
+      baseUrl: 'https://cell.example.test',
+      access: access('rk_agent_1'),
+      syncGroups: ['org:org-1'],
+    });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    const session = await opening;
+
+    const claimed = session.claim({
+      claimId: 'claim-contender',
+      entityType: 'items',
+      entityId: 'item-1',
+    });
+    await flush();
+    socket.receive({
+      type: 'claim_rejected',
+      payload: {
+        claimId: 'claim-contender',
+        reason: 'conflict',
+        target: { entityType: 'items', entityId: 'item-1' },
+        heldBy: 'agent:holder',
+        heldByKind: 'agent',
+        heldByClaimId: 'claim-holder',
+        heldByExpiresAt: 31_000,
+        heldByClaim: {
+          entityType: 'items',
+          entityId: 'item-1',
+          claimId: 'claim-holder',
+          description: 'Updating item 1',
+          declaredAt: 1_000,
+          expiresAt: 31_000,
+        },
+      },
+    });
+
+    await expect(claimed).rejects.toMatchObject({
+      code: 'claim_conflict',
+      conflict: {
+        counterparty: {
+          kind: 'agent',
+          description: 'Updating item 1',
+          expiresAt: 31_000,
+        },
+        target: { model: 'items', id: 'item-1' },
+        claimId: 'claim-holder',
+        participantId: 'agent:holder',
+      },
+    });
     await session.close();
   });
 

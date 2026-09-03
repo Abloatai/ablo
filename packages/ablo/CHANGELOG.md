@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.61.0
+
+### Existing database connections repair in place
+
+`ablo connect apply` is now the single repeatable operation for both a new
+database connection and an existing registration. A healthy connection is a
+no-op. When a registration predates current publication, replica-identity,
+grant, or row-level-security requirements, the same command reconciles those
+database-owned invariants through the transient owner URL while preserving
+Ablo's working scoped passwords.
+
+If that repair means an earlier initial snapshot may have omitted rows, the
+operation requests the required fresh snapshot and subsequent reruns report its
+loading or ready state. Automation can select `--json` for stable lifecycle and
+per-step codes instead of parsing human output. Credential rotation remains an
+explicit operation for an actually incomplete or invalid role pair.
+
 ## 0.60.0
 
 ### Sessions are the connection boundary for people and agents

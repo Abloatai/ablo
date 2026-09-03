@@ -23,12 +23,24 @@ import { ABLO_DOCS_BASE_URL } from './auth/hostedEndpoints.js';
 import { errorCodeSpec, classifyRecovery } from './errorCodes.js';
 import {
   wireClaimSummarySchema,
+  wireParticipantKindSchema,
+  modelTargetSchema,
   descriptionFromMeta,
   type WireClaimSummary,
   type ModelClaim,
   type ModelTarget,
   type ParticipantKind,
 } from './coordination/schema.js';
+import {
+  claimConflictContextSchema,
+  normalizeClaimConflict,
+  type ClaimConflictContext,
+} from './claims/conflict.js';
+
+export type {
+  ClaimConflictContext,
+  ClaimConflictCounterparty,
+} from './claims/conflict.js';
 
 export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './errorCodes.js';
 export {
@@ -368,6 +380,44 @@ export interface ClaimContext {
 
 export type ClaimErrorClaim = WireClaimSummary | ClaimContext;
 
+function conflictFromClaims(
+  claims: readonly ClaimErrorClaim[] | undefined,
+): ClaimConflictContext | undefined {
+  const claim = claims?.[0];
+  if (!claim) return undefined;
+  const summary = wireClaimSummarySchema.safeParse(claim);
+  if (summary.success) {
+    const actor = 'actor' in claim && typeof claim.actor === 'string'
+      ? claim.actor
+      : undefined;
+    return normalizeClaimConflict({
+      heldByClaim: summary.data,
+      ...(actor !== undefined ? { heldBy: actor } : {}),
+    });
+  }
+  const context = claim as ClaimContext;
+  return normalizeClaimConflict({
+    ...(context.actor !== undefined ? { heldBy: context.actor } : {}),
+    ...(context.participantKind !== undefined
+      ? { heldByKind: context.participantKind }
+      : {}),
+    ...(context.claimId !== undefined ? { heldByClaimId: context.claimId } : {}),
+    ...(context.description !== undefined ? { description: context.description } : {}),
+    ...(context.expiresAt !== undefined ? { expiresAt: context.expiresAt } : {}),
+    ...(context.target !== undefined
+      ? { target: context.target }
+      : context.entityType !== undefined || context.entityId !== undefined
+        ? {
+            target: {
+              ...(context.entityType !== undefined ? { model: context.entityType } : {}),
+              ...(context.entityId !== undefined ? { id: context.entityId } : {}),
+              ...(context.field !== undefined ? { field: context.field } : {}),
+            },
+          }
+        : {}),
+  });
+}
+
 function claimDescription(claim: ClaimErrorClaim | undefined): string | undefined {
   if (!claim) return undefined;
   if ('description' in claim && typeof claim.description === 'string') {
@@ -434,6 +484,7 @@ export function formatClaimedErrorMessage(args: {
 export class AbloClaimedError extends AbloError {
   override readonly type = 'AbloClaimedError' as const;
   readonly claims?: readonly ClaimErrorClaim[];
+  readonly conflict?: ClaimConflictContext;
 
   constructor(
     message: string,
@@ -443,10 +494,22 @@ export class AbloClaimedError extends AbloError {
       requestId?: string;
       cause?: unknown;
       claims?: readonly ClaimErrorClaim[];
+      conflict?: ClaimConflictContext;
+      details?: Readonly<Record<string, unknown>>;
     },
   ) {
-    super(message, options);
+    const conflict = options?.conflict ?? conflictFromClaims(options?.claims);
+    const details = {
+      ...(options?.details ?? {}),
+      ...(options?.claims !== undefined ? { claims: options.claims } : {}),
+      ...(conflict !== undefined ? { conflict } : {}),
+    };
+    super(message, {
+      ...options,
+      ...(Object.keys(details).length > 0 ? { details } : {}),
+    });
     if (options?.claims !== undefined) this.claims = options.claims;
+    if (conflict !== undefined) this.conflict = conflict;
   }
 }
 
@@ -681,8 +744,13 @@ const NestedErrorShapeSchema = z
     field: OptionalWireStringSchema,
     requiredCapability: requiredCapabilityWireSchema.optional().catch(undefined),
     heldBy: OptionalWireStringSchema,
+    heldByKind: wireParticipantKindSchema.optional().catch(undefined),
+    heldByClaimId: OptionalWireStringSchema,
+    heldByExpiresAt: z.number().optional().catch(undefined),
     heldByClaim: wireClaimSummarySchema.optional().catch(undefined),
     claims: z.array(wireClaimSummarySchema).optional().catch(undefined),
+    conflict: claimConflictContextSchema.optional().catch(undefined),
+    target: modelTargetSchema.unwrap().partial().optional().catch(undefined),
   })
   .loose();
 
@@ -706,8 +774,13 @@ const ErrorBodyShapeSchema = z
     message: OptionalWireStringSchema,
     requiredCapability: requiredCapabilityWireSchema.optional().catch(undefined),
     heldBy: OptionalWireStringSchema,
+    heldByKind: wireParticipantKindSchema.optional().catch(undefined),
+    heldByClaimId: OptionalWireStringSchema,
+    heldByExpiresAt: z.number().optional().catch(undefined),
     heldByClaim: wireClaimSummarySchema.optional().catch(undefined),
     claims: z.array(wireClaimSummarySchema).optional().catch(undefined),
+    conflict: claimConflictContextSchema.optional().catch(undefined),
+    target: modelTargetSchema.unwrap().partial().optional().catch(undefined),
   })
   .loose();
 
@@ -763,11 +836,12 @@ export function errorFromWire(
     requestId?: string;
     requiredCapability?: RequiredCapability;
     claims?: readonly ClaimErrorClaim[];
+    conflict?: ClaimConflictContext;
     /** Everything the producer attached beyond the envelope's own fields. */
     details?: Readonly<Record<string, unknown>>;
   } = {},
 ): AbloError {
-  const { code, requestId, requiredCapability, claims, details } = opts;
+  const { code, requestId, requiredCapability, claims, conflict, details } = opts;
   // Effective status: an explicit HTTP status wins; otherwise fall back to
   // the code's canonical status from the registry (undefined for unknown /
   // forward-compat codes, which then map to the base AbloError).
@@ -802,9 +876,16 @@ export function errorFromWire(
   if (
     code === 'claim_conflict' ||
     code === 'entity_claimed' ||
-    code === 'claim_lost'
+    code === 'claim_lost' ||
+    code === 'fence_token_stale' ||
+    code === 'model_claimed' ||
+    code === 'model_claimed_timeout' ||
+    code === 'claim_lease_unavailable' ||
+    code === 'claim_wait_aborted' ||
+    code === 'grant_timeout' ||
+    code === 'claim_queued'
   ) {
-    return new AbloClaimedError(message, { ...baseOpts, claims });
+    return new AbloClaimedError(message, { ...baseOpts, claims, conflict });
   }
   // A write whose `readAt` watermark went stale — callers re-read and retry.
   if (code === 'stale_context') {
@@ -854,6 +935,12 @@ const ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   'requiredCapability',
   'claims',
   'heldByClaim',
+  'heldBy',
+  'heldByKind',
+  'heldByClaimId',
+  'heldByExpiresAt',
+  'conflict',
+  'target',
   // `reason` is deliberately NOT here: it is domain detail (a driver's words
   // beside the server's message), not an envelope field — the canonical
   // envelope schema has no such key — so it must survive into `details` for a
@@ -916,6 +1003,30 @@ export function translateHttpError(
       : nested?.heldByClaim
         ? [nested.heldByClaim]
         : undefined);
+  const conflict =
+    parsed.conflict ??
+    nested?.conflict ??
+    normalizeClaimConflict({
+      ...(parsed.heldBy ?? nested?.heldBy
+        ? { heldBy: parsed.heldBy ?? nested?.heldBy }
+        : {}),
+      ...(parsed.heldByKind ?? nested?.heldByKind
+        ? { heldByKind: parsed.heldByKind ?? nested?.heldByKind }
+        : {}),
+      ...(parsed.heldByClaimId ?? nested?.heldByClaimId
+        ? { heldByClaimId: parsed.heldByClaimId ?? nested?.heldByClaimId }
+        : {}),
+      ...(parsed.heldByExpiresAt ?? nested?.heldByExpiresAt
+        ? { heldByExpiresAt: parsed.heldByExpiresAt ?? nested?.heldByExpiresAt }
+        : {}),
+      ...(parsed.heldByClaim ?? nested?.heldByClaim
+        ? { heldByClaim: parsed.heldByClaim ?? nested?.heldByClaim }
+        : {}),
+      ...(parsed.target ?? nested?.target
+        ? { target: parsed.target ?? nested?.target }
+        : {}),
+    }) ??
+    conflictFromClaims(claims);
 
   // The envelope carries `request_id`, so a caller that has only the body still
   // gets the correlation id — without this it was dropped unless the caller
@@ -935,6 +1046,7 @@ export function translateHttpError(
     requestId: requestId ?? (typeof bodyRequestId === 'string' ? bodyRequestId : undefined),
     requiredCapability,
     claims,
+    conflict,
     details: Object.keys(details).length > 0 ? details : undefined,
   });
 }

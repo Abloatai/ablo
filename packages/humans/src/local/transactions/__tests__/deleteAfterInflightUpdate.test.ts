@@ -154,7 +154,7 @@ describe('delete after an in-flight update on the same row', () => {
     // The edit: dispatched and HELD in flight — its envelope is sealed, so
     // its journal sources are consumed and belong to it.
     item.applyChanges({ title: 'after' });
-    syncClient.update(item);
+    void syncClient.update(item);
     expect(await eventually(() => calls.length >= 1, 3_000)).toBe(true);
 
     expect(outbox.sealed).toHaveLength(1);
@@ -172,7 +172,7 @@ describe('delete after an in-flight update on the same row', () => {
     syncClient.getMutationQueue().on('transaction:created', (tx: { type?: string }) => {
       if (tx.type === 'delete') deleteStaged = true;
     });
-    syncClient.delete(item);
+    void syncClient.delete(item);
     expect(await eventually(() => deleteStaged, 3_000)).toBe(true);
 
     // The edit settles; the delete may now dispatch — in the field this is

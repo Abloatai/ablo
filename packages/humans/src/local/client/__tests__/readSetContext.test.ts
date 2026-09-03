@@ -38,7 +38,9 @@ describe('reactive/WebSocket ReadSet context', () => {
   it('correlates an exact WebSocket request and receipt as one commit record', async () => {
     const records: CommitRecord[] = [];
     const context = createReadSetContext({
-      onCommitRecord: (record) => records.push(record),
+      onCommitRecord: (record) => {
+        records.push(record);
+      },
     });
     const sendCommitReceipt = jest.fn((
       _operations: unknown,
@@ -63,12 +65,11 @@ describe('reactive/WebSocket ReadSet context', () => {
 
     const identity = {};
     capturePointRead(context, identity, 'items', 'item-1', { id: 'item-1' }, 54);
-    const prepared = prepareReadSet(
+    prepareReadSet(
       context,
       identity,
       undefined,
       'reject',
-      undefined,
       undefined,
     );
     await executor.commit([{
@@ -130,9 +131,12 @@ describe('reactive/WebSocket ReadSet context', () => {
       add: jest.fn(),
       delete: jest.fn(),
       getMutationQueue: jest.fn(() => { throw new Error('not used'); }),
-      getOrganizationId: jest.fn(() => undefined),
+      getOrganizationId: jest.fn(() => null),
       syncNow: jest.fn(() => Promise.resolve(undefined)),
-      update: jest.fn((_model, options) => { updateOptions = options; }),
+      update: jest.fn((_model, options): undefined => {
+        updateOptions = options;
+        return undefined;
+      }),
       waitForConfirmation: jest.fn(() => Promise.resolve(undefined)),
     };
     const hydration: Pick<OnDemandLoader, 'fetch' | 'getReadEvidence'> = {
@@ -149,6 +153,7 @@ describe('reactive/WebSocket ReadSet context', () => {
             data: { id: 'item-1', title: 'Authoritative', status: 'todo' },
             stamp: 44,
           })),
+      commitBatch: jest.fn(() => Promise.reject(new Error('not used'))),
       createClaim: jest.fn(() => Promise.reject(new Error('not used'))),
       currentReadAt: () => 0,
       state: jest.fn(() => null),

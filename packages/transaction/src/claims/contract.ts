@@ -232,6 +232,8 @@ export const claimQueuedResponseSchema = z.object({
   status: z.literal('queued'),
   position: z.number().int().nonnegative(),
   heldBy: z.string().optional(),
+  heldByKind: wireParticipantKindSchema.optional(),
+  heldByClaimId: z.string().optional(),
   expiresAt: z.number().int().optional(),
   heldByClaim: wireClaimSummarySchema.optional(),
 });

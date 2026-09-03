@@ -174,7 +174,11 @@ describe('MutationQueue retry idempotency', () => {
 
   it('reuses the envelope when reconnect flush replays a lost acknowledgement', async () => {
     queue.dispose();
-    queue = new MutationQueue({ batchDelay: 60_000, maxBatchSize: 50 });
+    queue = new MutationQueue({
+      batchDelay: 60_000,
+      maxBatchSize: 50,
+      retryBackoff: { baseMs: 1, capMs: 1 },
+    });
     const attempts = failFirstCommitAfterCapturing(queue);
 
     const transaction = await queue.create(
@@ -185,6 +189,9 @@ describe('MutationQueue retry idempotency', () => {
     // timer, then simulate two reconnect kicks around one lost ack.
     await Promise.resolve();
     await queue.drainPending();
+    await waitFor(
+      () => (Reflect.get(queue, 'executionQueue') as QueuedMutation[]).length > 0,
+    );
     await queue.drainPending();
     await transaction.confirmation;
 

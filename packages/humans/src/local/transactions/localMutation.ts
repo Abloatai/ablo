@@ -35,11 +35,11 @@ export function createLocalMutationPort(
   return {
     updates,
     applyCreate: (model, transaction) =>
-      track('optimistic:create', model, transaction),
+      { track('optimistic:create', model, transaction); },
     applyUpdate: (model, transaction) =>
-      track('optimistic:update', model, transaction),
+      { track('optimistic:update', model, transaction); },
     applyDelete: (model, transaction) =>
-      track('optimistic:delete', model, transaction),
+      { track('optimistic:delete', model, transaction); },
     rollback: (transaction, reason, error) => {
       const optimistic = updates.get(transaction.id);
       if (!optimistic) return Promise.resolve();

@@ -48,6 +48,7 @@ describe('parseConnectArgs', () => {
     expect(a.resnapshot).toBe(false);
     expect(a.url).toBeUndefined();
     expect(a.manual).toBe(false);
+    expect(a.json).toBe(false);
   });
 
   it('parses --manual, the escape hatch back to the printed recipe', () => {
@@ -60,6 +61,10 @@ describe('parseConnectArgs', () => {
   it('parses an explicit env file without silently loading one by default', () => {
     expect(parseConnectArgs(['rotate', '--env-file', '.env.local']).envFile).toBe('.env.local');
     expect(parseConnectArgs(['rotate']).envFile).toBeUndefined();
+  });
+
+  it('parses stable JSON output mode', () => {
+    expect(parseConnectArgs(['apply', '--json', '--yes']).json).toBe(true);
   });
 
   it('selects modes by subcommand', () => {

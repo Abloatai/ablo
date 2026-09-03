@@ -19,8 +19,8 @@
  */
 import {
   createHttpTransport,
-  type HttpTransport,
 } from './transport.js';
+import type { HttpTransport } from './contract.js';
 import type { HttpClientConfig } from './options.js';
 import type {
   CommitResource,
@@ -271,6 +271,8 @@ const PROTOCOL_MEMBERS = new Set<string>([
   'identity',
   'getAuthToken',
 ]);
+
+const ignoreAlreadySurfacedSessionOpeningFailure = (): undefined => undefined;
 
 /** Narrows a bare property name to a transport key so the facade can index it typed. */
 function isProtocolMember(prop: string): prop is keyof HttpTransport {
@@ -555,9 +557,8 @@ export function createAbloHttpClient<S extends SchemaRecord>(
         return receipt;
       },
       dispatchClaim: async (input) => (await webSocketSession()).claim(input),
-      releaseDispatchedClaim: (input) => {
-        void webSocketSession().then((session) => session.release(input));
-      },
+      releaseDispatchedClaim: async (input) =>
+        (await webSocketSession()).release(input),
     } : {}),
   });
   const schemaModels = new Set(Object.keys(schema.models));
@@ -614,7 +615,7 @@ export function createAbloHttpClient<S extends SchemaRecord>(
     webSocketOpen.abort();
     const opening = webSocketPromise;
     if (webSocket) await webSocket.close();
-    else await opening?.then((session) => session.close()).catch(() => undefined);
+    else await opening?.then((session) => session.close()).catch(ignoreAlreadySurfacedSessionOpeningFailure);
     await transport.dispose();
   };
 

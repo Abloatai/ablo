@@ -149,6 +149,9 @@ import {
   type ReadSetContext,
 } from '@abloatai/transaction/internal/read-set';
 
+const ignoreSeparatelyObservedMutationFailure = (): undefined => undefined;
+const ignoreBestEffortClaimReleaseFailure = (): undefined => undefined;
+
 export interface ModelClientMeta {
   readonly key: string;
   readonly typename: string;
@@ -490,7 +493,7 @@ export function createModelOperations<T, C>(
       // await does not create an unhandled-rejection process error. Returning
       // the original promise preserves normal rejection for callers that do
       // await or attach their own catch handler.
-      void confirmation.catch(() => undefined);
+      void confirmation.catch(ignoreSeparatelyObservedMutationFailure);
       return confirmation;
     };
   };
@@ -660,9 +663,9 @@ export function createModelOperations<T, C>(
     // This runs after authoritative confirmation. A best-effort abandon frame
     // cannot turn a committed write into an apparent failure; the server has
     // already fulfilled the participant's claims as part of that commit.
-    await releaseClaimsForEntity(entityId).catch(() => undefined);
+    await releaseClaimsForEntity(entityId).catch(ignoreBestEffortClaimReleaseFailure);
     if (explicit && !explicitWasLocal) {
-      await explicit.release?.().catch(() => undefined);
+      await explicit.release?.().catch(ignoreBestEffortClaimReleaseFailure);
     }
   };
 
@@ -1376,7 +1379,7 @@ export function createModelOperations<T, C>(
         await waitForMutation(model, confirmation);
         return modelAsRow<T>(model);
       } finally {
-        await autoLease?.release?.().catch(() => {});
+        await autoLease?.release?.().catch(ignoreBestEffortClaimReleaseFailure);
       }
   });
 
@@ -1501,7 +1504,7 @@ export function createModelOperations<T, C>(
               const confirmation = syncClient.update(
                 model,
                 effective,
-                patch as Record<string, unknown>,
+                patch,
               );
               await waitForMutation(model, confirmation);
               return modelAsRow<T>(model);
@@ -1562,7 +1565,7 @@ export function createModelOperations<T, C>(
         const confirmation = syncClient.update(
           model,
           effective,
-          params.data as Record<string, unknown>,
+          params.data,
         );
         await waitForMutation(model, confirmation);
         const updated = modelAsRow<T>(model);

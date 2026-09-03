@@ -87,7 +87,7 @@ export interface AbloWebSocketSession<
     readonly claimId: string;
     readonly entityType?: string;
     readonly entityId?: string;
-  }): void;
+  }): Promise<void>;
   subscribe<K extends keyof SyncWebSocketEventMap<TEvents>>(
     event: K,
     listener: (...args: SyncWebSocketEventMap<TEvents>[K]) => void,

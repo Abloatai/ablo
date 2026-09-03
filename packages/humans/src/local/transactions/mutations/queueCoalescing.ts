@@ -12,6 +12,12 @@ export interface QueueCoalescingContext {
 }
 
 export function enqueueTransaction(ctx: QueueCoalescingContext, transaction: QueuedMutation): void {
+  // Only the pending state may cross into the execution owner. A late timer,
+  // reconnect callback, or stale staging callback must not resurrect a row
+  // that is already executing or terminal, and repeated triggers must not put
+  // the same source mutation into the queue twice.
+  if (transaction.status !== 'pending') return;
+  if (ctx.executionQueue.some((candidate) => candidate.id === transaction.id)) return;
   ctx.ensureDerivedFields(transaction);
   const modelKey = `${transaction.modelName}:${transaction.modelId}`;
   if (transaction.type === 'update' && transaction.attempts === 0 && !transaction.commitEnvelope) {

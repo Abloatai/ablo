@@ -16,7 +16,7 @@ export function useErrorListener(listener: (error: Error) => void): void {
   const listenerRef = useRef(listener);
   listenerRef.current = listener;
   useEffect(
-    () => context.subscribeError((error) => listenerRef.current(error)),
+    () => context.subscribeError((error) => { listenerRef.current(error); }),
     [context],
   );
 }

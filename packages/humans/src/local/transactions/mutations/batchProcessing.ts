@@ -133,16 +133,31 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
           if (batchOps.length > 0) {
             let dispatchStarted = false;
             try {
-              const durableEnvelope = await ctx.sealDurableCommit({
-                idempotencyKey: commitIdempotencyKey,
-                origin: 'model_batch',
-                operations: batchOps.map(({ op }) => op),
-                sourceMutationIds: ctx.sourceMutationIdsFor(batch),
-                commitOptions: { reads: collectQueuedReads(batch) },
-                createdAt: Math.min(...batch.map((transaction) => transaction.createdAt)),
-                sealedAt: batch[0]?.commitEnvelope?.sealedAt ?? Date.now(),
-                sequence: batch[0]?.commitEnvelope?.sequence,
-              });
+              let durableEnvelope = batch[0]?.durableEnvelope;
+              if (durableEnvelope) {
+                const mismatched = batch.some(
+                  (transaction) =>
+                    transaction.durableEnvelope?.idempotencyKey !==
+                    durableEnvelope?.idempotencyKey,
+                );
+                if (mismatched || durableEnvelope.idempotencyKey !== commitIdempotencyKey) {
+                  throw new Error('Cannot replay a model batch with inconsistent durable envelopes');
+                }
+              } else {
+                durableEnvelope = await ctx.sealDurableCommit({
+                  idempotencyKey: commitIdempotencyKey,
+                  origin: 'model_batch',
+                  operations: batchOps.map(({ op }) => op),
+                  sourceMutationIds: ctx.sourceMutationIdsFor(batch),
+                  commitOptions: { reads: collectQueuedReads(batch) },
+                  createdAt: Math.min(...batch.map((transaction) => transaction.createdAt)),
+                  sealedAt: batch[0]?.commitEnvelope?.sealedAt ?? Date.now(),
+                  sequence: batch[0]?.commitEnvelope?.sequence,
+                });
+                for (const transaction of batch) {
+                  transaction.durableEnvelope = durableEnvelope;
+                }
+              }
               const operations = durableEnvelope.operations;
 
               // Capture lastSyncId from the server response for threshold-based

@@ -1,5 +1,19 @@
 # @abloatai/cli
 
+## 0.61.0
+
+### Minor Changes
+
+- Make `ablo connect apply` reconcile an existing direct database registration in
+  place. Healthy scoped credentials are preserved, historical RLS/publication
+  drift triggers the required fresh snapshot, interrupted runs resume at their
+  durable step, and `--json` exposes stable lifecycle and step codes.
+
+### Patch Changes
+
+- @abloatai/transaction@0.61.0
+- @abloatai/humans@0.61.0
+
 ## 0.60.0
 
 ## 0.59.2

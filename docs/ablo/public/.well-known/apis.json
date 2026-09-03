@@ -1,7 +1,7 @@
 {
   "specificationVersion": "0.21",
   "name": "Ablo",
-  "description": "Collaboration infrastructure for AI agents: one API for agents, apps, and services to claim, change, and confirm the same rows.",
+  "description": "Coordination infrastructure for agents, applications, services, and people working on shared state",
   "url": "https://docs.abloatai.com/.well-known/apis.json",
   "created": "2026/08/19",
   "tags": [

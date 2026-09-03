@@ -14,7 +14,10 @@ import type { RuntimeContext } from '../../RuntimeContext.js';
 import { MutationOperationType } from '@abloatai/transaction/types';
 import { snapshotJsonValue } from '@abloatai/transaction/utils/json';
 import type { MutationOptions, WriteOptions } from '../../interfaces/index.js';
-import type { CommitEnvelopeMember } from '@abloatai/transaction/commit';
+import type {
+  CommitEnvelopeMember,
+  DurableCommitEnvelope,
+} from '@abloatai/transaction/commit';
 
 export interface UserContext {
   userId: string;
@@ -123,6 +126,13 @@ export interface QueuedMutation {
    * re-batching its operations under a fresh key.
    */
   commitEnvelope?: CommitEnvelopeMember;
+  /**
+   * The exact durable request produced by the first successful local seal.
+   * Runtime retries dispatch this object directly. Asking the outbox to seal
+   * again is both unnecessary and unsafe after a concurrent authoritative
+   * completion has begun cleaning up the stored envelope.
+   */
+  durableEnvelope?: DurableCommitEnvelope;
   /** Pending-mutation journal entries atomically consumed by this envelope. */
   sourceMutationIds?: string[];
   /** Completed locally without a server operation; no sync echo will arrive. */

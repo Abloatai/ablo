@@ -54,7 +54,7 @@ export function contextOnChange(
   // already advanced this exact row in the pool.
   for (const read of rowReads) {
     const resident = pool.peek(read.id);
-    if (!resident || resident.getModelName().toLowerCase() !== read.model.toLowerCase()) {
+    if (resident?.getModelName().toLowerCase() !== read.model.toLowerCase()) {
       continue;
     }
     const observed = pool.watermarks.of(resident);

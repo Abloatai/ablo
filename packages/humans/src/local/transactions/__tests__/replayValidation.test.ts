@@ -267,7 +267,7 @@ describe('SyncClient.restoreMutationQueue (via initialize)', () => {
     });
     const client = new SyncClient(pool, database);
 
-    client.add(createItemFixture({ title: 'queued before auth' }));
+    void client.add(createItemFixture({ title: 'queued before auth' }));
     await Promise.resolve();
     await Promise.resolve();
     expect(saved).toEqual([]);

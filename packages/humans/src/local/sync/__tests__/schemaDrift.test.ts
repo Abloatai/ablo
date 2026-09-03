@@ -34,12 +34,17 @@ describe('classifySchemaDrift', () => {
       [{ key: 'entries', hash: 'active', fields: { title: { type: 'string', isOptional: false }, status: { type: 'string', isOptional: true } } }],
       { entries: { title: { type: 'string', isOptional: true }, localOnly: { type: 'number', isOptional: false } } },
     );
-    expect(finding).toEqual(expect.objectContaining({ kind: 'changed', fields: expect.arrayContaining([
-      expect.objectContaining({ model: 'entries', field: 'title', direction: 'changed' }),
-      expect.objectContaining({ model: 'entries', field: 'status', direction: 'active_only' }),
-      expect.objectContaining({ model: 'entries', field: 'localOnly', direction: 'client_only' }),
-    ]) }));
-    if (finding.kind === 'changed') expect(describeSchemaDrift(finding, 'production')).toContain('entries.title');
+    expect(finding.kind).toBe('changed');
+    if (finding.kind === 'changed') {
+      expect((finding.fields ?? []).map(({ model, field, direction }) => ({ model, field, direction }))).toEqual(
+        expect.arrayContaining([
+          { model: 'entries', field: 'title', direction: 'changed' },
+          { model: 'entries', field: 'status', direction: 'active_only' },
+          { model: 'entries', field: 'localOnly', direction: 'client_only' },
+        ]),
+      );
+      expect(describeSchemaDrift(finding, 'production')).toContain('entries.title');
+    }
   });
 
   it('unknown when the server surface carries no per-model hashes (older server)', () => {

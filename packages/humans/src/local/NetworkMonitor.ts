@@ -14,6 +14,8 @@ export class NetworkMonitor extends EventEmitter {
   // Only `navigator.onLine === false` means offline. Node 18+ exposes a global
   // `navigator` with `onLine === undefined`, so the naive `navigator.onLine`
   // would seed `false` (offline) on every server client — start optimistic.
+  // DOM types say `onLine` is boolean, but Node exposes it as undefined.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare
   private isOnline = !(typeof navigator !== 'undefined' && navigator.onLine === false);
   private lastOnlineCheck: Date = new Date();
 

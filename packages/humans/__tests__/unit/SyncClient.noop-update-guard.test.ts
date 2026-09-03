@@ -69,7 +69,7 @@ describe('SyncClient no-op UPDATE guard', () => {
     layer.clearChanges(); // empty dirty-set: hasChanges === false
     expect(layer.hasChanges).toBe(false);
 
-    client.update(layer);
+    void client.update(layer);
 
     expect(pendingCount(client)).toBe(0);
   });
@@ -81,7 +81,7 @@ describe('SyncClient no-op UPDATE guard', () => {
     layer.propertyChanged('content', 'old', 'new');
     expect(layer.hasChanges).toBe(true);
 
-    client.update(layer);
+    void client.update(layer);
 
     expect(pendingCount(client)).toBe(1);
   });
@@ -90,7 +90,7 @@ describe('SyncClient no-op UPDATE guard', () => {
     const layer = createEntryLayerFixture({ id: 'layer-noop-guarded', entryId: 'entry-1' });
     layer.clearChanges();
 
-    client.update(layer, undefined, { content: 'same-value-requested-by-caller' });
+    void client.update(layer, undefined, { content: 'same-value-requested-by-caller' });
 
     expect(pendingCount(client)).toBe(1);
   });
@@ -105,7 +105,7 @@ describe('SyncClient no-op UPDATE guard', () => {
       getChanges: () => ({ content: 'x' }),
     } as unknown as Parameters<typeof client.update>[0];
 
-    client.update(plain);
+    void client.update(plain);
 
     expect(pendingCount(client)).toBe(1);
   });

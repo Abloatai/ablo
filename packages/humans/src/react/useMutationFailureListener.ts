@@ -29,6 +29,6 @@ export function useMutationFailureListener(
   useEffect(() => {
     const engine = context.engine;
     if (!engine) return;
-    return engine.onMutationFailure((payload) => listenerRef.current(payload));
+    return engine.onMutationFailure((payload) => { listenerRef.current(payload); });
   }, [context, context.engine]);
 }

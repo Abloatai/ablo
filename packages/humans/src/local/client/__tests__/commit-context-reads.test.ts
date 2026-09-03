@@ -161,8 +161,17 @@ describe('reactive/WebSocket atomic commit context reads', () => {
         wait: 'queued',
       });
 
-      const frames = sockets.flatMap((socket) => socket.sent.map((raw) => JSON.parse(raw)));
-      const commit = frames.find((frame) => frame.type === 'commit');
+      const frames: unknown[] = sockets.flatMap((socket) =>
+        socket.sent.map((raw) => JSON.parse(raw) as unknown),
+      );
+      const commit = frames.find(
+        (frame): frame is { type: 'commit'; payload: unknown } =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          'type' in frame &&
+          frame.type === 'commit' &&
+          'payload' in frame,
+      );
       expect(commit?.payload).toMatchObject({
         clientTxId: 'ws-atomic-context-reads',
         reads: [{ model: 'notes', id: 'note-2', readAt: 61 }],

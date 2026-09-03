@@ -31,6 +31,7 @@ import type { BootstrapReason } from '../../wire/bootstrapReason.js';
 import type { ClientSyncDelta } from '../../observation/contract.js';
 import type {
   ClaimAcquired,
+  ClaimAbandonAckPayload,
   PresenceUpdate,
   ClaimGranted,
   ClaimHeartbeatAckPayload,
@@ -228,6 +229,7 @@ export interface CoreSyncEventMap {
    */
   claim_queue: [ClaimQueue];
   claim_acquired: [ClaimAcquired];
+  claim_abandon_ack: [ClaimAbandonAckPayload];
   claim_queued: [ClaimQueued];
   claim_granted: [ClaimGranted];
   claim_lost: [ClaimLost];

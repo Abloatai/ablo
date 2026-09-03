@@ -44,6 +44,16 @@ export async function handleFailure(
   transaction: QueuedMutation,
   error: Error,
 ): Promise<void> {
+  // The dispatch owner may lose its acknowledgement while an authoritative
+  // delta concurrently completes the same transaction. Completion is
+  // terminal: a late catch path must not turn that row back into `pending`
+  // and schedule a second seal after its durable sources were cleaned up.
+  if (
+    transaction.status === 'completed' ||
+    transaction.status === 'failed' ||
+    transaction.status === 'rolled_back' ||
+    transaction.status === 'awaiting_delta'
+  ) return;
   transaction.attempts++;
 
   // Check whether this is a permanent error that should not be retried.

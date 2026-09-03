@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/humans",
-  "version": "0.60.0",
+  "version": "0.61.0",
   "description": "The optional human-facing local-state package for Ablo: presence, live queries, and React bindings.",
   "license": "Apache-2.0",
   "type": "module",
@@ -75,7 +75,7 @@
     "test:property": "jest --testPathPatterns=__tests__/property",
     "test:migrated-integration": "jest --testPathPatterns=__tests__/integration",
     "test:e2e": "E2E_TEST=true jest --config jest.e2e.config.ts",
-    "lint:eslint": "eslint . --cache",
+    "lint:eslint": "eslint . --cache --suppressions-location eslint-suppressions.json",
     "check:boundary": "node scripts/check-boundary.mjs",
     "test:integration": "npm run build && node scripts/check-package-integration.mjs",
     "lint:pkg": "publint"
@@ -91,7 +91,7 @@
     "directory": "packages/humans"
   },
   "dependencies": {
-    "@abloatai/transaction": "^0.60.0",
+    "@abloatai/transaction": "^0.61.0",
     "mobx": "^6.13.7",
     "uuid": "^11.1.0",
     "zod": "^4.4.3"
@@ -121,7 +121,6 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "ts-jest": "^29.4.5",
-    "ts-node": "^10.9.2",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "ws": "^8.18.3"
   }

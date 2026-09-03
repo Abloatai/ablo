@@ -173,7 +173,9 @@ export function deduplicateDeltas(deltas: SyncDelta[]): SyncDelta[] {
 
   let strictlyOrdered = true;
   for (let index = 1; index < deltas.length; index += 1) {
-    if (deltas[index - 1]!.id >= deltas[index]!.id) {
+    const previous = deltas[index - 1];
+    const current = deltas[index];
+    if (!previous || !current || previous.id >= current.id) {
       strictlyOrdered = false;
       break;
     }
@@ -400,10 +402,12 @@ export function sliceApplyChanges<T extends { readonly transactionId?: string }>
   while (index < changes.length) {
     // The indivisible unit starting here: one transaction's run, or a single
     // untransacted change.
-    const transactionId = changes[index]!.transactionId;
+    const change = changes[index];
+    if (!change) break;
+    const transactionId = change.transactionId;
     let end = index + 1;
     if (transactionId !== undefined) {
-      while (end < changes.length && changes[end]!.transactionId === transactionId) end += 1;
+      while (changes[end]?.transactionId === transactionId) end += 1;
     }
     const groupSize = end - index;
     if (current.length > 0 && current.length + groupSize > maxDeltas) {
@@ -459,9 +463,10 @@ async function flushDeltaBatchInner(
   if (customDeltas.length > 0) {
     runInAction(() => {
       for (const delta of customDeltas) {
+        if (delta.data === null) continue;
         const data = typeof delta.data === 'string'
           ? (JSON.parse(delta.data) as Record<string, unknown>)
-          : (delta.data!);
+          : delta.data;
 
         // 'C' (Covering) is treated identically to 'I' here — the client
         // gained permission to see the entity, so we insert it into the
@@ -529,7 +534,7 @@ async function flushDeltaBatchInner(
     // slice. Slices stay the atomicity unit; the budget only decides where
     // the loop breathes.
     let sliceStartedAt = performance.now();
-    for (let index = 0; index < slices.length; index++) {
+    for (const [index, slice] of slices.entries()) {
       if (index > 0 && performance.now() - sliceStartedAt > APPLY_YIELD_BUDGET_MS) {
         pipelineDebug.phase = `apply-yield-${index}`;
         pipelineDebug.applyYields += 1;
@@ -538,7 +543,6 @@ async function flushDeltaBatchInner(
       }
       pipelineDebug.phase = `apply-slice-${index}`;
       pipelineDebug.applySlices += 1;
-      const slice = slices[index]!;
       if (hasApplyPlugins) {
         runStage(stagePlugins, 'apply', { changes: slice });
       } else {

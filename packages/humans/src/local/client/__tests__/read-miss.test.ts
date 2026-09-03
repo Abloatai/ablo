@@ -33,8 +33,10 @@ function client(handler: Handler) {
     apiKey: 'sk_test_unit',
     baseURL: 'https://api.test',
     transport: 'http',
-    fetch: async (url: string | URL | Request, init?: RequestInit) =>
-      handler(typeof url === 'string' ? url : url.toString(), (init?.method ?? 'GET').toUpperCase()),
+    fetch: (url: string | URL | Request, init?: RequestInit) => {
+      const href = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      return Promise.resolve(handler(href, (init?.method ?? 'GET').toUpperCase()));
+    },
     dangerouslyAllowBrowser: true,
   });
 }

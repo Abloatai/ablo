@@ -28,6 +28,7 @@ import { commitReceiptSchema } from '../commit/contract.js';
 import { clientSyncDeltaSchema } from '../observation/contract.js';
 import {
   claimAcquiredSchema,
+  claimAbandonAckPayloadSchema,
   claimGrantedSchema,
   claimHeartbeatAckPayloadSchema,
   claimLostSchema,
@@ -123,6 +124,10 @@ export const WS_INBOUND_FRAMES = {
   presence_update: { validation: 'schema', payload: presenceUpdateSchema },
   claim_rejected: { validation: 'schema', payload: claimRejectionSchema },
   claim_acquired: { validation: 'schema', payload: claimAcquiredSchema },
+  claim_abandon_ack: {
+    validation: 'schema',
+    payload: claimAbandonAckPayloadSchema,
+  },
   claim_queued: { validation: 'schema', payload: claimQueuedSchema },
   claim_granted: { validation: 'schema', payload: claimGrantedSchema },
   claim_lost: { validation: 'schema', payload: claimLostSchema },

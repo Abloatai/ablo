@@ -641,6 +641,8 @@ export async function registerDirectDataSource(opts: {
   readonly schema?: string;
   readonly replicationSlot?: string;
   readonly publication?: string;
+  /** Suppress success prose when the caller owns machine-readable stdout. */
+  readonly quiet?: boolean;
 }): Promise<boolean> {
   const result = await tryControlPlane({
     path: '/v1/datasources',
@@ -662,12 +664,14 @@ export async function registerDirectDataSource(opts: {
   if (result.ok) {
     const body = result.value;
     const statusNote = body.status === 'active' ? `${opts.route}, active` : opts.route;
-    console.log(
-      `\n  ${pc.green('✓')} Registered${body.host ? ` ${pc.dim(body.host)}` : ''}${body.id ? ` ${pc.dim(`(${body.id})`)}` : ''} as a direct DataSource (${statusNote}).\n` +
-        `  Your database is connected. Reads follow its replication stream; writes go through Ablo\n` +
-        `  and land in your own tables. Rows that already exist load automatically — no manual\n` +
-        `  backfill or row updates. Check their progress with ${pc.cyan('ablo connect check')}.\n`
-    );
+    if (!opts.quiet) {
+      console.log(
+        `\n  ${pc.green('✓')} Registered${body.host ? ` ${pc.dim(body.host)}` : ''}${body.id ? ` ${pc.dim(`(${body.id})`)}` : ''} as a direct DataSource (${statusNote}).\n` +
+          `  Your database is connected. Reads follow its replication stream; writes go through Ablo\n` +
+          `  and land in your own tables. Rows that already exist load automatically — no manual\n` +
+          `  backfill or row updates. Check their progress with ${pc.cyan('ablo connect check')}.\n`
+      );
+    }
     return true;
   }
 

@@ -158,10 +158,10 @@ export function dispatchCommitBounded(
   const timeoutMs = ctx.config.commitDispatchTimeoutMs;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return dispatched;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new AbloConnectionError(
+    const timer = setTimeout(() => { reject(new AbloConnectionError(
       'The mutation transport did not acknowledge the commit in time; its outcome remains pending and is safe to retry.',
       { code: 'commit_no_result' },
-    )), timeoutMs);
+    )); }, timeoutMs);
     dispatched.then(
       (value) => { clearTimeout(timer); resolve(value); },
       (error) => { clearTimeout(timer); reject(error instanceof Error ? error : new Error(String(error))); },

@@ -49,6 +49,10 @@ import { requestControlPlane } from './controlPlane';
 import { usageFor } from './commands';
 import { resolveRuntimeApiKey } from './config';
 
+function writeStderr(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 /**
  * The lease is a runtime operation, so it travels on the runtime credential
  * rather than the management key the workspace verbs use.
@@ -56,7 +60,7 @@ import { resolveRuntimeApiKey } from './config';
 function requireRuntimeKey(): string {
   const { key } = resolveRuntimeApiKey();
   if (!key) {
-    console.error(
+    writeStderr(
       pc.red('  No runtime credential.') +
         pc.dim(
           ` Run ${pc.bold('npx ablo login')}, or set ${pc.bold('ABLO_API_KEY')} to a runtime key.`,
@@ -222,10 +226,10 @@ async function holdWhile(
 ): Promise<number> {
   const granted = await acquireClaim(model, id, flags, apiKey);
   if (granted.status === 'queued') {
-    if (!flags.json) console.error(describeAcquired(model, id, granted));
+    if (!flags.json) writeStderr(describeAcquired(model, id, granted));
     await waitForGrant(granted.id, flags.ttl, apiKey);
   }
-  if (!flags.json) console.error(`  ${pc.green('✓')} Holding ${pc.bold(`${model} ${id}`)}.`);
+  if (!flags.json) writeStderr(`  ${pc.green('✓')} Holding ${pc.bold(`${model} ${id}`)}.`);
 
   const everyMs = Math.max(1_000, Math.floor(claimTtlMs(flags.ttl) / 3));
   const timer = setInterval(() => {
@@ -275,7 +279,7 @@ async function holdWhile(
   });
 
   await giveBack();
-  if (!flags.json) console.error(`  ${pc.dim('·')} ${pc.dim(`Released ${model} ${id}.`)}`);
+  if (!flags.json) writeStderr(`  ${pc.dim('·')} ${pc.dim(`Released ${model} ${id}.`)}`);
   return code;
 }
 
@@ -341,7 +345,7 @@ export async function claims(argv: readonly string[] = []): Promise<void> {
 
   const [model, id] = rest;
   if (model === undefined || id === undefined) {
-    console.error(`  ${pc.red('✗')} Name the row: ${pc.bold(`ablo claims ${verb} <model> <id>`)}.`);
+    writeStderr(`  ${pc.red('✗')} Name the row: ${pc.bold(`ablo claims ${verb} <model> <id>`)}.`);
     process.exitCode = 1;
     return;
   }
@@ -372,7 +376,8 @@ export async function claims(argv: readonly string[] = []): Promise<void> {
     return;
   }
 
-  console.error(`  ${pc.red('✗')} Unknown: ${pc.bold(`ablo claims ${verb}`)}.`);
-  console.error(usageFor('claims'));
+  writeStderr(`  ${pc.red('✗')} Unknown: ${pc.bold(`ablo claims ${verb}`)}.`);
+  const usage = usageFor('claims');
+  if (usage) writeStderr(usage);
   process.exitCode = 1;
 }

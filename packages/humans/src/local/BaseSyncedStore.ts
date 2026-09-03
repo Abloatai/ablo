@@ -1759,9 +1759,9 @@ export class BaseSyncedStore<
     const isCreate = !this.objectPool.get(model.id);
     if (isCreate) {
       model.updatedAt = new Date();
-      this.syncClient.add(model);
+      await this.syncClient.add(model);
     } else {
-      this.syncClient.update(model);
+      await this.syncClient.update(model);
     }
   }
 
@@ -1779,21 +1779,21 @@ export class BaseSyncedStore<
     const model = rowAsModel(entity);
     this.pendingDeletes.add(model.id);
     // SyncClient.delete handles: pool remove, transaction queue
-    this.syncClient.delete(model);
+    await this.syncClient.delete(model);
   }
 
   /** Archive a model. Accepts schema-inferred entity shapes (see `save`). */
   async archive<T extends { id: string; archivedAt?: Date | null }>(entity: T): Promise<void> {
     const model = rowAsModel(entity);
     model.archivedAt = new Date();
-    this.syncClient.archive(model);
+    await this.syncClient.archive(model);
   }
 
   /** Unarchive a model. Accepts schema-inferred entity shapes (see `save`). */
   async unarchive<T extends { id: string; archivedAt?: Date | null }>(entity: T): Promise<void> {
     const model = rowAsModel(entity);
     model.archivedAt = null;
-    this.syncClient.update(model);
+    await this.syncClient.update(model);
   }
 
 

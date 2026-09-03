@@ -1,8 +1,12 @@
 # @abloatai/transaction
 
+## 0.61.0
+
 ## 0.60.0
 
 ### Minor Changes
+
+- Preserve typed claim conflict context across error serialization and HTTP/WebSocket reconstruction. Claim errors now expose display-safe counterparty kind, description, expiry, and target separately from the opaque participant id. WebSocket claims no longer gain an implicit timeout when `timeoutMs` is omitted, and cancellation/release waits for correlated server cleanup confirmation.
 
 - Use the dedicated `Sessions({ schema, apiKey })` issuer from `@abloatai/ablo/sessions` as the single agent and browser-session issuance API. `Ablo({ schema })` now owns only participant data and coordination, so a schema model named `sessions` remains available as `ablo.sessions`. This deliberately removes the old `Ablo.sessions`, `AbloClient.sessions`, `AbloHttpClient.sessions`, `AbloWebSocketClient.sessions`, `HttpTransport.sessions`, and session-only `HttpTransportOptions.modelTypenames` control surface rather than retaining a compatibility facade. Remove the duplicate `agents.create()` managed-client convenience and `CreateAgentClientParams`; agent runtimes now construct a client explicitly from the returned session or an async session provider. API-key clients default to HTTP and session clients default to one reconnecting WebSocket; bounded session work may explicitly select HTTP. Renewable sessions pre-mint before expiry, survive socket replacement, resume observation from the durable cursor, and distinguish recoverable credential expiry from terminal static-session expiry. Session contract, issuer, handler, source normalization, and renewal now live beneath one `sessions` boundary; transports consume one normalized access object instead of reconstructing provider policy. Ambiguous in-flight commits still reject and can be retried with their original idempotency key. Browser routes use `session: { endpoint }`, and WebSocket subscription scope uses public `groups`; `authEndpoint` and public `syncGroups` are removed. Remove the overlapping `join`/`useJoin` participant lifecycle: connection groups define visibility, `usePeers` reads presence through `GroupScope`, and `claim` owns exclusion. This deliberately removes the join-only `ClaimExpired`, `ParticipantClaimPayload`, `ParticipantReleasePayload`, `PendingClaim`, `claimExpiredSchema`, `participantClaimPayloadSchema`, `participantReleasePayloadSchema`, `claim_expired`, `claim_ack`, `pendingClaims`, and related frame-handler surface; connection groups and row claims replace those concepts rather than aliasing them.
 

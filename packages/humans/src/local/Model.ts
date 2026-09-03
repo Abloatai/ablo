@@ -416,7 +416,7 @@ export abstract class Model {
     const original = this.getOriginalSnapshot();
     for (const key of keys) {
       if (key === 'id') continue;
-      const mod = modified?.get(key);
+      const mod = modified.get(key);
       if (mod) {
         out[key] = mod.old;
       } else if (original && key in original) {
@@ -463,25 +463,23 @@ export abstract class Model {
     const modelName = this.getModelName();
     const properties = getActiveRegistry().getProperties(modelName);
 
-    if (properties) {
-      const json = this.toJSON();
-      for (const [propName, metadata] of properties) {
-        // Check required fields
-        if (!metadata.nullable && !metadata.optional) {
-          const value = json[propName];
-          if (value == null || value === '') {
-            errors.push(`${propName} is required`);
-          }
+    const json = this.toJSON();
+    for (const [propName, metadata] of properties) {
+      // Check required fields
+      if (!metadata.nullable && !metadata.optional) {
+        const value = json[propName];
+        if (value == null || value === '') {
+          errors.push(`${propName} is required`);
         }
+      }
 
-        // Run custom validation rules
-        const rules = this.validationRules[propName];
-        if (rules) {
-          const value = json[propName];
-          for (const rule of rules) {
-            const error = rule(value);
-            if (error) errors.push(error);
-          }
+      // Run custom validation rules
+      const rules = this.validationRules[propName];
+      if (rules) {
+        const value = json[propName];
+        for (const rule of rules) {
+          const error = rule(value);
+          if (error) errors.push(error);
         }
       }
     }
@@ -816,18 +814,16 @@ export abstract class Model {
       result.archivedAt = this.archivedAt?.toISOString() ?? null;
     }
 
-    if (properties) {
-      const self = this as Record<string, unknown>;
-      for (const [propName, metadata] of properties) {
-        // Skip certain types
-        if (metadata.type === 'ephemeralProperty') continue;
-        if (metadata.type === 'referenceModel') continue;
-        if (metadata.type === 'referenceCollection') continue;
+    const self = this as Record<string, unknown>;
+    for (const [propName, metadata] of properties) {
+      // Skip certain types
+      if (metadata.type === 'ephemeralProperty') continue;
+      if (metadata.type === 'referenceModel') continue;
+      if (metadata.type === 'referenceCollection') continue;
 
-        const value = self[propName];
-        if (value !== undefined) {
-          result[propName] = value;
-        }
+      const value = self[propName];
+      if (value !== undefined) {
+        result[propName] = value;
       }
     }
 
@@ -946,14 +942,12 @@ export abstract class Model {
       const modelName = this.getModelName();
       const properties = getActiveRegistry().getProperties(modelName);
 
-      if (properties) {
-        const self = this as Record<string, unknown>;
-        for (const [propName, metadata] of properties) {
-          if (metadata.type === 'referenceCollection') {
-            const collection = self[propName] as Disposable | undefined;
-            if (collection?.dispose) {
-              collection.dispose();
-            }
+      const self = this as Record<string, unknown>;
+      for (const [propName, metadata] of properties) {
+        if (metadata.type === 'referenceCollection') {
+          const collection = self[propName] as Disposable | undefined;
+          if (collection) {
+            collection.dispose();
           }
         }
       }
@@ -983,11 +977,9 @@ export abstract class Model {
     const modelName = this.getModelName();
     const properties = getActiveRegistry().getProperties(modelName);
 
-    if (properties) {
-      const json = this.toJSON();
-      for (const [propName] of properties) {
-        snapshot[propName] = json[propName];
-      }
+    const json = this.toJSON();
+    for (const [propName] of properties) {
+      snapshot[propName] = json[propName];
     }
 
     return snapshot;
@@ -1034,19 +1026,17 @@ export abstract class Model {
 
     const properties = getActiveRegistry().getProperties(this.getModelName());
     const self = this as Record<string, unknown>;
-    if (properties) {
-      for (const [propName, metadata] of properties) {
-        if (
-          metadata.type === 'ephemeralProperty' ||
-          metadata.type === 'referenceModel' ||
-          metadata.type === 'referenceCollection'
-        ) {
-          continue;
-        }
-        // Reading through the observable getter is the point: it subscribes the
-        // enclosing MobX reaction to this field.
-        snapshot[propName] = self[propName];
+    for (const [propName, metadata] of properties) {
+      if (
+        metadata.type === 'ephemeralProperty' ||
+        metadata.type === 'referenceModel' ||
+        metadata.type === 'referenceCollection'
+      ) {
+        continue;
       }
+      // Reading through the observable getter is the point: it subscribes the
+      // enclosing MobX reaction to this field.
+      snapshot[propName] = self[propName];
     }
 
     for (const name of this.getDerivedGetterNames()) {

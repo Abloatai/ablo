@@ -2,9 +2,9 @@ import {
   AbloClaimedError,
   AbloConnectionError,
   AbloSessionError,
-  errorFromWire,
   isAccessCredentialExpiryCloseReason,
 } from '../../errors.js';
+import { claimAdmissionError } from '../../claims/admission.js';
 import { classifyCredentialKind } from '../../auth/credentialKind.js';
 import {
   credentialToken,
@@ -38,6 +38,10 @@ interface StoredPosition {
 }
 
 const MAX_BUFFERED_OBSERVATION_DELTAS = 1_024;
+const ignoreObservedAcknowledgeFailure = (): undefined => undefined;
+// Preserve the originating claim wait error when best-effort queue cleanup
+// fails for the same disconnected transport.
+const ignoreBestEffortClaimReleaseFailure = (): undefined => undefined;
 
 function parsePosition(value: string | null): StoredPosition {
   if (!value) return { lastSyncId: 0, cursor: null };
@@ -206,7 +210,15 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
       return;
     }
     this.pendingSessionError = error;
-    void this.credentialLifecycle.recoverFromAuthRejection('access_credential_expiry');
+    void this.credentialLifecycle
+      .recoverFromAuthRejection('access_credential_expiry')
+      .catch((recoveryError: unknown) => {
+        this.failTerminal(
+          recoveryError instanceof Error
+            ? recoveryError
+            : new AbloConnectionError('The WebSocket credential recovery failed.'),
+        );
+      });
   }
 
   private failTerminal(error: Error): void {
@@ -284,13 +296,26 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
 
   async claim(input: WebSocketClaimInput) {
     await this.ready();
-    const timeoutMs = input.timeoutMs ?? 15_000;
     return new Promise<import('../../coordination/schema.js').ClaimAcquired | import('../../coordination/schema.js').ClaimGranted>((resolve, reject) => {
       const cleanups: (() => void)[] = [];
+      let finished = false;
       const finish = (outcome: () => void): void => {
-        clearTimeout(timeout);
+        if (finished) return;
+        finished = true;
+        if (timeout) clearTimeout(timeout);
         for (const cleanup of cleanups) cleanup();
         outcome();
+      };
+      const abandonAndReject = (error: Error): void => {
+        if (finished) return;
+        finished = true;
+        if (timeout) clearTimeout(timeout);
+        for (const cleanup of cleanups) cleanup();
+        void this.release({
+          claimId: input.claimId,
+          entityType: input.entityType,
+          entityId: input.entityId,
+        }).catch(ignoreBestEffortClaimReleaseFailure).then(() => reject(error));
       };
       const matches = (event: { claimId: string }): boolean => event.claimId === input.claimId;
       cleanups.push(this.socket.subscribe('claim_acquired', (event) => {
@@ -303,27 +328,12 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
         if (!matches(event)) return;
         const refusal = input.onQueued?.(event);
         if (refusal) {
-          this.release({
-            claimId: input.claimId,
-            entityType: input.entityType,
-            entityId: input.entityId,
-          });
-          finish(() => reject(refusal));
+          abandonAndReject(refusal);
         }
       }));
       cleanups.push(this.socket.subscribe('claim_rejected', (event) => {
         if (!matches(event)) return;
-        finish(() => reject(errorFromWire(
-          event.message ?? `Claim ${event.claimId} was rejected.`,
-          {
-            code: event.reason === 'conflict' ? 'claim_conflict' : 'claim_rejected',
-            details: {
-              ...(event.target ? { target: event.target } : {}),
-              ...(event.heldBy ? { heldBy: event.heldBy } : {}),
-              ...(event.heldByClaimId ? { heldByClaimId: event.heldByClaimId } : {}),
-            },
-          },
-        )));
+        finish(() => reject(claimAdmissionError(event)));
       }));
       cleanups.push(this.socket.subscribe('disconnected', () => {
         finish(() => reject(new AbloConnectionError(
@@ -331,29 +341,21 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
         )));
       }));
       const abort = (): void => {
-        this.release({
-          claimId: input.claimId,
-          entityType: input.entityType,
-          entityId: input.entityId,
-        });
-        finish(() => reject(new AbloClaimedError(
+        abandonAndReject(new AbloClaimedError(
           `The wait for claim ${input.claimId} was aborted.`,
           { code: 'claim_wait_aborted' },
-        )));
+        ));
       };
       input.signal?.addEventListener('abort', abort, { once: true });
       cleanups.push(() => input.signal?.removeEventListener('abort', abort));
-      const timeout = setTimeout(() => {
-        this.release({
-          claimId: input.claimId,
-          entityType: input.entityType,
-          entityId: input.entityId,
-        });
-        finish(() => reject(new AbloClaimedError(
-          `claim timed out after ${timeoutMs}ms (claimId=${input.claimId})`,
-          { code: 'grant_timeout' },
-        )));
-      }, timeoutMs);
+      const timeout = input.timeoutMs !== undefined
+        ? setTimeout(() => {
+            abandonAndReject(new AbloClaimedError(
+              `claim timed out after ${input.timeoutMs}ms (claimId=${input.claimId})`,
+              { code: 'grant_timeout' },
+            ));
+          }, input.timeoutMs)
+        : undefined;
       if (input.signal?.aborted) {
         abort();
         return;
@@ -368,8 +370,40 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     });
   }
 
-  release(input: { claimId: string; entityType?: string; entityId?: string }): void {
-    this.socket.send({ type: 'claim_abandon', payload: input });
+  async release(input: {
+    claimId: string;
+    entityType?: string;
+    entityId?: string;
+  }): Promise<void> {
+    await this.ready();
+    const requestId = crypto.randomUUID();
+    await new Promise<void>((resolve, reject) => {
+      const finish = (outcome: () => void): void => {
+        clearTimeout(timeout);
+        offAck();
+        offDisconnect();
+        outcome();
+      };
+      const offAck = this.socket.subscribe('claim_abandon_ack', (event) => {
+        if (event.requestId !== requestId || event.claimId !== input.claimId) return;
+        finish(resolve);
+      });
+      const offDisconnect = this.socket.subscribe('disconnected', () => {
+        finish(() => reject(new AbloConnectionError(
+          `WebSocket closed before claim ${input.claimId} release was confirmed.`,
+        )));
+      });
+      const timeout = setTimeout(() => {
+        finish(() => reject(new AbloConnectionError(
+          `Timed out waiting for claim ${input.claimId} release confirmation.`,
+          { code: 'claim_lease_unavailable' },
+        )));
+      }, 15_000);
+      this.socket.send({
+        type: 'claim_abandon',
+        payload: { ...input, requestId },
+      });
+    });
   }
 
   subscribe<K extends keyof SyncWebSocketEventMap<TEvents>>(
@@ -456,13 +490,13 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
   }
 
   async acknowledge(lastSyncId: number): Promise<void> {
-    const attempt = this.acknowledgeLane.catch(() => undefined).then(async () => {
+    const attempt = this.acknowledgeLane.catch(ignoreObservedAcknowledgeFailure).then(async () => {
       const position = this.socket.positionAfter(lastSyncId);
       await this.options.cursorStore?.save(this.cursorKey, JSON.stringify(position));
       this.socket.markDurable(position);
       this.socket.acknowledge(position.lastSyncId);
     });
-    this.acknowledgeLane = attempt.catch(() => undefined);
+    this.acknowledgeLane = attempt.catch(ignoreObservedAcknowledgeFailure);
     await attempt;
   }
 

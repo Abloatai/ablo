@@ -16,14 +16,10 @@
 import {
   AbloClaimedError,
   AbloError,
-  AbloValidationError,
-  CapabilityError,
-  formatClaimedErrorMessage,
-  claimTargetLabel,
 } from '../errors.js';
 import type { ClaimRejection } from '../coordination/schema.js';
-import { modelTarget } from './locator.js';
 import { noopLogger, type Logger } from '../logger.js';
+import { claimAdmissionError } from './admission.js';
 
 export interface GrantTransport {
   subscribe(
@@ -179,52 +175,7 @@ export function awaitClaimGrant(
       transport.subscribe('claim_rejected', (p) => {
         const rejection = p as ClaimRejection;
         if (rejection.claimId !== claimId) return;
-        const target = rejection.target
-          ? claimTargetLabel({
-              ...modelTarget(rejection.target),
-              field: rejection.target.field,
-            })
-          : claimId;
-        if (rejection.reason === 'capability_denied') {
-          settle(() => {
-            const error = new CapabilityError(
-              'capability_scope_denied',
-              rejection.message ??
-                `This credential may not claim ${target}.`,
-            );
-            observe(() => options?.onFailed?.(error));
-            reject(error);
-          });
-          return;
-        }
-        if (rejection.reason === 'invalid_target') {
-          settle(() => {
-            const error = new AbloValidationError(
-              rejection.message ?? `Invalid claim target ${target}.`,
-              { code: 'invalid_body' },
-            );
-            observe(() => options?.onFailed?.(error));
-            reject(error);
-          });
-          return;
-        }
-        fail(
-          new AbloClaimedError(
-            formatClaimedErrorMessage({
-              targetLabel: target,
-              heldBy: rejection.heldBy,
-              claim: rejection.heldByClaim,
-              detail: rejection.message,
-              fallback: `Claim rejected for ${target}.`,
-            }),
-            {
-              code: rejection.reason === 'conflict'
-                ? 'claim_conflict'
-                : 'claim_lease_unavailable',
-              claims: rejection.heldByClaim ? [rejection.heldByClaim] : undefined,
-            },
-          ),
-        );
+        fail(claimAdmissionError(rejection));
       }),
     );
     unsubs.push(
@@ -257,7 +208,7 @@ export function awaitClaimGrant(
       unsubs.push(() => { signal.removeEventListener('abort', abort); });
     }
 
-    if (options?.timeoutMs && options.timeoutMs > 0) {
+    if (options?.timeoutMs !== undefined) {
       timer = setTimeout(() => {
         fail(
           new AbloClaimedError(

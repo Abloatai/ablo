@@ -17,5 +17,16 @@ export type {
   ConflictEvent,
   CoordinationObserver,
 } from './events.js';
+export {
+  claimConflictCounterpartySchema,
+  claimConflictContextSchema,
+  normalizeClaimConflict,
+  conflictFromClaimRejection,
+} from './conflict.js';
+export type {
+  ClaimConflictCounterparty,
+  ClaimConflictContext,
+  ClaimConflictSource,
+} from './conflict.js';
 export * from './targetConflict.js';
 export * from './trace.js';

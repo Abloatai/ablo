@@ -55,6 +55,13 @@ import {
 import { generateRolePassword, rewriteDatabaseUrl, readProjectAdminDatabaseUrl } from './dbRole';
 import { ambientEnvKeyNote, resolveMutationApiKey, resolveManagementKey } from './config';
 import { fetchDataSourceState } from './readiness';
+import { requestRemoteValidation } from './remoteValidation';
+import {
+  absentConnectionStatus,
+  inspectRegisteredConnection,
+  requestInitialSnapshot,
+  type ConnectReconcileStatus,
+} from './connect/index';
 import { DEFAULT_SCHEMA_PATH } from './push';
 import { apiBaseUrl } from './controlPlane';
 import { brand } from './theme';
@@ -119,6 +126,24 @@ interface PgErrorLike {
   readonly message?: string;
 }
 
+function emitReconcileStatus(status: ConnectReconcileStatus, json: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(status));
+    return;
+  }
+  if (status.code === 'ready') {
+    console.log(
+      `  ${pc.green('✓')} Already ready — database, credentials, and snapshot are unchanged.\n`
+    );
+  } else if (status.code === 'loading') {
+    console.log(
+      `  ${pc.yellow('—')} Existing rows are loading; re-run the same command to poll readiness.\n`
+    );
+  } else {
+    console.log(`  ${pc.yellow('—')} ${status.code}\n`);
+  }
+}
+
 /** A statement that a managed provider refused because it wanted a plaintext password, not a verifier. */
 function isPlaintextRefusal(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
@@ -169,7 +194,8 @@ async function executePlan(
 /**
  * `ablo connect apply` (and `rotate`): create — or, for `rotate`, re-key —
  * the two scoped roles, the publication, and (where allowed) the logical-decoding
- * setting, then register both scoped connection strings with Ablo directly.
+ * setting, then either preserve and reconcile the existing registration or
+ * register both scoped connection strings with Ablo directly.
  *
  * The admin credential comes from `--url`, or `DATABASE_URL` as a fallback. It is
  * used on this machine only and is never persisted or sent anywhere. Nothing is
@@ -184,12 +210,6 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const verb = rotating ? 'connect rotate' : 'connect apply';
 
   let adminUrl = args.url ?? readProjectAdminDatabaseUrl();
-  if (!adminUrl) {
-    throw new AbloValidationError(
-      'No admin connection string. Pass --url <admin-conn> (or set DATABASE_URL) and re-run.',
-      { code: 'cli_database_url_missing' }
-    );
-  }
   // Show which database we resolved, and how — the admin credential is used once
   // here and then discarded, so the operator should see exactly what it points at
   // before confirming. (When it came from DATABASE_URL, that's job 1: a one-time
@@ -197,6 +217,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const adminSource = args.url ? '--url' : 'DATABASE_URL';
   let target = 'your database';
   try {
+    if (!adminUrl) throw new Error('not resolved yet');
     const parsed = new URL(adminUrl);
     target = `${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
   } catch {
@@ -225,12 +246,73 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     );
   }
 
-  console.log(
-    `\n  ${brand('ablo')} ${pc.dim(verb)}  ${pc.dim(rotating ? 're-key the scoped roles' : 'set up your database for Ablo')}\n`
-  );
-  console.log(
-    `  ${pc.dim('→')} ${pc.bold(target)}${adminSource === 'DATABASE_URL' ? pc.dim('  (admin via DATABASE_URL)') : ''}\n`
-  );
+  // An existing registration is not a reason to stop or rotate. Ask Ablo's
+  // own network first: a healthy registration is a true no-op, a snapshot
+  // interrupted after database repair resumes at the snapshot step, and only
+  // actual database drift needs the transient owner URL below.
+  const apiUrl = apiBaseUrl();
+  const planeState = await fetchDataSourceState(apiUrl, apiKey);
+  const existingRegistration =
+    !rotating &&
+    planeState.kind === 'connected' &&
+    planeState.connections.includes('direct');
+  let existingNeedsSnapshot = false;
+  if (existingRegistration) {
+    const inspected = inspectRegisteredConnection(
+      await requestRemoteValidation({ apiUrl, apiKey }),
+    );
+    if (inspected.code === 'ready') {
+      emitReconcileStatus(inspected, args.json);
+      return;
+    }
+    if (inspected.code === 'loading') {
+      emitReconcileStatus(inspected, args.json);
+      return;
+    }
+    if (!inspected.needsDatabaseReconcile && inspected.needsSnapshotRequest) {
+      const snapshot = await requestInitialSnapshot({ apiUrl, apiKey });
+      const resumed: ConnectReconcileStatus = {
+        ...inspected,
+        code:
+          snapshot.replication_slot?.released === false
+            ? 'operator_action_required'
+            : 'loading',
+        steps: {
+          ...inspected.steps,
+          snapshot: snapshot.replication_slot?.released === false ? 'action_required' : 'loading',
+          readiness: snapshot.replication_slot?.released === false ? 'action_required' : 'pending',
+        },
+        ...(snapshot.replication_slot?.released === false
+          ? { detail: snapshot.replication_slot.detail ?? 'replication_slot_active' }
+          : {}),
+      };
+      emitReconcileStatus(resumed, args.json);
+      return;
+    }
+    if (inspected.code === 'operator_action_required') {
+      throw new AbloConnectionError(
+        `The registered source needs operator action before it can be reconciled (${inspected.detail ?? 'not ready'}).`,
+        { code: 'cli_database_unreachable', details: { ...inspected } },
+      );
+    }
+    existingNeedsSnapshot = inspected.needsSnapshotRequest;
+  }
+
+  if (!adminUrl) {
+    throw new AbloValidationError(
+      'This connection needs database reconciliation. Pass the transient owner connection with --url <admin-conn> (or set DATABASE_URL) and re-run the same `ablo connect apply` operation.',
+      { code: 'cli_database_url_missing' }
+    );
+  }
+
+  if (!args.json) {
+    console.log(
+      `\n  ${brand('ablo')} ${pc.dim(verb)}  ${pc.dim(rotating ? 're-key the scoped roles' : 'set up your database for Ablo')}\n`
+    );
+    console.log(
+      `  ${pc.dim('→')} ${pc.bold(target)}${adminSource === 'DATABASE_URL' ? pc.dim('  (admin via DATABASE_URL)') : ''}\n`
+    );
+  }
 
   // Refuse a pooled host before provisioning rather than after. Roles created
   // through a pooler are real — it fronts the same database — but replication
@@ -258,7 +340,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
       } catch {
         /* keep the previous label if the derived URL doesn't parse */
       }
-      console.log(
+      if (!args.json) console.log(
         `  ${pc.yellow('!')} ${pc.bold(pooledLabel)} is a connection pooler, so this run uses the direct host:\n` +
           `    ${pc.bold(target)}\n` +
           pc.dim(
@@ -281,7 +363,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     }
   }
   if (pooledAdmin?.confidence === 'port') {
-    console.log(
+    if (!args.json) console.log(
       `  ${pc.yellow('!')} Port ${pc.bold(new URL(adminUrl).port)} is the one a connection pooler usually answers on.\n` +
         pc.dim(
           `    Replication cannot run over a pooler, so if that is what this is, point ${pc.bold('--url')}\n` +
@@ -315,7 +397,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   }).catch(() => null);
   const mismatch = connectTarget ? describeMismatches(connectTarget.mismatches) : null;
   if (mismatch) {
-    console.log(`  ${pc.yellow('!')} ${mismatch}\n`);
+    if (!args.json) console.log(`  ${pc.yellow('!')} ${mismatch}\n`);
   }
 
   const confirmed = connectTarget?.confirmed;
@@ -371,7 +453,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     );
   }
   if (args.tables.length === 0) {
-    console.log(
+    if (!args.json) console.log(
       pc.dim(
         `  publishing the ${tables.length} table${tables.length === 1 ? '' : 's'} declared by your Ablo schema in ${pc.bold(args.schema)} ` +
           `(${pc.bold('--tables')} to override)\n`
@@ -505,6 +587,13 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // here? `apply` creates roles and keeps an existing one's password, so it has
   // no new password to give Ablo for a role it finds. See reapplyBlocker.
   const existingRoles = await presentRoles(admin, [role, writeRole]).catch(() => []);
+  if (existingRegistration && existingRoles.length !== 2) {
+    await admin.end({ timeout: 2 });
+    throw new AbloValidationError(
+      `The registered source's scoped role pair is incomplete (${existingRoles.length}/2 present). Re-run with \`ablo connect rotate\` to repair credentials explicitly; no database changes were made.`,
+      { code: 'cli_invalid_arguments', details: { existingRoles: [...existingRoles] } },
+    );
+  }
   // Rotate's nothing-to-re-key arm, now that the database has answered: no
   // registration AND no roles means a first connect wearing the wrong verb;
   // roles without a registration is the stranded state, and rotate proceeds.
@@ -519,11 +608,15 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   }
   const blocker = reapplyBlocker({
     rotating,
-    existingRoles,
+    // A complete, registered pair keeps its current passwords: apply repairs
+    // only non-secret invariants and never re-registers it. A partial pair is
+    // still refused because it cannot be completed without credential repair.
+    existingRoles:
+      existingRegistration && existingRoles.length === 2 ? [] : existingRoles,
   });
   if (blocker) {
     await admin.end({ timeout: 2 });
-    console.log(
+    if (!args.json) console.log(
       `  ${pc.yellow('!')} ${blocker.roles.map((r) => pc.bold(r)).join(' and ')} ${blocker.plural ? 'are' : 'is'} already set up here.\n`
     );
     console.log(
@@ -575,17 +668,23 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // publication, surface the removals first — they stop replicating to Ablo, so the
   // operator sees the destructive part before confirming, not after.
   if (pubReconcile.removed.length > 0 || pubReconcile.recreated) {
-    console.log(
-      `  ${pc.yellow('!')} ${pc.bold(publication)} already publishes a different set; reconciling to your mapped tables:`
-    );
-    for (const t of pubReconcile.added) console.log(`      ${pc.green('+')} ${t}`);
-    for (const t of pubReconcile.removed)
-      console.log(`      ${pc.red('-')} ${t} ${pc.dim('(stops replicating to Ablo)')}`);
-    if (pubReconcile.recreated && existingPublication.allTables)
-      console.log(`      ${pc.red('-')} ${pc.dim('every other table (was FOR ALL TABLES)')}`);
-    console.log();
+    if (!args.json) {
+      console.log(
+        `  ${pc.yellow('!')} ${pc.bold(publication)} already publishes a different set; reconciling to your mapped tables:`
+      );
+      for (const t of pubReconcile.added) console.log(`      ${pc.green('+')} ${t}`);
+      for (const t of pubReconcile.removed) {
+        console.log(`      ${pc.red('-')} ${t} ${pc.dim('(stops replicating to Ablo)')}`);
+      }
+      if (pubReconcile.recreated && existingPublication.allTables) {
+        console.log(
+          `      ${pc.red('-')} ${pc.dim('every other table (was FOR ALL TABLES)')}`
+        );
+      }
+      console.log();
+    }
   }
-  printPlan(steps, args.showSql);
+  if (!args.json) printPlan(steps, args.showSql);
   if (!args.yes) {
     if (!process.stdout.isTTY) {
       await admin.end({ timeout: 2 });
@@ -637,10 +736,50 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   }
   await admin.end({ timeout: 2 });
 
+  if (existingRegistration) {
+    // The control plane already owns the working scoped credentials. Validate
+    // through those credentials after the database mutation; never construct
+    // or register the generated passwords, which intentionally were not
+    // applied to the existing roles.
+    const after = inspectRegisteredConnection(
+      await requestRemoteValidation({ apiUrl, apiKey }),
+    );
+    if (after.needsDatabaseReconcile || after.code === 'operator_action_required') {
+      throw new AbloConnectionError(
+        `Database reconciliation did not reach the snapshot boundary (${after.detail ?? after.repairItems.join(', ')}).`,
+        { code: 'cli_database_unreachable', details: { ...after } },
+      );
+    }
+    if (existingNeedsSnapshot || after.needsSnapshotRequest) {
+      const snapshot = await requestInitialSnapshot({ apiUrl, apiKey });
+      const reconciled: ConnectReconcileStatus = {
+        ...after,
+        code:
+          snapshot.replication_slot?.released === false
+            ? 'operator_action_required'
+            : 'loading',
+        steps: {
+          ...after.steps,
+          database: 'changed',
+          registration: 'unchanged',
+          snapshot: snapshot.replication_slot?.released === false ? 'action_required' : 'loading',
+          readiness: snapshot.replication_slot?.released === false ? 'action_required' : 'pending',
+        },
+        ...(snapshot.replication_slot?.released === false
+          ? { detail: snapshot.replication_slot.detail ?? 'replication_slot_active' }
+          : {}),
+      };
+      emitReconcileStatus(reconciled, args.json);
+      return;
+    }
+    emitReconcileStatus(after, args.json);
+    return;
+  }
+
   // 5. Build the scoped connection strings in memory — never written to disk.
   const replicationUrl = rewriteDatabaseUrl(adminUrl, role, replicationPassword);
   const writeUrl = rewriteDatabaseUrl(adminUrl, writeRole, writePassword);
-  console.log(`\n  ${pc.green('✓')} Roles ${rotating ? 're-keyed' : 'created'}.\n`);
+  if (!args.json) console.log(`\n  ${pc.green('✓')} Roles ${rotating ? 're-keyed' : 'created'}.\n`);
 
   // 6. If logical replication isn't on yet, registration would be refused, so the
   // roles are ready but the source is not. This is an INCOMPLETE setup — exit
@@ -709,7 +848,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     process.exit(1);
   }
   if (replicationProbe.items === null || writeProbe.items === null) {
-    console.log(pc.dim(`  Couldn't verify from here; Ablo will validate from its own network.\n`));
+    if (!args.json) console.log(pc.dim(`  Couldn't verify from here; Ablo will validate from its own network.\n`));
   }
 
   const items = [...(replicationProbe.items ?? []), ...(writeProbe.items ?? [])];
@@ -743,7 +882,6 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // 8. Hand both scoped roles to Ablo directly. Nothing is left in your .env.
   // Registration includes Ablo's server-side read-back, so a success return is
   // proof the new credential works — and on failure we never exit success.
-  const apiUrl = apiBaseUrl();
   const registered = await registerDirectDataSource({
     apiUrl,
     apiKey,
@@ -753,6 +891,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     schema: args.schema,
     replicationSlot: footprint.slot,
     publication,
+    quiet: args.json,
   });
   // The stranded-credential window is over: from here the outcome itself says
   // whether recovery is needed, so the interrupt handler must not speak again.
@@ -761,6 +900,22 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const outcome = postRegistrationOutcome({ rotating, registered });
   if (outcome.notice) {
     console.error(`\n  ${pc.red(outcome.notice.split('\n').join('\n  '))}\n`);
+  }
+  if (args.json && registered) {
+    const initial = absentConnectionStatus();
+    emitReconcileStatus(
+      {
+        ...initial,
+        code: 'loading',
+        steps: {
+          database: 'changed',
+          registration: 'changed',
+          snapshot: 'loading',
+          readiness: 'pending',
+        },
+      },
+      true
+    );
   }
   process.exit(outcome.exitCode);
 }

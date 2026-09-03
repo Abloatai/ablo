@@ -53,7 +53,6 @@ import {
   DEFAULT_CLAIM_TTL_MS,
   type ClaimHeartbeatReply,
   type ClaimListResponse,
-  type ClaimQueuedResponse,
   type ClaimRequest,
   type ClaimState,
   type ClaimTargetBody,
@@ -69,7 +68,7 @@ import {
   resolveHeartbeatPlan,
   startClaimHeartbeatLoop,
 } from '../../claims/heartbeat.js';
-import type { HttpClientConfig } from './options.js';
+import type { HttpTransport, HttpTransportOptions } from './contract.js';
 import type {
   ClaimedOptions,
   CommitCreateOptions,
@@ -90,7 +89,7 @@ import type {
 } from '../../client/resources/httpResources.js';
 import type { CredentialProviderResult } from '../../auth/credentialResult.js';
 import { credentialToken } from '../../auth/credentialResult.js';
-import { createSessionAccess, type SessionAccess } from '../../sessions/index.js';
+import { createSessionAccess } from '../../sessions/index.js';
 import { parseIdentityResolveResponse } from '../../auth/schemas.js';
 import type { EffectiveAuthority } from '../../auth/capability.js';
 
@@ -108,7 +107,6 @@ import type {
   ClaimReorderParams,
   ModelCreateManyParams,
   ServerReadOptions,
-  ResolvedClaimContentionOptions,
   ClaimQueueView,
 } from '../../client/resources/modelOperations.js';
 import {
@@ -119,12 +117,6 @@ import {
 } from '../../client/resources/modelOperations.js';
 import type { Duration } from '../../utils/duration.js';
 import { claimDescription, partName } from '../../coordination/schema.js';
-import type {
-  ClaimAcquired,
-  ClaimBeginPayload,
-  ClaimGranted,
-  ClaimQueued,
-} from '../../coordination/schema.js';
 import type { BatchFence } from '../../claims/locator.js';
 import {
   subTarget,
@@ -141,7 +133,6 @@ import type {
   HeldClaim,
   HeldLease,
 } from '../../types/streams.js';
-import type { CoordinationObservability } from '../../observability.js';
 import {
   assertWriteOptions,
   assertWriteTarget,
@@ -169,86 +160,14 @@ import {
   type ExactHttpCommitRequest,
 } from '../../commit/httpRequest.js';
 import { resolveDurableWrites } from '../../commit/durableWrites.js';
-import { createHttpReadOnChange, type HttpReadOnChange } from './subscription.js';
+import { createHttpReadOnChange } from './subscription.js';
+import { awaitClaimGrantOverHttp } from './claimWait.js';
 import type { CommitFrameOperation } from '../websocket/commitFrames.js';
-
-/** @internal Private options for the schema-agnostic HTTP protocol transport. */
-export type HttpTransportOptions = Omit<HttpClientConfig, 'schema'> & {
-  readonly bootstrapBaseUrl?: string | undefined;
-  /**
-   * The observability provider forwarded from `Ablo({ observability })`. The HTTP
-   * transport emits the same claim and conflict events as the WebSocket transport,
-   * so a `ClaimLog` works identically for headless server-agent evaluations.
-   */
-  readonly observability?: CoordinationObservability;
-  /**
-   * Per-request deadline in milliseconds for the stateless HTTP transport.
-   * Every request this client issues is aborted after this long and surfaces
-   * as a retryable connection error — without it a black-holed server hangs
-   * a headless agent forever (browsers never time fetch out on their own).
-   * Pass `0` to disable the deadline.
-   *
-   * @default 30_000
-   */
-  readonly timeoutMs?: number;
-  /** @internal Routes writes through the selected duplex transport. */
-  readonly dispatchCommit?: ((input: {
-    readonly clientTxId: string;
-    readonly operations: readonly CommitFrameOperation[];
-    readonly reads?: readonly import('../../coordination/schema.js').ReadDependency[] | null;
-  }) => Promise<CommitReceiptWire>) | undefined;
-  /** @internal Routes held-claim acquisition through the shared socket. */
-  readonly dispatchClaim?: ((input: ClaimBeginPayload & {
-    readonly timeoutMs?: number;
-    readonly signal?: AbortSignal;
-    readonly onQueued?: (event: ClaimQueued) => Error | undefined;
-  }) => Promise<ClaimAcquired | ClaimGranted>) | undefined;
-  /** @internal Releases a socket-acquired claim on that same session. */
-  readonly releaseDispatchedClaim?: ((input: {
-    readonly claimId: string;
-    readonly entityType: string;
-    readonly entityId: string;
-  }) => void) | undefined;
-};
 
 /** @internal Default per-request deadline for the private HTTP transport. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const HTTP_CONFIRMATION_POLL_INTERVAL_MS = 250;
-
-/** @internal Private protocol surface wrapped by `AbloHttpClient`. */
-export interface HttpTransport {
-  ready(): Promise<void>;
-  waitForFlush(): Promise<void>;
-  /** Drains scheduled commits and active requests. */
-  dispose(): Promise<void>;
-  purge(): Promise<void>;
-  /** @internal Live check used only by `context().onChange`. */
-  readonly onChange: HttpReadOnChange;
-  readonly commits: CommitResource;
-  /**
-   * Claim-ticket operations keyed by `claimId` — the id a queued acquire
-   * hands back on `AbloClaimedError('claim_queued')`. See
-   * {@link HttpClaimsResource}.
-   */
-  readonly claims: HttpClaimsResource;
-  readonly logs: HttpLogsResource;
-  /** Server-confirmed authority of the active bearer, populated by `ready()`. */
-  readonly identity: EffectiveAuthority | null;
-  model<T = Record<string, unknown>, Fields = T>(
-    name: string,
-  ): HttpTransportModel<T, Fields>;
-  /**
-   * Resolve the active bearer credential this client authenticates with — the
-   * same token its own requests carry in `Authorization`. Returns `null` when
-   * no credential is configured. Async because the API key may be supplied as
-   * an async setter. Use it to authenticate a side-band request to the same
-   * server with the credential this client already holds — no re-mint.
-   */
-  getAuthToken(): Promise<string | null>;
-  /** @internal One normalized source shared by HTTP bootstrap and live transport. */
-  readonly access: SessionAccess;
-}
-
+const ignoreBestEffortClaimReleaseFailure = (): undefined => undefined;
 type CommitResponse = CommitReceiptWire;
 
 /** @internal Constructed only by the typed HTTP facade. */
@@ -1169,118 +1088,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     },
   };
 
-  // How the stateless client waits its turn. The queued slot is real server
-  // state, so one heartbeat per tick does both jobs: it refreshes this
-  // waiter's slot and reports the line's answer — `queued` (still waiting) or
-  // `held` (granted). The first check comes quickly because most holds are a
-  // short claim→write→release; after that the cadence relaxes, with jitter so
-  // a fleet of waiters doesn't beat in step.
-  const GRANT_POLL_FIRST_MS = 250;
-  const GRANT_POLL_INTERVAL_MS = 1_000;
-  // An abort cuts the sleep short so the wait ends within a tick of the
-  // signal, not at the next scheduled beat.
-  const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
-    new Promise((resolve) => {
-      const done = (): void => {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', done);
-        resolve();
-      };
-      const timer = setTimeout(done, ms);
-      signal?.addEventListener('abort', done, { once: true });
-    });
-
-  async function awaitGrantOverHttp(
-    targetLabel: string,
-    queued: ClaimQueuedResponse,
-    options: ResolvedClaimContentionOptions,
-  ): Promise<{ id: string; fenceToken?: number }> {
-    // The queued reply is a claim resource in its waiting state, so the
-    // handle is its `id` — same rule as the 201 and the poll.
-    const claimId = queued.id;
-    const { signal } = options;
-    // Leave the line before rejecting: an abandoned slot would otherwise sit
-    // in the queue until its TTL lapses, stalling every waiter behind it.
-    const rejectAndLeave = async (error: AbloClaimedError): Promise<never> => {
-      await claims.release({ claimId }).catch(() => {});
-      throw error;
-    };
-
-    emitClaimStatus(options.onStatus, {
-      type: 'queued',
-      claimId,
-      position: queued.position,
-      ahead: queued.position + 1,
-    });
-
-    if (options.maxDepth !== undefined && queued.position >= options.maxDepth) {
-      return rejectAndLeave(
-        new AbloClaimedError(
-          `Claim queue for ${targetLabel} is ${queued.position} deep (max ${options.maxDepth}).`,
-          { code: 'queue_too_deep' }
-        )
-      );
-    }
-
-    const deadline =
-      options.timeoutMs !== undefined ? Date.now() + options.timeoutMs : undefined;
-    let delay = GRANT_POLL_FIRST_MS;
-    for (;;) {
-      if (signal?.aborted) {
-        return rejectAndLeave(
-          new AbloClaimedError(
-            `The wait for the claim on ${targetLabel} was aborted before the grant arrived.`,
-            { code: 'claim_wait_aborted' }
-          )
-        );
-      }
-      if (deadline !== undefined && Date.now() >= deadline) {
-        return rejectAndLeave(
-          new AbloClaimedError(
-            `Timed out after ${options.timeoutMs}ms waiting for the queue grant on ${targetLabel}.`,
-            { code: 'grant_timeout' }
-          )
-        );
-      }
-      await sleep(
-        deadline !== undefined ? Math.min(delay, Math.max(0, deadline - Date.now())) : delay,
-        signal
-      );
-      if (signal?.aborted) {
-        return rejectAndLeave(
-          new AbloClaimedError(
-            `The wait for the claim on ${targetLabel} was aborted before the grant arrived.`,
-            { code: 'claim_wait_aborted' }
-          )
-        );
-      }
-      delay = GRANT_POLL_INTERVAL_MS * (0.85 + Math.random() * 0.3);
-      // A lease that ended answers the beat with 409 `claim_lost`, which the
-      // wire error mapping raises as AbloClaimedError before this reads
-      // anything — the wait fails with the loss, as the socket wait does.
-      const beat = await claims.heartbeat({ claimId });
-      if (beat.status !== 'held') continue;
-      // Granted. The heartbeat ack does not carry the fence token — the claim
-      // state does, server-stamped at grant.
-      const state = await claims.retrieve({ claimId });
-      if (state.status !== 'active') {
-        return rejectAndLeave(
-          new AbloClaimedError(`Claim lost while queued for ${targetLabel}.`, {
-            code: 'claim_lost',
-          })
-        );
-      }
-      emitClaimStatus(options.onStatus, {
-        type: 'granted',
-        claimId,
-        waited: true,
-      });
-      return state.fenceToken !== undefined
-        ? { id: claimId, fenceToken: state.fenceToken }
-        : { id: claimId };
-    }
-  }
-
   async function applyClaimedPolicy(
     target: Partial<ModelTarget>,
     options?: ClaimedOptions,
@@ -1734,7 +1541,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // the manual ticket surface.)
       if (body.status === 'queued') {
         try {
-          return await awaitGrantOverHttp(
+          return await awaitClaimGrantOverHttp(
+            claims,
             `${name}/${params.id}`,
             body,
             contention,
@@ -1767,8 +1575,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     ): Promise<void> => {
       const entityId = isClaimHandle(params) ? params.target.id : params.id;
       if (claimId && options.releaseDispatchedClaim) {
-        options.releaseDispatchedClaim({ claimId, entityType: name, entityId });
-        return Promise.resolve();
+        return options.releaseDispatchedClaim({ claimId, entityType: name, entityId });
       }
       return requestRaw(claimPath(entityId), {
         method: 'DELETE',
@@ -1896,7 +1703,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         description: claimDescription(params),
         release,
         revoke: () => {
-          void release().catch(() => {});
+          void release().catch(ignoreBestEffortClaimReleaseFailure);
         },
         heartbeat,
         [Symbol.asyncDispose]: release,
@@ -1911,7 +1718,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // this credential until the TTL lapses, behind no handle anyone can
       // release, and every other participant is refused for the duration.
       if (data === undefined) {
-        await release().catch(() => undefined);
+        await release().catch(ignoreBestEffortClaimReleaseFailure);
         throw new AbloNotFoundError(
           `Cannot claim ${name}/${params.id}: it does not exist (or is outside this credential's scope). ` +
             `To hold a key before its row exists, claim it by id alone: claim('${params.id}') returns a lease without a snapshot.`,
@@ -2018,7 +1825,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           claim: undefined,
         });
       } finally {
-        await releaseClaim({ id }, claimId).catch(() => {});
+        await releaseClaim({ id }, claimId).catch(ignoreBestEffortClaimReleaseFailure);
       }
     };
 

@@ -60,8 +60,8 @@ import { ambientEnvKeyNote, resolveMutationApiKey, resolveRuntimeApiKey } from '
 import { apiBaseUrl, requestControlPlane } from './controlPlane';
 import {
   datasourceLocationResponseSchema,
-  datasourceResnapshotResponseSchema,
 } from '@abloatai/transaction/wire';
+import { requestInitialSnapshot } from './connect/index';
 import { brand } from './theme';
 import { resolveTarget } from './target';
 import {
@@ -126,6 +126,8 @@ export interface ConnectArgs {
   yes: boolean;
   /** `--show-sql`: include the exact statements in the `apply` plan. */
   showSql: boolean;
+  /** Emit the stable connect lifecycle object instead of human progress copy. */
+  json: boolean;
   /**
    * `scan`: a read-only audit that reports leftover Ablo sync tables and types in
    * the database — infrastructure a previous integration may have created. It only
@@ -179,6 +181,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let envFile: string | undefined;
   let yes = false;
   let showSql = false;
+  let json = false;
   let scan = false;
   let locate = false;
   let manual = false;
@@ -239,6 +242,9 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
       case '--show-sql':
         showSql = true;
         break;
+      case '--json':
+        json = true;
+        break;
       case '--manual':
         manual = true;
         break;
@@ -289,6 +295,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
     envFile,
     yes,
     showSql,
+    json,
     scan,
     locate,
     tables,
@@ -1156,13 +1163,7 @@ async function runResnapshot(): Promise<void> {
   console.log(
     `\n  ${brand('ablo')} ${pc.dim('connect resnapshot')}  ${pc.dim('reload existing rows')}\n`,
   );
-  const result = await requestControlPlane({
-    path: '/v1/datasources/resnapshot',
-    method: 'POST',
-    apiKey,
-    body: {},
-    responseSchema: datasourceResnapshotResponseSchema,
-  });
+  const result = await requestInitialSnapshot({ apiKey });
   if (result.replication_slot?.released === false) {
     console.log(`  ${pc.yellow('—')} Snapshot reset recorded, but the old slot is still active.`);
     if (result.replication_slot.detail) console.log(`  ${pc.dim(result.replication_slot.detail)}`);
@@ -1318,6 +1319,7 @@ export const CONNECT_USAGE = `  ablo connect — connect your own database
     --manual             Print the setup SQL instead of running it
     --yes                Set up without the confirmation (non-interactive)
     --show-sql           Show the exact statements before running them
+    --json               Emit stable result and step codes for automation
 
   apply registers with Ablo directly; the admin credential is used only on this
   machine and never persisted. Your app holds only ABLO_API_KEY.`;

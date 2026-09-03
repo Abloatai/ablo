@@ -88,7 +88,7 @@ describe('SyncClient transaction:failed drain', () => {
     await client.initialize('user-1', 'org-1');
 
     const layerA = createEntryLayerFixture({ id: 'layer-a', entryId: 'entry-1' });
-    client.delete(layerA);
+    void client.delete(layerA);
     await client.syncNow();
     expect(client.getSyncStats().pendingMutations).toBe(1);
     const [mutationId] = journaledMutationIds();
@@ -109,7 +109,7 @@ describe('SyncClient transaction:failed drain', () => {
     const staged: QueuedMutation[] = [];
     const off = client.onLocalTransaction((tx) => staged.push(tx));
     const layerB = createEntryLayerFixture({ id: 'layer-b', entryId: 'entry-1' });
-    client.delete(layerB);
+    void client.delete(layerB);
     await client.syncNow();
     off();
 
@@ -120,7 +120,7 @@ describe('SyncClient transaction:failed drain', () => {
     await client.initialize('user-1', 'org-1');
 
     const layer = createEntryLayerFixture({ id: 'layer-c', entryId: 'entry-1' });
-    client.delete(layer);
+    void client.delete(layer);
     await client.syncNow();
     expect(client.getSyncStats().pendingMutations).toBe(1);
 

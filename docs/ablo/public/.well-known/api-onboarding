@@ -23,7 +23,7 @@
       },
       {
         "name": "Scale",
-        "requiredFor": "Built for scaling teams with production traffic. $250 monthly minimum, with usage metered against it. Up to 1,000 concurrent connections. Adds audit log export.",
+        "requiredFor": "Built for scaling teams with production traffic. $250 monthly minimum, with usage metered against it. Up to 5,000 concurrent connections. Adds audit log export.",
         "url": "https://docs.abloatai.com/pricing"
       },
       {

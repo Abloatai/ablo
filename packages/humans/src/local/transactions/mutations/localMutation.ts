@@ -43,9 +43,9 @@ export function createLocalMutationPort(emitter: OptimisticEmitter): LocalMutati
   const updates = new Map<string, OptimisticUpdateEntry>();
   return {
     updates,
-    applyCreate: (model, transaction) => applyOptimisticCreate(updates, emitter, model, transaction),
-    applyUpdate: (model, transaction) => applyOptimisticUpdate(updates, emitter, model, transaction),
-    applyDelete: (model, transaction) => applyOptimisticDelete(updates, emitter, model, transaction),
+    applyCreate: (model, transaction) => { applyOptimisticCreate(updates, emitter, model, transaction); },
+    applyUpdate: (model, transaction) => { applyOptimisticUpdate(updates, emitter, model, transaction); },
+    applyDelete: (model, transaction) => { applyOptimisticDelete(updates, emitter, model, transaction); },
     rollback: (transaction, reason, error) => rollbackOptimistic(updates, emitter, transaction, reason, error),
   };
 }

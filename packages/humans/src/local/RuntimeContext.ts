@@ -106,6 +106,8 @@ export const browserOnlineStatus: OnlineStatusProvider = {
     // signal. Don't use `!navigator.onLine`: Node 18+ exposes a global
     // `navigator` whose `onLine` is `undefined`, which `!` would read as offline —
     // wedging every Node/server client (agents, worker, MCP) into a false offline.
+    // DOM types say `onLine` is boolean, but Node exposes it as undefined.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare
     return !(typeof navigator !== 'undefined' && navigator.onLine === false);
   },
 };
