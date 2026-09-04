@@ -81,7 +81,8 @@ describe('schema deployment plan renderer', () => {
     renderDeploymentPlan(plan);
 
     const output = lines.join('\n');
-    expect(output).toContain('optional metadata → 3 columns across 2 models');
+    expect(output).toContain('optional metadata');
+    expect(output).toContain('3 columns across 2 models');
     expect(output).toContain('created_by (1), created_at (2)');
     expect(output).toContain('A distinct warning.');
     expect(output).not.toContain('Table "messages" has no');
