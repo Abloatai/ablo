@@ -5,7 +5,6 @@
 #   packages/ablo         branded SDK users install
 #   packages/transaction  authoritative HTTP/contracts core
 #   packages/humans       reactive/WebSocket materializer
-#   packages/agent        agent behavior
 #   packages/cli          scaffolding and operations
 #   packages/tsconfig     private shared compiler configuration
 #
@@ -21,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONOREPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUTPUT_DIR="${1:-$(mktemp -d)/ablo-public-workspace}"
-PACKAGES=(transaction humans agent ablo cli tsconfig product-analytics)
+PACKAGES=(transaction humans ablo cli tsconfig product-analytics)
 
 if [[ "$OUTPUT_DIR" == "/" || "$OUTPUT_DIR" == "$HOME" || -z "$OUTPUT_DIR" ]]; then
   echo "Refusing to clean suspicious output dir: $OUTPUT_DIR" >&2
@@ -29,7 +28,7 @@ if [[ "$OUTPUT_DIR" == "/" || "$OUTPUT_DIR" == "$HOME" || -z "$OUTPUT_DIR" ]]; t
 fi
 
 DIRTY="$(git -C "$MONOREPO_ROOT" status --porcelain -- \
-  packages/ablo packages/transaction packages/humans packages/agent packages/cli \
+  packages/ablo packages/transaction packages/humans packages/cli \
   packages/product-analytics docs/ablo | grep -v '^??' || true)"
 if [[ -n "$DIRTY" && "${ALLOW_DIRTY:-}" != "1" ]]; then
   echo "error: refusing to build a public snapshot from a dirty tree" >&2
@@ -80,12 +79,12 @@ cat > "$OUTPUT_DIR/package.json" <<'EOF'
   "name": "ablo-public-workspace",
   "version": "0.0.0",
   "private": true,
-  "description": "Public source for the Ablo SDK, live client, agent runtime, and CLI.",
+  "description": "Public source for the Ablo SDK, live client, and CLI.",
   "license": "Apache-2.0",
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@ablo/agent && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo",
-    "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@ablo/agent && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo",
+    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo",
+    "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo",
     "test": "npm test --workspaces --if-present"
   }
 }

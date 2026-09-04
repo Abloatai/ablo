@@ -93,6 +93,13 @@ function openSyncWebSocket(): { ws: SyncWebSocket; socket: FakeWebSocket } {
   const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
   if (!socket) throw new Error('expected connect() to construct a socket');
   socket.onopen!();
+  socket.onmessage!({ data: JSON.stringify({
+    type: 'presence_session',
+    payload: {
+      presenceSessionId: '00000000-0000-4000-8000-000000000001',
+      resumed: false,
+    },
+  }) });
   return { ws, socket };
 }
 
@@ -129,6 +136,13 @@ describe('SyncWebSocket CLOSING-socket race (T1.18)', () => {
     const socketB = FakeWebSocket.instances[1];
     if (!socketB) throw new Error('expected connect() to construct a second socket');
     socketB.onopen!();
+    socketB.onmessage!({ data: JSON.stringify({
+      type: 'presence_session',
+      payload: {
+        presenceSessionId: '00000000-0000-4000-8000-000000000001',
+        resumed: true,
+      },
+    }) });
     expect(ws.isConnected()).toBe(true);
 
     // A's delayed close event finally lands. Pre-fix this nulled this.ws,

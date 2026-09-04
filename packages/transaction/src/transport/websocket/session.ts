@@ -31,6 +31,7 @@ import type {
   WebSocketSessionOptions,
   OpenCollaborationEvents,
 } from './sessionContract.js';
+import { createPresenceProjection, type PresenceProjection } from '../../presence/store.js';
 
 interface StoredPosition {
   readonly lastSyncId: number;
@@ -82,7 +83,6 @@ class AgentWebSocket<
   }
 
   protected override onOpened(): void {
-    this.updatePresence();
     this.requestSync(this.position);
   }
 
@@ -138,6 +138,7 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
   private terminalError: Error | null = null;
   private readonly terminalListeners = new Set<(error: Error) => void>();
   private readonly credentialLifecycle: CredentialLifecycle | null;
+  private readonly presenceProjection: PresenceProjection;
   private pendingSessionError: Error | null = null;
 
   readonly presence: WebSocketPresence;
@@ -159,13 +160,18 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
       baseUrl: options.baseUrl,
       kind: classifyCredentialKind(token) === 'ephemeral' ? 'user' : 'agent',
       getAuthToken: () => this.currentToken,
+      presenceSession: options.presenceSession,
       syncGroups: [...(options.syncGroups ?? [])],
       collaborationEvents: [...(options.collaborationEvents ?? [])],
       reconnectDelay: options.reconnectDelay,
       maxReconnectDelay: options.maxReconnectDelay,
     }, position);
+    this.presenceProjection = createPresenceProjection(this.socket);
+    const presenceProjection = this.presenceProjection;
     this.presence = {
-      update: (input = {}) => this.socket.updatePresence(input),
+      get active() { return presenceProjection.active; },
+      get others() { return presenceProjection.others; },
+      command: (input) => this.socket.sendPresenceCommand(input),
     };
     this.collaboration = {
       send: (event, payload) => this.socket.sendCollaborationEvent(event, payload),
@@ -504,6 +510,7 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     if (this.closed) return;
     this.closed = true;
     this.credentialLifecycle?.stop();
+    this.presenceProjection.dispose();
     this.terminalListeners.clear();
     this.rejectReady?.(new AbloConnectionError('The WebSocket session was disposed.'));
     await this.acknowledgeLane;

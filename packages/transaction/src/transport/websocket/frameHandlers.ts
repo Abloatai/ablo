@@ -32,6 +32,7 @@ import { formatConflict } from '../../claims/trace.js';
 import { recordClaim, type CommitAck } from './commitFrames.js';
 import type { Logger } from '../../logger.js';
 import type { SocketObservability } from '../../observability.js';
+import type { PresenceSessionEstablished } from '../../presence/session.js';
 
 /**
  * In-flight `commit` request record, keyed by clientTxId in the session.
@@ -113,7 +114,7 @@ export interface WsSession {
   handleDelta(delta: unknown): void;
   handleSyncResponse(payload: unknown): void;
   handleBootstrapResponse(payload: unknown): void;
-  handlePresenceUpdate(message: { payload?: unknown; [k: string]: unknown }): void;
+  establishPresenceSession(value: PresenceSessionEstablished): void;
 }
 
 export type WsFrameHandler = (session: WsSession, message: WsInboundFrame) => void;
@@ -356,7 +357,6 @@ function tracePorts(session: WsSession): { logger: Logger; observability: Socket
 export const wsFrameHandlers: Record<string, WsFrameHandler> = {
   sync_response: (session, message) => { session.handleSyncResponse(message.payload); },
   bootstrap_response: (session, message) => { session.handleBootstrapResponse(message.payload); },
-  presence_update: (session, message) => { session.handlePresenceUpdate(message); },
   mutation_result: handleMutationResult,
   subscription_ack: handleSubscriptionAck,
   delta: handleDeltaFrame,
@@ -399,11 +399,25 @@ const validatedFrameHandlers: Record<
   SchemaValidatedFrameType,
   (session: WsSession, payload: unknown) => void
 > = {
-  presence_update: validating(
-    WS_INBOUND_FRAMES.presence_update.payload,
-    'presence_update',
+  presence_session: validating(
+    WS_INBOUND_FRAMES.presence_session.payload,
+    'presence_session',
     (session, payload) => {
-      session.handlePresenceUpdate({ payload });
+      session.establishPresenceSession(payload);
+    },
+  ),
+  presence_snapshot: validating(
+    WS_INBOUND_FRAMES.presence_snapshot.payload,
+    'presence_snapshot',
+    (session, payload) => {
+      session.emit('presence_snapshot', payload);
+    },
+  ),
+  presence_patch: validating(
+    WS_INBOUND_FRAMES.presence_patch.payload,
+    'presence_patch',
+    (session, payload) => {
+      session.emit('presence_patch', payload);
     },
   ),
   claim_rejected: validating(

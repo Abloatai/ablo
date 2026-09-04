@@ -35,7 +35,6 @@ import {
   type GroupRemovedPayload,
   type BootstrapHint,
   type BootstrapDataEvent,
-  type PresenceUpdate,
   type EventMap,
   type DefaultCollaborationEvents,
   type SyncWebSocketEventMap,
@@ -238,7 +237,6 @@ export type {
   GroupRemovedPayload,
   BootstrapHint,
   BootstrapDataEvent,
-  PresenceUpdate,
 };
 
 // deriveSyncPlanFromSchema derives a sync plan from a schema and is
@@ -1500,7 +1498,6 @@ export class BaseSyncedStore<
       applyDeltaFrame: (deltas) => { this.applyDeltaFrame(deltas); },
       handleBootstrapRequired: (hint) => { this.handleBootstrapRequired(hint); },
       handleBootstrapData: (data) => { this.handleBootstrapData(data); },
-      handlePresenceUpdate: (data) => { this.handlePresenceUpdate(data); },
       performCredentialRefresh: () => this.performCredentialRefresh(),
       handleTerminalSessionError: (error) => { this.terminalSessionLifecycle.start(error); },
       nudgeReconnect: () => { this.nudgeReconnect(); },
@@ -1934,9 +1931,6 @@ export class BaseSyncedStore<
   protected handleBootstrapData(_data: BootstrapDataEvent): void {
     this.updateSyncStatus({ state: 'syncing' });
   }
-
-  /** Handle presence_update event. Override in subclass. */
-  protected handlePresenceUpdate(_data: PresenceUpdate): void {}
 
   // ── Pending changes tracking ─────────────────────────────────────────────
 

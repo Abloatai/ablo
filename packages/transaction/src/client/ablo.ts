@@ -61,7 +61,7 @@ export function Ablo<const S extends SchemaRecord>(
 //
 // The headless subset of the type namespace the reactive package hangs off
 // its own `Ablo` export: every entry a consumer of THIS client would write
-// out (`Ablo.Activity`, `Ablo.Commit.Receipt`, and so on), and nothing that
+// out (`Ablo.PresenceActivity`, `Ablo.Commit.Receipt`, and so on), and nothing that
 // needs a store or a socket behind it. The
 // types live in their canonical homes (`types/streams`, `claims/policy`,
 // `client/resources/httpResources`, `schema/schema`); the namespace is a convenience
@@ -72,10 +72,10 @@ export namespace Ablo {
   export type ClaimTarget = _Streams.ClaimTarget;
   export type PresenceTarget = _Streams.PresenceTarget;
   export type Duration = _Streams.Duration;
+  export type PresenceSession = import('../presence/contract.js').PresenceSession;
+  export type PresenceActivity = import('../presence/contract.js').PresenceActivity;
 
   // ── Coordination (flat — the surface a contending caller reads) ───
-  export type Peer = _Streams.Peer;
-  export type Activity = _Streams.Activity;
   export type Claim = _Streams.Claim;
   export type ClaimHeartbeat = _Streams.ClaimHeartbeat;
   export type ClaimHeartbeatOptions = _Streams.ClaimHeartbeatOptions;

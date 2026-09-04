@@ -39,7 +39,10 @@ import {
   bindClaimLifetime,
   claimLifetimeOf,
 } from '@abloatai/transaction/claims/lifetime';
-import type { AttachablePresenceStream } from '../../presenceStream.js';
+import {
+  attachPresenceToClient,
+  type AttachablePresence,
+} from '../../presence/index.js';
 import type { ClaimWaitOptions } from '@abloatai/transaction/types/streams';
 import type { Claim } from '@abloatai/transaction/types/streams';
 import { resolveApiKeyValue, resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
@@ -96,7 +99,7 @@ export interface ReactiveEngineInputs<S extends SchemaRecord> extends ClientPrel
   transport: SyncWebSocket;
   /** The humans() plugin's contribution — built by its `init`, already
    *  attached to the connection the context carried. */
-  presence: AttachablePresenceStream;
+  presence: AttachablePresence;
   /**
    * The store cluster `humans().init` constructed from the widened context:
    * this client's runtime, the component graph, and the store. The engine
@@ -183,7 +186,11 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
   // filter own echoes by participant id, seeded in `ready()` alongside the
   // locals above.
   const presenceStream = presence;
-  const claimStream = createClaimStream({ participantId, logger }, transport);
+  const claimStream = createClaimStream(
+    { logger },
+    transport,
+    presenceStream,
+  );
 
   // 6. Validate options up front — fail loudly on obviously wrong inputs so
   //    strangers don't get silent empty results. Validation errors are written
@@ -239,17 +246,11 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     kind,
     logger,
     validationError: _validationError,
-    onIdentityResolved: ({ userId, participantKind, accountScope, syncGroups, authority }) => {
+    onIdentityResolved: ({ userId, participantKind, accountScope, authority }) => {
       selfParticipantId = userId;
       selfParticipantKind = participantKind;
       _resolvedOrganizationId = accountScope;
       _resolvedIdentity = authority;
-      presenceStream.setParticipant({
-        id: userId,
-        kind: participantKind,
-        syncGroups: [...syncGroups],
-      });
-      claimStream.setParticipant({ id: userId });
     },
   });
   const ready = lifecycle.ready;
@@ -573,6 +574,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       modelRegistry,
       hydration,
       {
+        presence: (model, recordId) => presenceStream.forModel(model, recordId),
         createClaim: (claimOptions) => publicClaims.create(claimOptions),
         // Lazily referenced: `commits` is declared below this loop, and this
         // only runs when someone actually writes a batch.
@@ -831,6 +833,11 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       return store.syncStatus;
     },
 
+    // The humans capability owns the connection-backed presence projection.
+    // Keep it on the base client as well as in the plugin surface so the
+    // concrete AbloClient contract and runtime object agree before layering.
+    presence: presenceStream,
+
     schema,
 
     // ── Internal accessors for framework integration ─────────────────
@@ -848,16 +855,14 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     /** The SyncWebSocket — for collaboration events (selection, cursors). */
     get _ws() { return store.getSyncWebSocket(); },
 
-    /** Presence livestream — same socket as entity sync, no second
-     *  connection. Stable reference across the engine's lifetime. */
-    presence: presenceStream,
-
 	    /** Claim livestream — same socket. Stable reference. */
 	    claims: publicClaims,
 
 	    commits,
 
   } as Ablo<S>;
+
+  attachPresenceToClient(engine, presenceStream);
 
   Object.defineProperty(engine, kReadEvidence, {
     value: {

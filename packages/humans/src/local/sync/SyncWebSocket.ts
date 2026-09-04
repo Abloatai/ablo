@@ -36,7 +36,6 @@ export type {
   SyncCapabilities,
   BootstrapHint,
   BootstrapDataEvent,
-  PresenceUpdate,
   CoreSyncEventMap,
   DefaultCollaborationEvents,
   EventMap,
@@ -129,14 +128,10 @@ export class SyncWebSocket<
 
   /**
    * The open ritual, run by the transport between its `connected` emit and the
-   * heartbeat start: announce presence, tell the server where we left off,
+   * heartbeat start: tell the server where we left off,
    * request the deltas we missed, and start the catch-up poll.
    */
   protected override onOpened(): void {
-    // Send presence update with timezone (server sets presence to "online" on connect,
-    // this improves localTime accuracy by providing the user's actual timezone)
-    this.sendPresenceUpdate('online');
-
     // Immediately request incremental sync based on our stored cursor.
     // `requestIncrementalSync` is async — a bare call inside try/catch is a
     // rejection hole (the catch never sees it); route failures through
@@ -321,42 +316,6 @@ export class SyncWebSocket<
    */
   override acknowledge(syncId: number): void {
     this.sendAck(syncId);
-  }
-
-  /**
-   * Send presence update to server.
-   * Use this for:
-   * - Updating timezone (improves localTime accuracy shown to other users)
-   * - Manual status changes (away, custom status)
-   *
-   * Note: "online" status is automatically set by server on WebSocket connect,
-   * and "offline" is set on disconnect. You don't need to call this for basic online/offline.
-   *
-   * @param status - "online", "away", or custom status string
-   * @param customStatus - Optional custom status message
-   */
-  sendPresenceUpdate(
-    status: 'online' | 'away' | 'offline' = 'online',
-    customStatus?: string
-  ): void {
-    if (!this.isConnected()) return;
-
-    const timezone = (() => {
-      try {
-        return Intl.DateTimeFormat().resolvedOptions().timeZone;
-      } catch {
-        return 'UTC';
-      }
-    })();
-
-    this.send({
-      type: 'presence_update',
-      payload: {
-        status,
-        timezone,
-        ...(customStatus ? { customStatus } : {}),
-      },
-    });
   }
 
   /**

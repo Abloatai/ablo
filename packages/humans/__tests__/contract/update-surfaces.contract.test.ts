@@ -11,7 +11,8 @@
  * own focused tests. It is deliberately not another public contract here.
  */
 
-import { Ablo, type InternalAbloOptions } from '../../src/Ablo';
+import { Ablo as createReactiveClient, type InternalAbloOptions } from '../../src/Ablo';
+import { Ablo as createCoordinationClient } from '@abloatai/transaction';
 import type {
   ModelOperations,
   ModelUpdateParams,
@@ -116,9 +117,9 @@ const silentLogger = {
   error: () => undefined,
 };
 
-describe('CONTRACT: update has one shape across both transports', () => {
-  it('exposes update on the typed HTTP model', () => {
-    const http = Ablo({
+describe('CONTRACT: coordination and reactive clients share one update shape', () => {
+  it('exposes update on the typed coordination model', () => {
+    const http = createCoordinationClient({
       schema,
       apiKey: 'sk_test_contract',
       baseURL: 'https://api.test',
@@ -129,8 +130,8 @@ describe('CONTRACT: update has one shape across both transports', () => {
     expect('model' in http).toBe(false);
   });
 
-  it('exposes update on the typed WebSocket model', async () => {
-    const stateful = Ablo({
+  it('exposes update on the typed reactive model', async () => {
+    const stateful = createReactiveClient({
       schema,
       baseURL: 'ws://localhost:1234',
       user: { id: 'user-1' },
@@ -143,5 +144,13 @@ describe('CONTRACT: update has one shape across both transports', () => {
     } finally {
       await stateful.dispose();
     }
+  });
+
+  it('rejects a transport selector on the reactive materialiser', () => {
+    expect(() => createReactiveClient({
+      schema,
+      apiKey: 'sk_test_contract',
+      transport: 'http',
+    })).toThrow('reactive client does not accept `transport`');
   });
 });

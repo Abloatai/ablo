@@ -1,5 +1,21 @@
 # @abloatai/humans
 
+## 0.62.0
+
+### Minor Changes
+
+- Replace the separate presence stream with the session-owned `ablo.presence`
+  projection. Reactive clients expose the current session's `active` activity,
+  the other visible sessions through `others`, and model-native views through
+  `forModel(...)`, all from the same live connection used for reads, claims,
+  and writes.
+
+- Remove the old `PresenceStream`, `Peer`, `Activity`, and `PresenceUpdate*`
+  vocabulary in favor of `Ablo.Presence`, `Ablo.PresenceSession`, and
+  `Ablo.PresenceActivity`. Raw `presence_update` subscriptions and participant
+  setters are replaced by the session-owned projection and typed
+  snapshot/patch protocol.
+
 ## 0.61.0
 
 ### Patch Changes

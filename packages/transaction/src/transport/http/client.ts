@@ -78,6 +78,7 @@ import { subscribeWebSocketReadChanges } from '../websocket/contextSubscription.
 import type {
   CoreSyncEventMap,
 } from '../websocket/transport.js';
+import { createPresenceSessionSource } from '../../presence/session.js';
 
 export interface AbloHttpClientOptions<S extends SchemaRecord>
   extends HttpClientConfig<S> {
@@ -233,6 +234,12 @@ export type AbloHttpClient<S extends SchemaRecord> = {
   getAuthToken(): Promise<string | null>;
 };
 
+export interface AbloLivePresence {
+  readonly active: readonly import('../../presence/contract.js').PresenceActivity[];
+  readonly others: readonly import('../../presence/contract.js').PresenceSession[];
+  command(input: import('../../presence/commands.js').PresenceCommand): Promise<void>;
+}
+
 /** The same typed resource client, with server-pushed capabilities carried by WebSocket. */
 export type AbloWebSocketClient<S extends SchemaRecord> = AbloHttpClient<S> & {
   observe(options?: { signal?: AbortSignal }): AsyncIterable<WebSocketObservedDelta>;
@@ -244,14 +251,7 @@ export type AbloWebSocketClient<S extends SchemaRecord> = AbloHttpClient<S> & {
     groups: readonly string[],
     options?: { timeoutMs?: number },
   ): Promise<{ groups: string[] }>;
-  readonly presence: {
-    update(input?: {
-      readonly status?: 'online' | 'away' | 'offline';
-      readonly customStatus?: string;
-      readonly timezone?: string;
-      readonly activity?: Readonly<Record<string, JsonValue>>;
-    }): Promise<void>;
-  };
+  readonly presence: AbloLivePresence;
   readonly collaboration: {
     send(event: string, payload: Readonly<Record<string, JsonValue>>): Promise<void>;
   };
@@ -540,8 +540,10 @@ export function createAbloHttpClient<S extends SchemaRecord>(
   const usesWebSocket = options.transport === 'websocket'
     || (options.transport === undefined && options.session != null);
   const readSetContext = createReadSetContext();
+  const presenceSession = createPresenceSessionSource();
   const transport: HttpTransport = createHttpTransport({
     ...rest,
+    presenceSession,
     onCommitReceipt: (observation) => {
       recordHttpCommitReceipt(readSetContext, observation);
       onCommitReceipt?.(observation);
@@ -591,6 +593,7 @@ export function createAbloHttpClient<S extends SchemaRecord>(
         reconnectDelay: options.reconnectDelay,
         maxReconnectDelay: options.maxReconnectDelay,
         connectTimeoutMs: options.connectTimeoutMs,
+        presenceSession,
       }, webSocketOpen.signal);
       if (disposed) {
         await session.close();
@@ -607,6 +610,12 @@ export function createAbloHttpClient<S extends SchemaRecord>(
   const ready = async (): Promise<void> => {
     await transport.ready();
     if (usesWebSocket) await webSocketSession();
+  };
+
+  const livePresence: AbloLivePresence = {
+    get active() { return webSocket?.presence.active ?? []; },
+    get others() { return webSocket?.presence.others ?? []; },
+    command: async (input) => (await webSocketSession()).presence.command(input),
   };
 
   const dispose = async (): Promise<void> => {
@@ -702,10 +711,7 @@ export function createAbloHttpClient<S extends SchemaRecord>(
         };
       }
       if (usesWebSocket && prop === 'presence') {
-        return {
-          update: async (input?: Parameters<AbloWebSocketSession['presence']['update']>[0]) =>
-            (await webSocketSession()).presence.update(input),
-        };
+        return livePresence;
       }
       if (usesWebSocket && prop === 'collaboration') {
         return {

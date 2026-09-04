@@ -1,5 +1,6 @@
 import { normalizeClaimConflict } from '../../claims/conflict.js';
 import type { ClaimQueuedResponse } from '../../claims/contract.js';
+import { heartbeatCadenceMs } from '../../claims/heartbeat.js';
 import type { HttpClaimsResource } from '../../client/resources/httpResources.js';
 import {
   emitClaimStatus,
@@ -25,10 +26,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 /** Wait for a queued HTTP claim while keeping its server-side slot alive. */
 export async function awaitClaimGrantOverHttp(
-  claims: HttpClaimsResource,
+  claims: Pick<HttpClaimsResource, 'heartbeat' | 'retrieve' | 'release'>,
   targetLabel: string,
   queued: ClaimQueuedResponse,
   options: ResolvedClaimContentionOptions,
+  leaseWindowMs: number,
 ): Promise<{ id: string; fenceToken?: number }> {
   const claimId = queued.id;
   const { signal } = options;
@@ -67,6 +69,14 @@ export async function awaitClaimGrantOverHttp(
 
   const deadline = options.timeoutMs !== undefined ? Date.now() + options.timeoutMs : undefined;
   let delay = GRANT_POLL_FIRST_MS;
+  // Enqueue itself acknowledged that this ticket is live for its requested
+  // lease window. Each successful queued heartbeat renews the same promise.
+  // Promotion mints a fence between removing the queue row and publishing the
+  // holder row, so lookup may briefly see neither; that cannot be expiry while
+  // the server's last liveness acknowledgement is still in force.
+  let acknowledgedAliveUntil = Date.now() + leaseWindowMs;
+  const heartbeatIntervalMs = heartbeatCadenceMs(leaseWindowMs, true);
+  let nextHeartbeatAt = Date.now() + heartbeatIntervalMs;
   for (;;) {
     if (signal?.aborted) {
       return rejectAndLeave(waitingError(
@@ -91,18 +101,63 @@ export async function awaitClaimGrantOverHttp(
       ));
     }
     delay = GRANT_POLL_INTERVAL_MS * (0.85 + Math.random() * 0.3);
-    const beat = await claims.heartbeat({ claimId });
-    if (beat.status !== 'held') continue;
-    const state = await claims.retrieve({ claimId });
-    if (state.status !== 'active') {
+    let state: Awaited<ReturnType<HttpClaimsResource['retrieve']>> | undefined;
+    try {
+      state = await claims.retrieve({ claimId });
+    } catch (error) {
+      if (!hasErrorCode(error, 'claim_not_found') || Date.now() >= acknowledgedAliveUntil) {
+        throw error;
+      }
+      // Promotion removes the queue record before publishing the holder. A
+      // lookup inside that gap can briefly 404 even though the server already
+      // acknowledged this ticket through `acknowledgedAliveUntil`.
+      delay = GRANT_POLL_FIRST_MS;
+    }
+    if (state?.status === 'active') {
+      emitClaimStatus(options.onStatus, { type: 'granted', claimId, waited: true });
+      return state.fenceToken !== undefined
+        ? { id: claimId, fenceToken: state.fenceToken }
+        : { id: claimId };
+    }
+    if (state && state.status !== 'queued') {
+      if (Date.now() < acknowledgedAliveUntil) {
+        delay = GRANT_POLL_FIRST_MS;
+        continue;
+      }
       return rejectAndLeave(waitingError(
         `Claim lost while queued for ${targetLabel}.`,
         'claim_lost',
       ));
     }
-    emitClaimStatus(options.onStatus, { type: 'granted', claimId, waited: true });
-    return state.fenceToken !== undefined
-      ? { id: claimId, fenceToken: state.fenceToken }
-      : { id: claimId };
+    if (Date.now() < nextHeartbeatAt) {
+      continue;
+    }
+
+    let beat: Awaited<ReturnType<HttpClaimsResource['heartbeat']>>;
+    try {
+      beat = await claims.heartbeat({ claimId });
+    } catch (error) {
+      if (!(error instanceof AbloClaimedError) || error.code !== 'claim_lost') throw error;
+      if (Date.now() < acknowledgedAliveUntil) {
+        delay = GRANT_POLL_FIRST_MS;
+        continue;
+      }
+      return rejectAndLeave(waitingError(
+        `Claim lost while queued for ${targetLabel}.`,
+        'claim_lost',
+      ));
+    }
+    acknowledgedAliveUntil = Date.now() + leaseWindowMs;
+    nextHeartbeatAt = Date.now() + heartbeatIntervalMs;
+    if (beat.status === 'held') delay = GRANT_POLL_FIRST_MS;
   }
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { readonly code?: unknown }).code === code
+  );
 }

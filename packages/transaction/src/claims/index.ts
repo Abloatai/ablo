@@ -10,6 +10,7 @@ export * from './eventContract.js';
 export * from './locator.js';
 export * from './awaitGrant.js';
 export * from './heartbeat.js';
+export * from './httpContinuation.js';
 export * from './meta.js';
 export type {
   ClaimCounterparty,

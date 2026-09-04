@@ -16,7 +16,7 @@
  */
 
 import { z } from 'zod';
-import type { ErrorCode } from './errorCodes.js';
+import type { ErrorCode, RecoveryClass } from './errorCodes.js';
 // Dependency-free by design, so the error registry can name the docs host
 // without pulling the auth layer into this module's import graph.
 import { ABLO_DOCS_BASE_URL } from './auth/hostedEndpoints.js';
@@ -93,6 +93,12 @@ export class AbloError extends Error {
    *  conflicting rows of a stale write. This detail is preserved through
    *  {@link toJSON} rather than flattened into the message. */
   readonly details?: Readonly<Record<string, unknown>>;
+  /** Machine-actionable recovery class derived from the stable error code. */
+  readonly recovery: RecoveryClass;
+  /** Whether the same request can succeed later without changing its input. */
+  readonly retryable: boolean;
+  /** Minimum delay requested by the server before retrying this HTTP request. */
+  readonly retryAfterSeconds?: number;
 
   constructor(
     message: string,
@@ -104,6 +110,7 @@ export class AbloError extends Error {
       param?: string;
       docUrl?: string;
       details?: Readonly<Record<string, unknown>>;
+      retryAfterSeconds?: number;
     },
   ) {
     super(message);
@@ -113,6 +120,11 @@ export class AbloError extends Error {
     if (options?.requestId !== undefined) this.requestId = options.requestId;
     if (options?.param !== undefined) this.param = options.param;
     if (options?.details !== undefined) this.details = options.details;
+    this.recovery = options?.code ? classifyRecovery(options.code) : 'none';
+    this.retryable = this.recovery === 'transient';
+    if (options?.retryAfterSeconds !== undefined) {
+      this.retryAfterSeconds = options.retryAfterSeconds;
+    }
     if (typeof options?.details?.event_id === 'string') this.eventId = options.details.event_id;
     const docUrl = options?.docUrl ?? (options?.code ? docUrlForCode(options.code) : undefined);
     if (docUrl !== undefined) this.docUrl = docUrl;
@@ -188,7 +200,6 @@ export class AbloPermissionError extends AbloError {
 /** 429 — rate limit exceeded. Consumers should back off before retry. */
 export class AbloRateLimitError extends AbloError {
   override readonly type = 'AbloRateLimitError' as const;
-  readonly retryAfterSeconds?: number;
 
   constructor(
     message: string,
@@ -202,9 +213,6 @@ export class AbloRateLimitError extends AbloError {
     },
   ) {
     super(message, options);
-    if (options?.retryAfterSeconds !== undefined) {
-      this.retryAfterSeconds = options.retryAfterSeconds;
-    }
   }
 }
 
@@ -839,9 +847,11 @@ export function errorFromWire(
     conflict?: ClaimConflictContext;
     /** Everything the producer attached beyond the envelope's own fields. */
     details?: Readonly<Record<string, unknown>>;
+    /** Delay carried by an HTTP `Retry-After` response header. */
+    retryAfterSeconds?: number;
   } = {},
 ): AbloError {
-  const { code, requestId, requiredCapability, claims, conflict, details } = opts;
+  const { code, requestId, requiredCapability, claims, conflict, details, retryAfterSeconds } = opts;
   // Effective status: an explicit HTTP status wins; otherwise fall back to
   // the code's canonical status from the registry (undefined for unknown /
   // forward-compat codes, which then map to the base AbloError).
@@ -857,6 +867,7 @@ export function errorFromWire(
     httpStatus,
     requestId,
     ...(details && Object.keys(details).length > 0 ? { details } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
 
   // ── Code-first specials (transport-independent) ──────────────────────
@@ -975,6 +986,7 @@ export function translateHttpError(
   status: number,
   body: unknown,
   requestId?: string,
+  response?: { readonly retryAfterSeconds?: number | undefined },
 ): AbloError {
   const parsed = parseErrorBodyShape(body);
   const nested: NestedErrorShape | undefined =
@@ -1048,6 +1060,9 @@ export function translateHttpError(
     claims,
     conflict,
     details: Object.keys(details).length > 0 ? details : undefined,
+    ...(response?.retryAfterSeconds !== undefined
+      ? { retryAfterSeconds: response.retryAfterSeconds }
+      : {}),
   });
 }
 

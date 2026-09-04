@@ -13,7 +13,6 @@ implementation owners and first-party extension surfaces.
 | `packages/ablo` | Branded SDK, public entrypoints, docs, examples, release assets |
 | `packages/transaction` | Headless HTTP client, canonical contracts, reads, commit confirmation, claims, durable observation |
 | `packages/humans` | Reactive materializer, WebSocket transport, presence, browser persistence, React |
-| `packages/agent` | Agent behavior, perception, and coordination helpers |
 | `packages/cli` | Project setup, database connection, schema operations, and diagnostics |
 | `packages/tsconfig` | Private shared compiler configuration |
 

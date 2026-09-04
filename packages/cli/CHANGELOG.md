@@ -1,5 +1,13 @@
 # @abloatai/cli
 
+## 0.62.0
+
+### Patch Changes
+
+- Collapse repeated optional audit and ordering metadata advisories into one
+  readable summary per deployment-plan step. Exact table-level findings remain
+  available through `--json`, and unrelated warnings remain visible.
+
 ## 0.61.0
 
 ### Minor Changes

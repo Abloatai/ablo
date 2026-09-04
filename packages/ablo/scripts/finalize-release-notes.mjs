@@ -12,7 +12,7 @@ if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packagesDir = resolve(scriptDir, '../..');
-const packageNames = ['ablo', 'transaction', 'humans', 'agent', 'cli'];
+const packageNames = ['ablo', 'transaction', 'humans', 'cli'];
 
 function parseChangelog(source, file) {
   const matches = [...source.matchAll(/^## (.+)$/gm)];

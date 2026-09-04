@@ -20,6 +20,7 @@ import { classifyRecovery, type RecoveryClass } from '@abloatai/transaction/erro
 import { withAuthHeaders, type AuthTokenGetter } from '@abloatai/transaction/auth/credentialSource';
 import { globalRuntime } from '../context.js';
 import type { RuntimeContext } from '../RuntimeContext.js';
+import type { PresenceSessionSource } from '@abloatai/transaction/presence';
 
 // ── Response validation ─────────────────────────────────────────────────
 //
@@ -78,6 +79,8 @@ export interface PostQueryOptions {
    * effect without rebuilding the client.
    */
   capabilityToken?: string;
+  /** Server-bound attribution shared with the owning WebSocket. */
+  presenceSession?: PresenceSessionSource;
 
   /**
    * An optional hook that tries to recover from a rejected credential. When a
@@ -128,6 +131,7 @@ export async function postQuery(
         options.getAuthToken,
         { 'Content-Type': 'application/json' },
         options.capabilityToken,
+        options.presenceSession,
       );
       const response = await fetch(url, {
         method: 'POST',

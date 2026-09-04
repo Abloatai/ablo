@@ -18,6 +18,7 @@
 import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, selectModels, z } from '../../schema/index.js';
 import { AbloError, AbloNotFoundError } from '../../errors.js';
+import { CLAIM_CONTINUATION_HEADER } from '../../claims/httpContinuation.js';
 import {
   claimAcquiredResponse,
   claimHeartbeatReply,
@@ -227,6 +228,75 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       dangerouslyAllowBrowser: true,
       transport: 'http',
     });
+
+  it('preserves machine-actionable recovery and Retry-After on admission rejection', async () => {
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_capacity',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      timeoutMs: 500,
+      fetch: () => Promise.resolve(new Response(JSON.stringify({
+        code: 'instance_at_capacity',
+        message: 'The server is protecting established work. Retry shortly.',
+      }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '10' },
+      })),
+    });
+
+    const error = await c.items.get({ id: 'item-1' }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(AbloError);
+    expect(error).toMatchObject({
+      code: 'instance_at_capacity',
+      recovery: 'transient',
+      retryable: true,
+      retryAfterSeconds: 10,
+    });
+  });
+
+  it('replays the exact HTTP request after transient admission pressure', async () => {
+    jest.useFakeTimers();
+    try {
+      const requests: Array<{
+        readonly url: string;
+        readonly method: string | undefined;
+        readonly body: BodyInit | null | undefined;
+      }> = [];
+      const c = Ablo({
+        schema,
+        apiKey: 'sk_test_capacity_retry',
+        baseURL: 'https://api.example.test',
+        transport: 'http',
+        timeoutMs: 5_000,
+        fetch: (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+          requests.push({ url, method: init?.method, body: init?.body });
+          if (requests.length === 1) {
+            return Promise.resolve(new Response(JSON.stringify({
+              code: 'instance_at_capacity',
+              message: 'Retry shortly.',
+            }), { status: 503, headers: { 'Retry-After': '1' } }));
+          }
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'items',
+            id: 'item-1',
+            data: { id: 'item-1', title: 'Recovered', status: 'todo' },
+            stamp: 7,
+          })));
+        },
+      });
+
+      const reading = c.items.get({ id: 'item-1' });
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      await expect(reading).resolves.toMatchObject({ id: 'item-1', title: 'Recovered' });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toEqual(requests[0]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 
   it('returns the stateless HTTP facade (typed model proxies + protocol members)', () => {
     const c = makeViaAblo();
@@ -751,6 +821,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
 
   it('guards a claimed write with the lease watermark, without an implicit read dependency', async () => {
     let mutationBody: Record<string, unknown> | undefined;
+    let mutationHeaders: Headers | undefined;
     let rowReads = 0;
     const c = Ablo({
       schema,
@@ -777,6 +848,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         }
         if (method === 'PATCH' && path.endsWith('/item-1')) {
           mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          mutationHeaders = new Headers(init?.headers);
           return Promise.resolve(jsonResponse(confirmedCommitReceiptResponse({
             clientTxId: 'claimed-update',
             serverTxId: 'server-claimed-update',
@@ -805,6 +877,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       readAt: 51,
     });
     expect(mutationBody).not.toHaveProperty('reads');
+    expect(mutationHeaders?.get(CLAIM_CONTINUATION_HEADER)).toBe('claim-read-set');
   });
 
   it('lets an explicit stale guard override the one the claim supplies', async () => {
@@ -1026,8 +1099,8 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
             ),
           );
         }
-        if (method === 'POST' && path === '/api/v1/claims/claim-q1/heartbeat') {
-          const beats = calls.filter((c) => c.endsWith('/claims/claim-q1/heartbeat')).length;
+        if (method === 'POST' && path === '/api/v1/models/items/item-1/claim/heartbeat') {
+          const beats = calls.filter((c) => c.endsWith('/models/items/item-1/claim/heartbeat')).length;
           // First beat: still in line. Second: the holder released — granted.
           return Promise.resolve(
             jsonResponse(
@@ -1040,13 +1113,18 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           );
         }
         if (method === 'GET' && path === '/api/v1/claims/claim-q1') {
+          const polls = calls.filter((call) => call === 'GET /api/v1/claims/claim-q1').length;
           return Promise.resolve(
             jsonResponse({
               object: 'claim',
               id: 'claim-q1',
-              status: 'active',
-              fenceToken: 7,
-              expiresAt: Date.now() + 60_000,
+              ...(polls === 1
+                ? { status: 'queued', position: 0 }
+                : {
+                    status: 'active',
+                    fenceToken: 7,
+                    expiresAt: Date.now() + 60_000,
+                  }),
             }),
           );
         }
@@ -1072,7 +1150,8 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     // The snapshot was read AFTER the grant, so it reflects what the previous
     // holder committed before releasing.
     expect(held.data).toEqual({ id: 'item-1', title: 'Report', status: 'open' });
-    expect(calls.filter((c) => c.endsWith('/claims/claim-q1/heartbeat')).length).toBe(2);
+    expect(calls.filter((c) => c.endsWith('/models/items/item-1/claim/heartbeat')).length).toBe(0);
+    expect(calls.filter((c) => c === 'GET /api/v1/claims/claim-q1').length).toBe(2);
   }, 10_000);
 
   it('maxQueueDepth rejects a deep line and leaves the queue', async () => {
@@ -1126,11 +1205,21 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
             jsonResponse(claimQueuedResponse({ id: 'claim-q1', position: 1 }), 202),
           );
         }
-        if (method === 'POST' && path === '/api/v1/claims/claim-q1/heartbeat') {
+        if (method === 'POST' && path === '/api/v1/models/items/item-1/claim/heartbeat') {
           return Promise.resolve(
             jsonResponse(
               claimHeartbeatReply({ claimId: 'claim-q1', status: 'queued', position: 1 }),
             ),
+          );
+        }
+        if (method === 'GET' && path === '/api/v1/claims/claim-q1') {
+          return Promise.resolve(
+            jsonResponse({
+              object: 'claim',
+              id: 'claim-q1',
+              status: 'queued',
+              position: 1,
+            }),
           );
         }
         if (method === 'DELETE' && path === '/api/v1/claims/claim-q1') {
@@ -1164,7 +1253,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
             jsonResponse(claimQueuedResponse({ id: 'claim-q1', position: 1 }), 202),
           );
         }
-        if (method === 'POST' && path === '/api/v1/claims/claim-q1/heartbeat') {
+        if (method === 'POST' && path === '/api/v1/models/items/item-1/claim/heartbeat') {
           return Promise.resolve(
             jsonResponse(
               claimHeartbeatReply({ claimId: 'claim-q1', status: 'queued', position: 1 }),
@@ -1286,6 +1375,42 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     });
   });
 
+  it('takes an object-form claim and its protected snapshot in one request', async () => {
+    const calls: string[] = [];
+    let claimBody: Record<string, unknown> | undefined;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_claim_snapshot',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const method = init?.method ?? 'GET';
+        const path = new URL(url).pathname;
+        calls.push(`${method} ${path}`);
+        if (method === 'POST' && path === '/api/v1/models/items/item-1/claim') {
+          claimBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Promise.resolve(jsonResponse(claimAcquiredResponse(
+            modelClaim({ id: 'claim-snapshot-1', model: 'items', entityId: 'item-1', fenceToken: 7 }),
+            {
+              data: { id: 'item-1', title: 'Protected', status: 'todo' },
+              readAt: 51,
+            },
+          ), 201));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const held = await c.items.claim({ id: 'item-1' });
+    expect(held.data).toEqual({ id: 'item-1', title: 'Protected', status: 'todo' });
+    expect(held.readAt).toBe(51);
+    expect(held.fenceToken).toBe(7);
+    expect(claimBody).toMatchObject({ snapshot: true });
+    expect(calls).toEqual(['POST /api/v1/models/items/item-1/claim']);
+  });
+
   it('claims a key by id alone: no read after the grant, a lease without data, given back on release', async () => {
     const calls: string[] = [];
     const c = Ablo({
@@ -1300,6 +1425,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         const path = new URL(url).pathname;
         calls.push(`${method} ${path}`);
         if (method === 'POST' && path === '/api/v1/models/items/ghost-1/claim') {
+          expect(JSON.parse(String(init?.body))).not.toHaveProperty('snapshot');
           return Promise.resolve(
             jsonResponse(
               claimAcquiredResponse(

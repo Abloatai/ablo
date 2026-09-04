@@ -17,7 +17,7 @@
 # dependency exists on the registry.
 set -euo pipefail
 
-PACKAGE_ORDER=(transaction humans agent cli ablo tsconfig)
+PACKAGE_ORDER=(transaction humans cli ablo tsconfig)
 PUBLIC_NAMES=(@abloatai/transaction @abloatai/humans @abloatai/cli @abloatai/ablo)
 MIRROR_REPO="Abloatai/ablo"
 
@@ -47,6 +47,16 @@ VERSION="$(node -p "require('./packages/ablo/package.json').version")"
 
 # ── Preconditions ───────────────────────────────────────────────────────
 # Each of these failed a real release in a way that pointed somewhere else.
+
+# Validate the complete publish order before the first immutable registry
+# write. A removed or renamed workspace must fail before any package is
+# published, never halfway through the fixed release group.
+for package_name in "${PACKAGE_ORDER[@]}"; do
+  if [ ! -f "packages/$package_name/package.json" ]; then
+    echo "error: publish order references missing packages/$package_name/package.json" >&2
+    exit 1
+  fi
+done
 
 # Trusted publishing does not create an npm session: npm exchanges GitHub's
 # short-lived OIDC identity only when `npm publish` runs, and `npm whoami` cannot

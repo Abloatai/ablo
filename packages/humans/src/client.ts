@@ -18,7 +18,6 @@ import type {
   InferCreate,
   InferRow,
 } from '@abloatai/transaction/schema/schema';
-import type { PresenceStream } from '@abloatai/transaction/types/streams';
 import type { InstanceCache } from './local/InstanceCache.js';
 import type { SyncStoreContract } from './react/context.js';
 import type { SyncWebSocket, CoreSyncEventMap } from './local/sync/SyncWebSocket.js';
@@ -31,6 +30,7 @@ import type {
 import type { EffectiveAuthority } from '@abloatai/transaction/auth';
 import type { ReadDependency } from '@abloatai/transaction/coordination';
 import type { CapturedRow } from '@abloatai/transaction/transport/http';
+import type { ReactivePresence } from './presence/index.js';
 export type { LocalReadOptions } from './local/client/resourceTypes.js';
 
 /** The typed sync engine client — one property per model in the schema */
@@ -232,20 +232,15 @@ export type AbloClient<S extends SchemaRecord> = {
    */
   readonly syncStatus: SyncStatus;
 
+  /**
+   * Session-owned live activity projected from this client's existing
+   * connection. Use `active` for every visible activity, `others` to exclude
+   * this session, and `forModel(model, id?)` for a model-native view.
+   */
+  readonly presence: ReactivePresence;
+
   /** The underlying schema */
   readonly schema: Schema<S>;
-
-  /**
-   * A real-time presence livestream — who else is connected on this engine's
-   * sync groups, what they're doing, and a write surface for announcing this
-   * user's own activity. It rides the engine's existing WebSocket; opening a
-   * participant for presence does not open a second socket. See
-   * {@link PresenceStream}.
-   *
-   * The reference is stable for the engine's lifetime — the underlying connection
-   * is rotated on `dispose()`, but this object stays the same.
-   */
-  readonly presence: PresenceStream;
 
   /**
    * @internal The supported coordination API is `ablo.<model>.claim`. This

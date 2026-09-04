@@ -3,6 +3,7 @@ import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, z } from '../../schema/index.js';
 import { PROTOCOL_VERSION } from '../../wire/protocolVersion.js';
 import type { CredentialProviderResult } from '../../auth/credentialResult.js';
+import { createPresenceSessionSource } from '../../presence/session.js';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 const NOW = '2026-08-30T12:00:00.000Z';
@@ -61,6 +62,13 @@ class FakeWebSocket {
   open(): void {
     this.readyState = FakeWebSocket.OPEN;
     this.onopen?.();
+    this.receive({
+      type: 'presence_session',
+      payload: {
+        presenceSessionId: 'b6741f5a-e982-4f9c-916b-2d247b8d4646',
+        resumed: FakeWebSocket.instances.length > 1,
+      },
+    });
   }
 
   receive(frame: Record<string, unknown>): void {
@@ -269,13 +277,26 @@ describe('agent WebSocket transport', () => {
 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(socket.protocols).toContain('ablo.bearer.rk_agent_1');
-    expect(socket.sent.map((frame) => frame.type)).toEqual([
-      'presence_update',
-      'sync_request',
-    ]);
-    expect(socket.sent[1]).toMatchObject({
+    expect(socket.sent.map((frame) => frame.type)).toEqual(['sync_request']);
+    expect(socket.sent[0]).toMatchObject({
       type: 'sync_request',
       payload: { protocolVersion: PROTOCOL_VERSION },
+    });
+
+    session.presence.command({
+      type: 'read.upsert',
+      activityId: 'read-item',
+      target: { model: 'items', id: 'item-1' },
+      ttlMs: 5_000,
+    });
+    expect(socket.sent.at(-1)).toEqual({
+      type: 'presence_command',
+      payload: {
+        type: 'read.upsert',
+        activityId: 'read-item',
+        target: { model: 'items', id: 'item-1' },
+        ttlMs: 5_000,
+      },
     });
 
     const committed = session.commit({
@@ -339,6 +360,33 @@ describe('agent WebSocket transport', () => {
     await expect(committed).resolves.toMatchObject({ status: 'confirmed', lastSyncId: 8 });
     await expect(claimed).resolves.toMatchObject({ claimId: 'claim-1', fenceToken: 4 });
     await expect(subscribed).resolves.toEqual({ syncGroups: ['item:item-1'] });
+    await session.close();
+  });
+
+  it('retains the server-issued presence session across reconnects', async () => {
+    const presenceSession = createPresenceSessionSource();
+    const opening = createWebSocketSession({
+      access: access('rk_agent_1'),
+      presenceSession,
+      reconnectDelay: 1,
+      maxReconnectDelay: 1,
+    });
+    await flush();
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    const session = await opening;
+    const presenceSessionId = 'f2fef437-7280-453d-9e46-b00c7639c375';
+    first.receive({
+      type: 'presence_session',
+      payload: { presenceSessionId, resumed: false },
+    });
+    expect(presenceSession.get()).toBe(presenceSessionId);
+
+    first.serverClose(1006, 'network_lost');
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(FakeWebSocket.instances[1]!.protocols).toContain(
+      `ablo.presence.${presenceSessionId}`,
+    );
     await session.close();
   });
 

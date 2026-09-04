@@ -138,11 +138,6 @@ export class MockWebSocket {
   // Test control: presence
   // ─────────────────────────────────────────────
 
-  /** Emits a `presence_update` event carrying the given payload. */
-  simulatePresenceUpdate(data: Record<string, unknown>): void {
-    this.emit('presence_update', data);
-  }
-
   // ─────────────────────────────────────────────
   // Assertions
   // ─────────────────────────────────────────────

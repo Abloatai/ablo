@@ -63,6 +63,15 @@ class MockGlobalWebSocket {
       if (this.onopen) {
         this.onopen(new Event('open'));
       }
+      this.onmessage?.(new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'presence_session',
+          payload: {
+            presenceSessionId: '00000000-0000-4000-8000-000000000001',
+            resumed: false,
+          },
+        }),
+      }));
     });
   }
 

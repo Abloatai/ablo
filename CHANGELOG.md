@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.62.0
+
+Every live client now exposes one session-owned `ablo.presence` projection.
+`active` shows the current session's announced activity and `others` shows the
+other visible sessions. The reactive client adds `forModel(model, id?)` to
+narrow the same projection without opening another connection. Read, claim,
+create, update, and delete activity share one typed, model-addressable contract
+and remain attributable to their originating human or agent session.
+
+Claims and presence now have separate owners: the durable claim authority
+decides admission, queuing, fencing, expiry, and release, while presence
+projects that lifecycle for live collaborators. Cross-replica HTTP callers
+resolve and release claims against the shared authority instead of a
+process-local roster. An object-form claim also returns its protected row
+snapshot in the acquisition request, removing the post-grant read race and an
+extra round trip.
+
+This replaces the earlier participant-oriented presence stream and its raw
+wire event vocabulary. Migrate `PresenceStream`, `Peer`, `Activity`,
+`PresenceUpdate*`, and `PresenceKind` consumers to `Ablo.Presence`,
+`Ablo.PresenceSession`, and `Ablo.PresenceActivity`; read the projection through
+`ablo.presence.active`, `ablo.presence.others`, or
+`ablo.presence.forModel(model, id?)`. The low-level `presence_update` event,
+frame-handler members, presence schemas, and claim-stream participant setters
+are removed because session identity and typed presence snapshot/patch frames
+now own that lifecycle.
+
+Admission and other transient failures now expose machine-actionable
+`recovery`, `retryable`, and `retryAfterSeconds` fields through the branded
+package, including session issuance and headless model requests. The headless
+client automatically replays an admission-rejected request after the requested
+delay, without restarting the surrounding claim workflow. Queued HTTP claims
+heartbeat through their known model and row target, so one holder releasing
+cannot make the next queued ticket appear lost during promotion. A visibility
+miss while the fence is minted is retried only inside the ticket's last
+server-acknowledged lease window.
+
 ## 0.61.0
 
 ### Existing database connections repair in place

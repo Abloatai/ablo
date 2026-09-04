@@ -57,6 +57,7 @@ import {
   type ClaimState,
   type ClaimTargetBody,
 } from '../../claims/contract.js';
+import { CLAIM_CONTINUATION_HEADER } from '../../claims/httpContinuation.js';
 import {
   modelListResponseSchema,
   modelReadResponseSchema,
@@ -92,6 +93,9 @@ import { credentialToken } from '../../auth/credentialResult.js';
 import { createSessionAccess } from '../../sessions/index.js';
 import { parseIdentityResolveResponse } from '../../auth/schemas.js';
 import type { EffectiveAuthority } from '../../auth/capability.js';
+import {
+  PRESENCE_SESSION_HEADER,
+} from '../../presence/session.js';
 
 import {
   claimFromModelClaim,
@@ -163,12 +167,30 @@ import { resolveDurableWrites } from '../../commit/durableWrites.js';
 import { createHttpReadOnChange } from './subscription.js';
 import { awaitClaimGrantOverHttp } from './claimWait.js';
 import type { CommitFrameOperation } from '../websocket/commitFrames.js';
+import { retryAfterSecondsFromHeader } from '../../wire/rateLimit.js';
 
 /** @internal Default per-request deadline for the private HTTP transport. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const HTTP_CONFIRMATION_POLL_INTERVAL_MS = 250;
 const ignoreBestEffortClaimReleaseFailure = (): undefined => undefined;
 type CommitResponse = CommitReceiptWire;
+
+function waitForHttpRetry(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException('This operation was aborted', 'AbortError'));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException('This operation was aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 /** @internal Constructed only by the typed HTTP facade. */
 export function createHttpTransport(options: HttpTransportOptions): HttpTransport {
@@ -368,7 +390,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       headers[PROTOCOL_VERSION_HEADER] = String(sealedProtocolVersion);
     }
 
-    return headers;
+    return options.presenceSession?.withHeader(headers) ?? headers;
   }
 
   async function activeCredential(): Promise<CredentialProviderResult> {
@@ -412,18 +434,46 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
    * the commit paths do with their receipt schema. Everywhere else, go through
    * {@link requestJson}, which will not let a response past unvalidated.
    */
+  function claimContinuationId(
+    path: string,
+    method: string | undefined,
+    body: BodyInit | null | undefined,
+  ): string | null {
+    if ((method !== 'PATCH' && method !== 'DELETE') || !/^\/v1\/models\/[^/]+\/[^/]+$/.test(path)) {
+      return null;
+    }
+    if (typeof body !== 'string') return null;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (
+        typeof parsed === 'object' && parsed !== null &&
+        typeof (parsed as { claim?: unknown }).claim === 'string' &&
+        (parsed as { claim: string }).claim.length > 0 &&
+        Number.isSafeInteger((parsed as { fenceToken?: unknown }).fenceToken)
+      ) {
+        return (parsed as { claim: string }).claim;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   async function performRequest(
     path: string,
     init: RequestInit & {
       readonly idempotencyKey?: string | null;
       readonly sealedProtocolVersion?: number;
     },
-    skipReady = false
+    skipReady = false,
+    retryDeadline?: number,
   ): Promise<unknown> {
     if (!skipReady) await prepare();
     const { idempotencyKey, sealedProtocolVersion, ...requestInit } = init;
     const headers = await authHeaders(sealedProtocolVersion);
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    const continuedClaimId = claimContinuationId(path, requestInit.method, requestInit.body);
+    if (continuedClaimId) headers[CLAIM_CONTINUATION_HEADER] = continuedClaimId;
 
     // Deadline: abort the request after `timeoutMs` so a black-holed server
     // can't hang the caller forever (fetch has NO default timeout in browsers,
@@ -442,12 +492,15 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
     }
     let timedOut = false;
+    const attemptTimeoutMs = retryDeadline !== undefined
+      ? Math.max(1, retryDeadline - Date.now())
+      : requestTimeoutMs;
     const deadline =
-      requestTimeoutMs > 0
+      attemptTimeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
             controller.abort();
-          }, requestTimeoutMs)
+          }, attemptTimeoutMs)
         : null;
 
     let res: Response;
@@ -461,6 +514,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           ...(requestInit.headers as Record<string, string> | undefined),
         },
       });
+      options.presenceSession?.establishFromHeader(
+        res.headers.get(PRESENCE_SESSION_HEADER),
+      );
       // Keep the deadline armed while the body streams — a server that sends
       // headers then stalls the body is the same hang with better manners.
       bodyText = await res.text();
@@ -487,7 +543,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       throw translateHttpError(
         res.status,
         body ?? `Ablo API request failed: ${res.status} ${res.statusText}`,
-        res.headers.get('x-request-id') ?? undefined
+        res.headers.get('x-request-id') ?? undefined,
+        { retryAfterSeconds: retryAfterSecondsFromHeader(res.headers.get('retry-after')) },
       );
     }
 
@@ -504,7 +561,24 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   ): Promise<unknown> {
     requestStarted();
     try {
-      return await performRequest(path, init, skipReady);
+      const retryDeadline = requestTimeoutMs > 0 ? Date.now() + requestTimeoutMs : null;
+      for (;;) {
+        try {
+          return await performRequest(path, init, skipReady, retryDeadline ?? undefined);
+        } catch (error) {
+          const capacity = error instanceof AbloError && error.code === 'instance_at_capacity';
+          const retryAfterSeconds = capacity ? error.retryAfterSeconds : undefined;
+          if (retryAfterSeconds === undefined) throw error;
+
+          // Admission rejects before the route runs, so replaying this exact
+          // request is safe even for POST. Keep the retry below the public
+          // operation: a held-claim write must not unwind, release its lease,
+          // re-read different data, and then reuse the old idempotency key.
+          const delayMs = retryAfterSeconds * 1_000;
+          if (retryDeadline !== null && Date.now() + delayMs >= retryDeadline) throw error;
+          await waitForHttpRetry(delayMs, init.signal ?? undefined);
+        }
+      }
     } finally {
       requestFinished();
     }
@@ -1437,8 +1511,13 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       typeof (value as { id?: unknown }).id === 'string' &&
       typeof (value as { release?: unknown }).release === 'function';
     const acquireClaim = async (
-      params: ClaimParams<Fields>
-    ): Promise<{ id: string; fenceToken?: number }> => {
+      params: ClaimParams<Fields>,
+      includeSnapshot = false,
+    ): Promise<{
+      id: string;
+      fenceToken?: number;
+      snapshot?: { data: unknown; readAt: number };
+    }> => {
       const contention = resolveClaimContentionOptions(params);
       if (options.dispatchClaim) {
         const claimId = createClientTxId();
@@ -1514,6 +1593,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         // `queue` (default true) → queue behind the holder; false → fail-fast
         // with AbloClaimedError (work-distribution dedup).
         queue: contention.wait,
+        ...(includeSnapshot ? { snapshot: true } : {}),
       };
       let body: z.infer<typeof claimAcquireResponseSchema>;
       try {
@@ -1541,11 +1621,33 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // the manual ticket surface.)
       if (body.status === 'queued') {
         try {
+          // Keep the target the caller already supplied while it waits. The
+          // id-only heartbeat route has to rediscover a queued ticket through
+          // the entity's current holder; release and promotion are separate
+          // authority writes, so that anchor legitimately disappears during
+          // handoff. The model route addresses the queue directly and cannot
+          // mistake that transition for a lost ticket.
+          const targetAwareClaims = {
+            ...claims,
+            heartbeat: ({ claimId, ttl }: { claimId: string; ttl?: string | number }) =>
+              requestJson(
+                `${claimPath(params.id)}/heartbeat`,
+                {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    claimId,
+                    ...(ttl !== undefined ? { ttl } : {}),
+                  }),
+                },
+                claimHeartbeatReplySchema,
+              ),
+          } satisfies Pick<HttpClaimsResource, 'heartbeat' | 'retrieve' | 'release'>;
           return await awaitClaimGrantOverHttp(
-            claims,
+            targetAwareClaims,
             `${name}/${params.id}`,
             body,
             contention,
+            params.ttl !== undefined ? toMs(params.ttl) : DEFAULT_CLAIM_TTL_MS,
           );
         } catch (error) {
           const normalized = error instanceof AbloError
@@ -1565,9 +1667,11 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       });
       // The lease's own fields are mirrored at the top level, the same place
       // the poll puts them — one reader for both answers.
-      return body.fenceToken !== undefined
-        ? { id: body.id, fenceToken: body.fenceToken }
-        : { id: body.id };
+      return {
+        id: body.id,
+        ...(body.fenceToken !== undefined ? { fenceToken: body.fenceToken } : {}),
+        ...(body.snapshot ? { snapshot: body.snapshot } : {}),
+      };
     };
     const releaseClaim = (
       params: ClaimLookupParams<T> | ClaimParams<Fields> | Claim<T>,
@@ -1626,9 +1730,13 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       const params: ClaimParams<Fields> = rowFree
         ? { ...(opts ?? {}), id: idOrParams }
         : idOrParams;
-      let acquired: { id: string; fenceToken?: number };
+      let acquired: {
+        id: string;
+        fenceToken?: number;
+        snapshot?: { data: unknown; readAt: number };
+      };
       try {
-        acquired = await acquireClaim(params);
+        acquired = await acquireClaim(params, !rowFree);
       } catch (error) {
         // The try-claim: a held target is an expected outcome of `queue:
         // false`, not an error — resolve `null` and let the caller move on.
@@ -1644,7 +1752,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         }
         throw error;
       }
-      const { id: claimId, fenceToken } = acquired;
+      const { id: claimId, fenceToken, snapshot } = acquired;
       observability?.captureClaim({
         phase: 'acquired',
         claimId,
@@ -1709,6 +1817,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         [Symbol.asyncDispose]: release,
       };
       if (rowFree) return lease;
+
+      if (snapshot) {
+        return { ...lease, readAt: snapshot.readAt, data: snapshot.data as T };
+      }
 
       const { data, stamp } = await readModel<T>(name, { id: params.id });
       // A held claim hands back a snapshot; the typed `HeldClaim.data` is `T`.

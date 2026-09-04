@@ -1,5 +1,28 @@
 # @abloatai/transaction
 
+## 0.62.0
+
+### Minor Changes
+
+- Add the transport-neutral presence contract and projection store for
+  session-owned, model-addressable read, claim, create, update, and delete
+  activity. Separate durable claim authority from live presence projection,
+  resolve HTTP claim lifecycles across replicas, and return a protected row
+  snapshot with object-form claim acquisition.
+
+### Patch Changes
+
+- Make recovery decisions machine-actionable on every `AbloError` through
+  `recovery` and `retryable`, and preserve HTTP `Retry-After` as
+  `retryAfterSeconds` for both model requests and session issuance. Headless
+  requests honor that delay and replay the exact admission-rejected request
+  within their deadline, below claim and idempotency workflow boundaries. HTTP
+  model claim waiters heartbeat through their known row target instead of
+  rediscovering it from the current holder, preventing release-to-promotion
+  handoff from abandoning a live FIFO ticket as `claim_lost`. While the fence
+  is minted, a visibility miss is retried only inside the ticket's last
+  server-acknowledged lease window, not an arbitrary grace timer.
+
 ## 0.61.0
 
 ## 0.60.0

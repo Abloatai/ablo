@@ -97,6 +97,8 @@ export interface BootstrapOptions {
    * {@link BootstrapFetcher.setAuthToken}.
    */
   getAuthToken?: AuthTokenGetter;
+  /** Server-bound attribution shared with the owning WebSocket. */
+  presenceSession?: import('@abloatai/transaction/presence').PresenceSessionSource;
   /** The owning client's runtime. Defaults to the module-global bridge. */
   runtime?: RuntimeContext;
 }
@@ -186,13 +188,14 @@ function classifyRequestFailure(
 }
 
 export class BootstrapFetcher {
-	  private options: Required<Omit<BootstrapOptions, 'baseUrl' | 'instantModels' | 'organizationId' | 'cacheScope' | 'getAuthToken' | 'runtime'>> & {
+	  private options: Required<Omit<BootstrapOptions, 'baseUrl' | 'instantModels' | 'organizationId' | 'cacheScope' | 'getAuthToken' | 'presenceSession' | 'runtime'>> & {
 	    baseUrl: string;
 	    instantModels?: string[];
 	    cacheScope: string | null;
 	    organizationId?: string;
 	    authToken?: string;
 	    getAuthToken?: AuthTokenGetter;
+	    presenceSession?: import('@abloatai/transaction/presence').PresenceSessionSource;
 	    runtime?: RuntimeContext;
 	  };
 
@@ -311,7 +314,12 @@ export class BootstrapFetcher {
     try {
       const res = await fetch(`${this.options.baseUrl}/schema`, {
         method: 'GET',
-        headers: withAuthHeaders(this.options.getAuthToken, {}, this.options.authToken),
+        headers: withAuthHeaders(
+          this.options.getAuthToken,
+          {},
+          this.options.authToken,
+          this.options.presenceSession,
+        ),
       });
       if (!res.ok) throw new Error(`schema read-back ${res.status}`);
       const body = (await res.json()) as { models?: unknown };
@@ -768,6 +776,7 @@ export class BootstrapFetcher {
 	      this.options.getAuthToken,
 	      { 'Content-Type': 'application/json' },
 	      this.options.authToken,
+	      this.options.presenceSession,
 	    );
 
     const controller = new AbortController();
@@ -977,7 +986,7 @@ export class BootstrapFetcher {
 	          'Content-Type': 'application/json',
 	          'Cache-Control': 'no-cache, no-store, must-revalidate',
 	          Pragma: 'no-cache',
-	        }, this.options.authToken),
+	        }, this.options.authToken, this.options.presenceSession),
         signal: controller.signal,
         cache: 'no-store', // Force browser to not cache
       });
@@ -1049,7 +1058,7 @@ export class BootstrapFetcher {
         method: 'GET',
         headers: withAuthHeaders(this.options.getAuthToken, {
           'Content-Type': 'application/json',
-        }, this.options.authToken),
+        }, this.options.authToken, this.options.presenceSession),
         signal: controller.signal,
       });
     } catch (error) {

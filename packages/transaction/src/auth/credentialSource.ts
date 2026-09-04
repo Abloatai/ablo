@@ -12,6 +12,7 @@
 // as part of the wire contract shared between client and server. They are
 // re-exported here so this module stays a stable import site for them.
 export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from '../wire/protocol.js';
+import type { PresenceSessionSource } from '../presence/session.js';
 
 export interface AuthCredentialSource {
   /**
@@ -26,12 +27,15 @@ export interface AuthCredentialSource {
   authorizationHeader(): string | undefined;
   withAuthHeaders(headers?: Record<string, string>): Record<string, string>;
   applyAuthQueryParam(params: URLSearchParams, paramName?: string): void;
+  /** Session attribution shared by WebSocket and HTTP; it never grants authority. */
+  readonly presenceSession?: PresenceSessionSource;
 }
 
 export type AuthTokenGetter = () => string | null | undefined;
 
 export function createAuthCredentialSource(
   initialToken?: string | null,
+  presenceSession?: PresenceSessionSource,
 ): AuthCredentialSource {
   let authToken = normalizeToken(initialToken);
 
@@ -45,11 +49,15 @@ export function createAuthCredentialSource(
     },
     withAuthHeaders(headers = {}) {
       const authorization = authorizationHeaderForToken(authToken);
-      return authorization ? { ...headers, Authorization: authorization } : { ...headers };
+      const authenticated = authorization
+        ? { ...headers, Authorization: authorization }
+        : { ...headers };
+      return presenceSession?.withHeader(authenticated) ?? authenticated;
     },
     applyAuthQueryParam(params, paramName = 'authorization') {
       applyAuthToQueryParams(params, () => authToken, paramName);
     },
+    ...(presenceSession ? { presenceSession } : {}),
   };
 }
 
@@ -71,11 +79,15 @@ export function withAuthHeaders(
   getAuthToken: AuthTokenGetter | undefined,
   headers: Record<string, string> = {},
   fallbackToken?: string | null,
+  presenceSession?: PresenceSessionSource,
 ): Record<string, string> {
   const authorization = authorizationHeaderForToken(
     resolveAuthToken(getAuthToken, fallbackToken),
   );
-  return authorization ? { ...headers, Authorization: authorization } : { ...headers };
+  const authenticated = authorization
+    ? { ...headers, Authorization: authorization }
+    : { ...headers };
+  return presenceSession?.withHeader(authenticated) ?? authenticated;
 }
 
 export function applyAuthToQueryParams(

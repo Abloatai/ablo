@@ -76,6 +76,7 @@ function fakeCollaboration(
   overrides?: Partial<ModelCollaboration>,
 ): ModelCollaboration {
   const collaboration: ModelCollaboration = {
+    presence: jest.fn(() => []),
     readPoint: jest.fn(() => Promise.reject(new Error('not used'))),
     commitBatch: jest.fn(() => Promise.reject(new Error('not used'))),
     createClaim: jest.fn(() => Promise.resolve({
@@ -97,6 +98,20 @@ function fakeCollaboration(
   };
   return Object.assign(collaboration, overrides);
 }
+
+describe('ModelOperations.presence', () => {
+  it('keeps one callable projection and delegates the model and optional record id', () => {
+    const project = jest.fn(() => []);
+    const { proxy } = makeProxy(fakeCollaboration({ presence: project }));
+    const presence = proxy.presence;
+
+    expect(proxy.presence).toBe(presence);
+    expect(presence()).toEqual([]);
+    expect(presence('item-1')).toEqual([]);
+    expect(project).toHaveBeenNthCalledWith(1, 'Item', undefined);
+    expect(project).toHaveBeenNthCalledWith(2, 'Item', 'item-1');
+  });
+});
 
 function queuedClaim(id: string, heldBy: string, position: number): Claim {
   return {

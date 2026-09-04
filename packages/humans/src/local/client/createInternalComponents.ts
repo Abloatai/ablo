@@ -90,6 +90,7 @@ export function createInternalComponents<S extends SchemaRecord>(
     syncGroups: options.syncGroups,
     instantModels: deriveInstantModels(schema),
     getAuthToken: auth?.getAuthToken,
+    presenceSession: auth?.presenceSession,
     runtime,
   });
 
@@ -120,6 +121,7 @@ export function createInternalComponents<S extends SchemaRecord>(
     schema,
     baseUrl: bootstrapBaseUrl,
     getAuthToken: auth?.getAuthToken,
+    presenceSession: auth?.presenceSession,
     runtime,
     // The one canonical log position; the loader reads its floor when a query
     // leaves so a late answer cannot overwrite a row the pool already knows to

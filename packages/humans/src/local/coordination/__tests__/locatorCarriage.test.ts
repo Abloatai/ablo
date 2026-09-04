@@ -26,19 +26,16 @@ import {
   claimBeginPayloadSchema,
   claimQueueEntrySchema,
   modelTargetSchema,
-  presenceActivitySchema,
   subTarget,
   wireTarget,
   modelTarget,
   streamTarget,
 } from '@abloatai/transaction/coordination';
 import { claimRequestSchema } from '@abloatai/transaction/wire';
-import { WsTransport } from '@abloatai/transaction/transport/websocket';
 import {
   createClaimStream,
   type ClaimTransport,
 } from '../../sync/createClaimStream.js';
-import { createPresenceStream } from '../../../presenceStream.js';
 
 /** The locator members below the entity — everything a claim can narrow by. */
 const LOCATOR_MEMBERS = Object.keys(targetRefSchema.shape).filter(
@@ -152,23 +149,13 @@ describe('the sub-entity locator survives every carrier', () => {
     );
   });
 
-  it.each(LOCATOR_MEMBERS)('the presence activity frame carries %s', (member) => {
-    const activity = presenceActivitySchema.parse({
-      ...ENTITY,
-      action: 'editing',
-      [member]: SAMPLE[member],
-    });
-    expect(subTarget(activity)[member as keyof TargetSlice]).toEqual(
-      SAMPLE[member],
-    );
-  });
 });
 
 describe('the locator survives construction, not only parsing', () => {
   it.each(LOCATOR_MEMBERS)(
     'the claim handle a caller reads back carries %s',
     (member) => {
-      const stream = createClaimStream({ participantId: 'me' });
+      const stream = createClaimStream({});
       const handle = stream.claim(targetWith(member));
       expect(subTarget(handle.target)[member as keyof TargetSlice]).toEqual(
         SAMPLE[member],
@@ -178,7 +165,7 @@ describe('the locator survives construction, not only parsing', () => {
 
   it.each(LOCATOR_MEMBERS)('claim() puts %s on the wire', (member) => {
     const transport = recordingTransport();
-    const stream = createClaimStream({ participantId: 'me' });
+    const stream = createClaimStream({});
     stream.attach(transport);
     stream.claim(targetWith(member));
 
@@ -189,19 +176,6 @@ describe('the locator survives construction, not only parsing', () => {
     );
   });
 
-  it.each(LOCATOR_MEMBERS)(
-    'a presence verb announces %s about the entity it names',
-    (member) => {
-      const stream = createPresenceStream({
-        participantId: 'me',
-        syncGroups: [],
-      });
-      stream.editing(targetWith(member));
-      expect(
-        subTarget(stream.self.activity)[member as keyof TargetSlice],
-      ).toEqual(SAMPLE[member]);
-    },
-  );
 });
 
 describe('the locator survives the hops that build a frame, not only the ones that parse it', () => {
@@ -219,7 +193,7 @@ describe('the locator survives the hops that build a frame, not only the ones th
         ...subTarget({ [member]: SAMPLE[member] }),
       };
       const transport = recordingTransport();
-      const stream = createClaimStream({ participantId: 'me' });
+      const stream = createClaimStream({});
       stream.attach(transport);
       stream.claim({
         ...streamTarget(modelSpelled),
@@ -235,38 +209,6 @@ describe('the locator survives the hops that build a frame, not only the ones th
     },
   );
 
-  it.each(LOCATOR_MEMBERS)(
-    'a peer\'s activity read off the wire keeps %s',
-    (member) => {
-      // The INGEST side of presence. It rebuilt `Peer.activity` member by
-      // member, so a set-scoped peer arrived announcing the whole row — 45
-      // lines from the outbound path that had already been repaired.
-      const transport = new WsTransport({ deferConnect: true });
-      const stream = createPresenceStream({
-        participantId: 'me',
-        syncGroups: [],
-      });
-      stream.attach(transport);
-
-      transport.emit('presence_update', {
-        kind: 'update',
-        userId: 'peer-1',
-        status: 'online',
-        activity: presenceActivitySchema.parse({
-          ...ENTITY,
-          action: 'editing',
-          [member]: SAMPLE[member],
-        }),
-      });
-
-      const peer = stream.others[0];
-      if (!peer) throw new Error('the presence frame never reached the roster');
-      expect(wireTarget(peer.activity)).toEqual(ENTITY);
-      expect(subTarget(peer.activity)[member as keyof TargetSlice]).toEqual(
-        SAMPLE[member],
-      );
-    },
-  );
 });
 
 describe('the three spellings of the entity half agree', () => {

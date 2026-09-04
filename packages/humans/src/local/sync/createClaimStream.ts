@@ -5,10 +5,8 @@
  * everyone else's, and watch the wait queue when a claim is contended.
  *
  * The stream is built directly on the sync WebSocket and shares that one
- * connection. It learns about other participants' claims from the same
- * `presence_update` frames the {@link createPresenceStream} presence stream
- * consumes — the server piggybacks each participant's `activeClaims` on every
- * presence frame — and sends its own claims as `claim_begin` and
+ * connection. It learns about other sessions' claims from the normalized
+ * presence projection and sends its own claims as `claim_begin` and
  * `claim_abandon` frames.
  *
  * Wire frames:
@@ -16,16 +14,15 @@
  *       entityId, description, field?, estimatedMs? }`.
  *   • Outbound `claim_abandon` — release it: `{ claimId, entityType?,
  *       entityId? }`.
- *   • Inbound, via presence — `event.activeClaims`, each stamped with
- *       `declaredAt` and `expiresAt`.
+ *   • Inbound, via presence — authoritative `claim` activities.
  *   • Inbound `claim_rejected` — the server refused the claim, with conflict
  *       metadata.
  */
 
 import type {
   WsTransport,
-  PresenceUpdate,
 } from '@abloatai/transaction/transport/websocket';
+import type { PresenceSession } from '@abloatai/transaction/presence';
 import type {
   ClaimOptions,
   ClaimTarget,
@@ -79,10 +76,13 @@ function claimLabel(type: string, id: string, field?: string): string {
 }
 
 export interface ClaimStreamConfig {
-  /** Identity used to filter our own active claims out of `others`. */
-  participantId: string;
   /** Where the coordination trace is logged. Defaults to silent. */
   logger?: Logger;
+}
+
+export interface ClaimPresenceSource {
+  readonly others: readonly PresenceSession[];
+  onChange(listener: () => void): () => void;
 }
 
 /**
@@ -107,14 +107,6 @@ export interface AttachableClaimStream extends ClaimStream {
    */
   claim(target: PresenceTarget, opts?: ClaimOptions, claimId?: string): Claim;
   attach(transport: ClaimTransport): void;
-  /**
-   * Seeds the participant identity once the host resolves it. The stream can
-   * be built before identity is known — a hosted client learns who it is
-   * from its credential's scope during connect — and until then the
-   * construction-time id (possibly empty) would let the participant's own
-   * claims into `others`. Idempotent; later frames filter on the new id.
-   */
-  setParticipant(participant: { id: string }): void;
   dispose(): void;
 }
 
@@ -144,10 +136,8 @@ interface OwnGrant {
 export function createClaimStream(
   config: ClaimStreamConfig,
   transport: ClaimTransport | null = null,
+  presence: ClaimPresenceSource | null = null,
 ): AttachableClaimStream {
-  // Mutable: the host seeds the resolved identity via `setParticipant` once
-  // it is known; the own-claim filter always reads the current value.
-  let participantId = config.participantId;
   const logger = config.logger ?? noopLogger;
 
   // ── State: others' open claims, keyed by claimId ───────────────
@@ -247,54 +237,7 @@ export function createClaimStream(
     if (attached) return;
     attached = t;
 
-    // (1) Inbound presence frames carry every participant's full
-    //     active-claim set. Prune previous claims by holder, then
-    //     re-add from the frame — the frame is authoritative for that
-    //     participant's open claims at that moment.
-    unsubs.push(
-      t.subscribe('presence_update', (event: PresenceUpdate) => {
-        if (!event.userId) return;
-        if (event.userId === participantId) return;
-
-        let mutated = false;
-
-        if (event.kind === 'leave') {
-          for (const [id, claim] of activeByClaimId) {
-            if (claim.heldBy === event.userId) {
-              activeByClaimId.delete(id);
-              mutated = true;
-            }
-          }
-          if (mutated) notifyListeners();
-          return;
-        }
-
-        for (const [id, claim] of activeByClaimId) {
-          if (claim.heldBy === event.userId) {
-            activeByClaimId.delete(id);
-            mutated = true;
-          }
-        }
-        for (const claim of event.activeClaims ?? []) {
-          // Terminal-status entries (committed / expired / canceled) are
-          // one-shot "this claim ended" signals. The holder sweep above
-          // already removed the prior active entry; skipping the re-add
-          // drops it from `others`, which is what resolves a contender's
-          // `settled()`. Absent status means active (wire back-compat).
-          if (claim.status && claim.status !== 'active') continue;
-          observeForeignClaim(
-            event.userId,
-            claim,
-            event.participantKind,
-            event.isAgent,
-          );
-          mutated = true;
-        }
-        if (mutated) notifyListeners();
-      }),
-    );
-
-    // (2) Server-side rejection frames.
+    // Server-side rejection frames.
     unsubs.push(
       t.subscribe('claim_rejected', (rejection) => {
         if (!rejection.claimId) return;
@@ -475,6 +418,46 @@ export function createClaimStream(
   }
 
   if (transport) attach(transport);
+
+  const refreshPresenceClaims = (): void => {
+    if (presence === null) return;
+    activeByClaimId.clear();
+    for (const session of presence.others) {
+      for (const activity of session.activities) {
+        if (
+          activity.operation !== 'claim'
+          || activity.source !== 'claim'
+          || activity.target.id === undefined
+        ) continue;
+        const claimId = activity.id.startsWith('claim:')
+          ? activity.id.slice('claim:'.length)
+          : activity.id;
+        observeForeignClaim(
+          session.participant.id,
+          {
+            claimId,
+            entityType: activity.target.model,
+            entityId: activity.target.id,
+            ...(activity.target.field !== undefined
+              ? { field: activity.target.field }
+              : {}),
+            ...(activity.target.fields !== undefined
+              ? { fields: activity.target.fields }
+              : {}),
+            description: 'claim',
+            declaredAt: Date.parse(activity.startedAt),
+            expiresAt: Date.parse(activity.expiresAt),
+          },
+          session.participant.kind,
+        );
+      }
+    }
+    notifyListeners();
+  };
+  if (presence !== null) {
+    refreshPresenceClaims();
+    unsubs.push(presence.onChange(refreshPresenceClaims));
+  }
 
   // ── Outbound ────────────────────────────────────────────────────
   function sendBegin(claimId: string, claim: OwnClaim): void {
@@ -705,9 +688,6 @@ export function createClaimStream(
       );
     },
     attach,
-    setParticipant(participant: { id: string }): void {
-      participantId = participant.id;
-    },
     dispose(): void {
       for (const off of unsubs) off();
       unsubs.length = 0;

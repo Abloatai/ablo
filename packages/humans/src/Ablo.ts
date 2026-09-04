@@ -99,7 +99,7 @@ export type Ablo<S extends SchemaRecord> = AbloClient<S>;
  * const ablo = Ablo({ schema, session: { endpoint: '/api/ablo-session' } });
  * ```
  *
- * Server-side agents, workers, and services use `@abloatai/transaction`.
+ * Server-side agents, workers, and services use `@abloatai/ablo`.
  */
 export function Ablo<
   const S extends SchemaRecord,
@@ -117,7 +117,15 @@ export function Ablo<const S extends SchemaRecord>(
   //    resolver, the base URL, the logger, and this participant's identity —
   //    and fails on a misconfiguration before anything is constructed.
   const prelude = resolveClientPrelude(options);
-  const { internalOptions, authCredentials, logger, url, participantId, kind } = prelude;
+  const {
+    internalOptions,
+    authCredentials,
+    presenceSession,
+    logger,
+    url,
+    participantId,
+    kind,
+  } = prelude;
 
   // 2. The connection, built here in the composition root — before the plugin
   //    list resolves, so `PluginContext.transport` carries the instance a
@@ -134,6 +142,7 @@ export function Ablo<const S extends SchemaRecord>(
         baseUrl: url,
         kind,
         getAuthToken: authCredentials.getAuthToken,
+        presenceSession,
         collaborationEvents: [...(internalOptions.collaborationEvents ?? [])],
         syncGroups: [...(internalOptions.syncGroups ?? [])],
         deferConnect: true,
@@ -223,7 +232,7 @@ export function Ablo<const S extends SchemaRecord>(
 //
 // One default import, with types hung underneath via namespace dots:
 // `import { Ablo } from "@abloatai/humans"` gets the factory, its return type, and
-// every type a typical consumer references (`Ablo.Peer`,
+// every type a typical consumer references (`Ablo.PresenceSession`,
 // and so on) — all purely type-level, with zero runtime cost.
 //
 // The types still live in their canonical homes (`types/streams`, `principal`,
@@ -272,10 +281,10 @@ export namespace Ablo {
   export type Duration = _Streams.Duration;
 
   // ── Real-time multiplayer (flat — heterogeneous cluster) ──────────
-  export type PresenceStream = _Streams.PresenceStream;
+  export type Presence = import('./presence/index.js').ReactivePresence;
+  export type PresenceSession = import('@abloatai/transaction/presence').PresenceSession;
+  export type PresenceActivity = import('@abloatai/transaction/presence').PresenceActivity;
   export type ClaimStream = _Streams.ClaimStream;
-  export type Peer = _Streams.Peer;
-  export type Activity = _Streams.Activity;
   export type Claim = _Streams.Claim;
   export type ClaimRejection = _Streams.ClaimRejection;
   export type ClaimLost = _Streams.ClaimLost;

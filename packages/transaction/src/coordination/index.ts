@@ -62,14 +62,6 @@ export {
   // Commit operation — carries the optimistic write-guard
   commitOperationTypeSchema,
   commitOperationSchema,
-  // Layer 1 — presence
-  presenceKindSchema,
-  presenceActivitySchema,
-  presenceUpdateSchema,
-  presenceUpdatePayloadSchema,
-  // Deprecated alias, removed in 0.36.0 — this line publishes it.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  presenceUpdateFrameSchema,
 } from './schema.js';
 
 // Inferred types, one per schema (plus the standalone aliases).
@@ -113,13 +105,6 @@ export type {
   CommitOperationType,
   CommitOperation,
   AnyCommitOperation,
-  // Layer 1 — presence
-  PresenceKind,
-  PresenceActivity,
-  PresenceUpdate,
-  PresenceUpdatePayload,
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  PresenceUpdateFrame,
 } from './schema.js';
 
 // In-process observation events. These are behavior-facing projections, not

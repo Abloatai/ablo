@@ -143,6 +143,7 @@ import type {
   HttpModelClient,
 } from '@abloatai/transaction/transport/http';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import type { PresenceSession } from '@abloatai/transaction/presence';
 import {
   capturePointRead,
   prepareReadSet,
@@ -177,6 +178,8 @@ type EntityHalf = Pick<ModelTarget, 'model' | 'id'>;
 // `ModelCollaboration<Item>` and `ModelCollaboration<Invoice>` the same type
 // while reading as though they differed.
 export interface ModelCollaboration {
+  /** Session projections already held by this client's one presence store. */
+  presence(model: string, recordId?: string): readonly PresenceSession[];
   /** Exact point evidence from the HTTP read boundary (stamp captured before data). */
   readPoint(model: string, id: string): Promise<{ data: unknown; stamp: number }>;
   /**
@@ -335,6 +338,9 @@ export interface LocalReads<T> {
 interface ReactiveModelSurface<T, Fields = T> {
   /** The synchronous local-graph reads. */
   local: LocalReads<T>;
+
+  /** Sessions currently active on this model, optionally narrowed to one record. */
+  presence(recordId?: string): readonly PresenceSession[];
 
   /**
    * Claim a row so other writers wait or are rejected until you're done, and
@@ -1402,6 +1408,8 @@ export function createModelOperations<T, C>(
 
   const operations: ModelOperations<T, C> = {
     local,
+
+    presence: (recordId?: string) => collaboration?.presence(registeredModelName, recordId) ?? [],
 
     get,
     read,

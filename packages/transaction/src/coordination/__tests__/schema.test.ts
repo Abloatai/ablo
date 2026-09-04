@@ -16,7 +16,6 @@ import {
   claimBeginPayloadSchema,
   claimAbandonPayloadSchema,
   commitOperationSchema,
-  presenceUpdateSchema,
   participantKindFromWire,
 } from '@abloatai/transaction/coordination/schema';
 
@@ -275,46 +274,7 @@ describe('coordination wire schema', () => {
     });
   });
 
-  describe('layer 1 — presence (observation)', () => {
-    it('a presence frame carries activeClaims as canonical claim claims', () => {
-      const parsed = presenceUpdateSchema.safeParse({
-        kind: 'update',
-        userId: 'agent:a',
-        status: 'online',
-        activeClaims: [
-          {
-            claimId: 'i1',
-            entityType: 'Item',
-            entityId: 't1',
-            description: 'editing',
-            declaredAt: 1,
-            expiresAt: 2,
-          },
-        ],
-      });
-      expect(parsed.success).toBe(true);
-    });
-
-    it('a presence frame carries the canonical participantKind, normalizing legacy human', () => {
-      const system = presenceUpdateSchema.safeParse({
-        kind: 'update',
-        userId: 'system:reaper',
-        status: 'online',
-        participantKind: 'system',
-      });
-      expect(system.success).toBe(true);
-      if (system.success) expect(system.data.participantKind).toBe('system');
-
-      const legacy = presenceUpdateSchema.safeParse({
-        kind: 'update',
-        userId: 'u1',
-        status: 'online',
-        participantKind: 'human',
-      });
-      expect(legacy.success).toBe(true);
-      if (legacy.success) expect(legacy.data.participantKind).toBe('user');
-    });
-
+  describe('participant kind parsing', () => {
     it('participantKindFromWire prefers the stamped kind, falls back to isAgent', () => {
       expect(participantKindFromWire('system', false)).toBe('system');
       expect(participantKindFromWire('human', false)).toBe('user'); // legacy normalize

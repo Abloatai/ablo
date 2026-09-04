@@ -245,6 +245,13 @@ describe('BaseSyncedStore session_error routing (4001 credential_expired)', () =
     const reconnect = FakeWebSocket.instances[1];
     if (!reconnect?.onopen) throw new Error('expected a reconnect socket with onopen');
     reconnect.onopen();
+    reconnect.onmessage?.({ data: JSON.stringify({
+      type: 'presence_session',
+      payload: {
+        presenceSessionId: '00000000-0000-4000-8000-000000000001',
+        resumed: true,
+      },
+    }) });
     expect(shell.syncWebSocket().isConnected()).toBe(true);
   });
 

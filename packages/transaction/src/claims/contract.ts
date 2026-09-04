@@ -92,6 +92,12 @@ export const claimRequestSchema = z.object({
    * later on the caller's stream.
    */
   queue: z.boolean().optional(),
+  /**
+   * Return the protected row and its watermark with an immediate grant.
+   * The object-form SDK claim uses this to avoid a second HTTP read; row-free
+   * claims omit it and therefore do not touch row storage.
+   */
+  snapshot: z.boolean().optional(),
 });
 export type ClaimRequest = z.infer<typeof claimRequestSchema>;
 
@@ -211,6 +217,11 @@ export const claimAcquiredResponseSchema = z.object({
   fenceToken: z.number().int().optional(),
   expiresAt: z.number().int().optional(),
   claim: modelClaimSchema,
+  /** Present only when the request asked the server to claim-and-read. */
+  snapshot: z.object({
+    data: z.unknown(),
+    readAt: z.number(),
+  }).optional(),
 });
 export type ClaimAcquiredResponse = z.infer<typeof claimAcquiredResponseSchema>;
 

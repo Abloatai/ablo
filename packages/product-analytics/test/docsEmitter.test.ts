@@ -77,6 +77,11 @@ const source = readFileSync(EMITTER_PATH, 'utf8');
 const emitted = emittedEvents(source);
 
 describe('documentation emitter matches the product event contract', () => {
+  it('uses the documentation-specific ingest route', () => {
+    expect(source).toContain('/api/v1/analytics/docs-events');
+    expect(source).not.toContain('/api/v1/analytics/web-events');
+  });
+
   it('emits at least one event', () => {
     expect(emitted.size).toBeGreaterThan(0);
   });

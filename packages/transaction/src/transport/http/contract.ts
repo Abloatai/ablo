@@ -19,6 +19,7 @@ import type { EffectiveAuthority } from '../../auth/capability.js';
 import type { SessionAccess } from '../../sessions/index.js';
 import type { CommitFrameOperation } from '../websocket/commitFrames.js';
 import type { HttpReadOnChange } from './subscription.js';
+import type { PresenceSessionSource } from '../../presence/session.js';
 
 /** @internal Private options for the schema-agnostic HTTP protocol transport. */
 export type HttpTransportOptions = Omit<HttpClientConfig, 'schema'> & {
@@ -45,6 +46,8 @@ export type HttpTransportOptions = Omit<HttpClientConfig, 'schema'> & {
     readonly entityType: string;
     readonly entityId: string;
   }) => Promise<void>) | undefined;
+  /** @internal Attribution shared with this client's WebSocket session. */
+  readonly presenceSession?: PresenceSessionSource;
 };
 
 /** @internal Private protocol surface wrapped by `AbloHttpClient`. */

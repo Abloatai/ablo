@@ -167,7 +167,7 @@ prepare_release() {
   node scripts/typesafety/check-public-surface.mjs --update
 
   echo ">>> prepare 3/5: committing the release candidate"
-  git add packages/ablo packages/transaction packages/humans packages/agent \
+  git add packages/ablo packages/transaction packages/humans \
     packages/cli docs/ablo .changeset .public-ablo package-lock.json \
     scripts/typesafety/public-surface-baseline.json
   git commit -q -m "release(ablo): $new_version"

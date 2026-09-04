@@ -9,11 +9,13 @@ import type {
 import type { ClientSyncDelta } from '../../observation/contract.js';
 import type { ObserveCursorStore } from '../../client/contract.js';
 import type { SessionAccess } from '../../sessions/source.js';
+import type { PresenceSessionSource } from '../../presence/session.js';
+import type { PresenceCommand } from '../../presence/commands.js';
+import type { PresenceActivity, PresenceSession } from '../../presence/contract.js';
 import type { CommitFrameOperation } from '../websocket/commitFrames.js';
 import type {
   CoreSyncEventMap,
   EventMap,
-  PresenceUpdate,
   SyncWebSocketEventMap,
 } from '../websocket/transport.js';
 
@@ -28,6 +30,7 @@ export interface WebSocketSessionOptions {
   readonly reconnectDelay?: number;
   readonly maxReconnectDelay?: number;
   readonly connectTimeoutMs?: number;
+  readonly presenceSession?: PresenceSessionSource;
 }
 
 export interface WebSocketCommitInput {
@@ -55,12 +58,9 @@ export type WebSocketClaimInput = ClaimBeginPayload & {
 export type WebSocketClaimGrant = ClaimAcquired | ClaimGranted;
 
 export interface WebSocketPresence {
-  update(input?: {
-    readonly status?: 'online' | 'away' | 'offline';
-    readonly customStatus?: string;
-    readonly timezone?: string;
-    readonly activity?: Record<string, unknown>;
-  }): void;
+  readonly active: readonly PresenceActivity[];
+  readonly others: readonly PresenceSession[];
+  command(input: PresenceCommand): void;
 }
 
 export interface WebSocketCollaboration<TEvents extends EventMap<TEvents>> {
@@ -103,4 +103,3 @@ export interface AbloWebSocketSession<
 }
 
 export type WebSocketCoreEvent = keyof CoreSyncEventMap;
-export type WebSocketPresenceUpdate = PresenceUpdate;

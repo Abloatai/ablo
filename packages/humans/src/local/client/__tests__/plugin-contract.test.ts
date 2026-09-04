@@ -291,8 +291,8 @@ describe('Ablo({ plugins }) configuration gates', () => {
     });
 
     expect(typeof surface.presence.attach).toBe('function');
-    expect(surface.presence.self.participantId).toBe('agent-1');
-    expect(surface.presence.self.participantKind).toBe('agent');
+    expect(surface.presence.active).toEqual([]);
+    expect(surface.presence.others).toEqual([]);
   });
 });
 

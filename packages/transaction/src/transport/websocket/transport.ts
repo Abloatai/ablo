@@ -29,10 +29,11 @@ import {
 import { updateSubscriptionPayloadSchema } from '../../coordination/schema.js';
 import type { BootstrapReason } from '../../wire/bootstrapReason.js';
 import type { ClientSyncDelta } from '../../observation/contract.js';
+import type { PresenceCommand } from '../../presence/commands.js';
+import type { PresencePatch, PresenceSnapshot } from '../../presence/projections.js';
 import type {
   ClaimAcquired,
   ClaimAbandonAckPayload,
-  PresenceUpdate,
   ClaimGranted,
   ClaimHeartbeatAckPayload,
   ClaimLost,
@@ -64,6 +65,11 @@ import {
   type SocketObservability,
 } from '../../observability.js';
 import type { DeliveryPartitionRoute } from '../../auth/deliveryPartition.js';
+import {
+  WS_PRESENCE_SESSION_SUBPROTOCOL_PREFIX,
+  type PresenceSessionEstablished,
+  type PresenceSessionSource,
+} from '../../presence/session.js';
 
 /**
  * Ceiling for the exponential reconnect backoff (`reconnectDelay * 2^n`,
@@ -130,6 +136,8 @@ export interface WsTransportOptions {
    * `getCapabilityToken`.
    */
   getAuthToken?: AuthTokenGetter;
+  /** SDK-instance session attribution, established by the server and reused on reconnect. */
+  presenceSession?: PresenceSessionSource;
   /** @deprecated Use `getAuthToken`. Kept for direct low-level callers. */
   getCapabilityToken?: AuthTokenGetter;
   /**
@@ -173,28 +181,20 @@ export interface BootstrapDataEvent {
 }
 
 /**
- * The presence frame, re-exported at the path consumers already reach it
- * through. The declaration lives with the rest of the coordination vocabulary;
- * this keeps `import { PresenceUpdate } from '…/wsTransport'` working for
- * everything that used to import the hand-written type from here. The local
- * `import type` above is what makes this a re-export of a bound name rather
- * than a pass-through that leaves the name unusable in this file.
- */
-export type { PresenceUpdate };
-
-/**
  * Core event map — transport-level events that every connection emits.
  * SDK consumers extend this with app-specific collaboration events.
  */
 export interface CoreSyncEventMap {
   connected: [];
+  presence_session: [PresenceSessionEstablished];
   disconnected: [CloseEvent];
   reconnecting: [{ attempt: number; delay: number }];
   delta: [ClientSyncDelta];
   delta_batch: [ClientSyncDelta[]];
   bootstrap_required: [BootstrapHint];
   bootstrap_data: [BootstrapDataEvent];
-  presence_update: [PresenceUpdate];
+  presence_snapshot: [PresenceSnapshot];
+  presence_patch: [PresencePatch];
   error: [Error];
   session_error: [Error];
   protocol_mismatch: [CloseEvent];
@@ -312,6 +312,7 @@ export class WsTransport<
       | 'capabilityToken'
       | 'getAuthToken'
       | 'getCapabilityToken'
+      | 'presenceSession'
       | 'deferConnect'
       | 'logger'
       | 'observability'
@@ -327,6 +328,7 @@ export class WsTransport<
     capabilityToken?: WsTransportOptions['capabilityToken'];
     getAuthToken?: WsTransportOptions['getAuthToken'];
     getCapabilityToken?: WsTransportOptions['getCapabilityToken'];
+    presenceSession?: WsTransportOptions['presenceSession'];
   };
   /** The transport's reporting ports, shared with the subclassing engine. */
   protected readonly logger: Logger;
@@ -361,6 +363,8 @@ export class WsTransport<
    * `_everOpened`, this survives socket replacement so a failed reconnect
    * handshake is retried instead of being mistaken for a failed first login. */
   private _hasConnected = false;
+  /** The raw socket is not usable until the server binds this SDK's presence session. */
+  private presenceSessionEstablishedForSocket = false;
   /**
    * Diagnostic snapshot of the last connection lifecycle. Persisted across
    * the lifetime of the transport so that any subsequent "not connected"
@@ -472,10 +476,10 @@ export class WsTransport<
       handleDelta: (delta) => { this.handleDelta(delta); },
       handleSyncResponse: (payload) => { this.handleSyncResponse(payload); },
       handleBootstrapResponse: (payload) => { this.handleBootstrapResponse(payload); },
-      handlePresenceUpdate: (message) => {
-        this.handlePresenceUpdate(
-          message as { payload?: PresenceUpdate; [k: string]: unknown },
-        );
+      establishPresenceSession: (value) => {
+        this.options.presenceSession?.establish(value);
+        this.emit('presence_session', value);
+        this.completePresenceHandshake();
       },
     };
   }
@@ -507,35 +511,6 @@ export class WsTransport<
   protected handleBootstrapResponse(_payload: unknown): void {}
 
   /**
-   * Handles a presence update from the server. The wire frame's payload is
-   * forwarded as-is, so every consumer reads the same shape; stripping fields
-   * here would drop `kind`, `activity`, `syncGroups`, and `isAgent` for
-   * consumers that need them.
-   *
-   * The wire frame is:
-   *   { type: 'presence_update', payload: { kind, userId, status,
-   *     syncGroups, activity, isAgent, timestamp, activeClaims } }
-   */
-  protected handlePresenceUpdate(
-    // Typed as a partial presence event as well as an envelope, because both
-    // shapes genuinely arrive: the server's canonical `{ payload: {...} }`,
-    // and legacy pathways (test fixtures) that put the fields at the top
-    // level. Declaring the union up front is what lets the fallback below
-    // stay a plain read instead of a checked-off cast.
-    message: Partial<PresenceUpdate> & {
-      payload?: PresenceUpdate;
-      [k: string]: unknown;
-    },
-  ): void {
-    const event: PresenceUpdate =
-      // Server canonical path: `{ payload: {...} }`. Some legacy
-      // pathways emit fields at the top level (test fixtures) — fall
-      // back to reading from the message itself.
-      message.payload ?? (message as PresenceUpdate);
-    this.emit('presence_update', event);
-  }
-
-  /**
    * Runs after the socket opens and `connected` is emitted, before the
    * heartbeat starts. The default does nothing; the reactive engine's
    * override runs its open ritual — presence, ack, incremental sync, and the
@@ -558,6 +533,19 @@ export class WsTransport<
    */
   protected resumeCursor(): string {
     return '';
+  }
+
+  private completePresenceHandshake(): void {
+    if (this.presenceSessionEstablishedForSocket || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.presenceSessionEstablishedForSocket = true;
+    this.observability.breadcrumb('WebSocket connected', 'sync.websocket', 'info', {
+      reconnectAttempts: this.reconnectAttempts,
+    });
+    this.reconnectAttempts = 0;
+    this._hasConnected = true;
+    this.emit('connected');
+    this.onOpened();
+    this.heartbeat.start();
   }
 
   /**
@@ -672,12 +660,21 @@ export class WsTransport<
     const protocols = authToken
       ? [`${WS_BEARER_SUBPROTOCOL_PREFIX}${authToken}`, WS_SYNC_SUBPROTOCOL]
       : [WS_SYNC_SUBPROTOCOL];
+    const presenceSessionId = this.options.presenceSession?.get();
+    if (presenceSessionId) {
+      protocols.splice(
+        protocols.length - 1,
+        0,
+        `${WS_PRESENCE_SESSION_SUBPROTOCOL_PREFIX}${presenceSessionId}`,
+      );
+    }
 
     try {
       // Reset the handshake flag before wiring the new socket. Each connect()
       // gets its own lifecycle — a prior successful open on a previous socket
       // must not mask a handshake failure on the new one.
       this._everOpened = false;
+      this.presenceSessionEstablishedForSocket = false;
       this.ws = new WebSocket(wsUrl, protocols);
       this.setupEventHandlers();
     } catch (error) {
@@ -707,24 +704,9 @@ export class WsTransport<
 
     socket.onopen = () => {
       if (this.ws !== socket) return; // stale socket — a newer connect() owns the state
-      this.observability.breadcrumb('WebSocket connected', 'sync.websocket', 'info', {
-        reconnectAttempts: this.reconnectAttempts,
-      });
       this.isConnecting = false;
-      this.reconnectAttempts = 0;
       this._everOpened = true;
-      this._hasConnected = true;
       this.lastOpenAt = Date.now();
-      this.emit('connected');
-
-      // The subclass's open ritual (presence, ack, incremental sync,
-      // catch-up poll) runs here, between the `connected` emit and the
-      // heartbeat start — the exact position the inline code held before
-      // the split.
-      this.onOpened();
-
-      // Start the application-level heartbeat (see HeartbeatController).
-      this.heartbeat.start();
     };
 
     socket.onmessage = (event) => {
@@ -1006,34 +988,14 @@ export class WsTransport<
     this.send({ type: 'ack', payload: { lastSyncId } });
   }
 
-  /** Announce this participant's current presence on the shared connection. */
-  updatePresence(input: {
-    readonly status?: 'online' | 'away' | 'offline';
-    readonly customStatus?: string;
-    readonly timezone?: string;
-    readonly activity?: Record<string, unknown>;
-  } = {}): void {
+  /** Send one strict, bounded read-activity command. */
+  sendPresenceCommand(command: PresenceCommand): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
-      throw this.notConnectedError('presence_update');
-    }
-    let timezone = input.timezone;
-    if (!timezone) {
-      try {
-        timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      } catch {
-        timezone = 'UTC';
-      }
+      throw this.notConnectedError('presence_command');
     }
     this.send({
-      type: 'presence_update',
-      payload: {
-        status: input.status ?? 'online',
-        timezone,
-        ...(input.customStatus !== undefined
-          ? { customStatus: input.customStatus }
-          : {}),
-        ...(input.activity !== undefined ? { activity: input.activity } : {}),
-      },
+      type: 'presence_command',
+      payload: command,
     });
   }
 
@@ -1353,7 +1315,8 @@ export class WsTransport<
    * Get connection state
    */
   isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+    return this.presenceSessionEstablishedForSocket
+      && this.ws?.readyState === WebSocket.OPEN;
   }
 
   /**

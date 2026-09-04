@@ -61,7 +61,7 @@ class CountingWS {
 }
 
 const testSchema = defineSchema({
-  notes: model(
+  presence: model(
     {
       title: z.string(),
     },
@@ -78,7 +78,7 @@ describe('Architectural pin — one WebSocket per engine', () => {
     globalThis.WebSocket = originalWebSocket;
   });
 
-  it('opens exactly ONE WebSocket when entity sync + engine.presence + engine.claims are used together', async () => {
+  it('opens exactly ONE WebSocket when entity sync, model presence, and claims are used together', async () => {
     const opts: InternalAbloOptions<typeof testSchema.models> = {
       baseURL: 'ws://localhost:8080',
       schema: testSchema,
@@ -94,12 +94,12 @@ describe('Architectural pin — one WebSocket per engine', () => {
     const engine = Ablo(opts);
     void engine.ready().catch(() => {});
 
-    // Reading presence + claims from the engine. Pre-collapse this opened a
+    // Reading model presence + claims from the engine. Pre-collapse this opened a
     // second presence client. These properties now ride the existing transport.
-    const presence = engine.presence;
+    const presence = engine.presence.forModel('notes');
     const claims = engine.claims;
 
-    presence.onChange(() => {});
+    expect(presence).toEqual([]);
     claims.onChange(() => {});
 
     // Microtask drain so any deferred-attach `transport.subscribe`

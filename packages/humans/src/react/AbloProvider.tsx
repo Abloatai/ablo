@@ -12,7 +12,7 @@ import {
 } from 'react';
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
 import type { AbloClient as Ablo } from '../client.js';
-import type { Peer } from '@abloatai/transaction/types/streams';
+import type { PresenceSession } from '@abloatai/transaction/presence';
 import type { GroupScope } from '../local/sync/scopeGroups.js';
 import { resolveScopeGroups } from '../local/sync/scopeGroups.js';
 import { SyncContext, type SyncStoreContract } from './context.js';
@@ -20,6 +20,7 @@ import { AbloInternalContext, type AbloInternalContextValue } from './internalCo
 import { AbloValidationError } from '@abloatai/transaction/errors';
 import { useSyncStatus } from './useSyncStatus.js';
 import { DefaultFallback } from './DefaultFallback.js';
+import { presenceOfClient } from '../presence/index.js';
 
 /**
  * Ablo umbrella provider — owns the sync engine, multiplayer, and
@@ -380,12 +381,12 @@ function BootstrapGate({
 }
 
 
-const EMPTY_PRESENCE: readonly Peer[] = Object.freeze([]);
+const EMPTY_PRESENCE: readonly PresenceSession[] = Object.freeze([]);
 
 export type { GroupScope };
 
 /**
- * Read-only presence: the OTHER participants currently visible to this
+ * Read-only presence: the other sessions currently visible to this
  * connection, bridged to React. This is a pure reader of the engine's
  * already-flowing presence stream; it does not mutate connection groups.
  *
@@ -403,7 +404,7 @@ export type { GroupScope };
  * const alone = !peers.some((p) => p.participantKind === 'user');
  * ```
  */
-export function usePeers(scope?: GroupScope): readonly Peer[] {
+export function usePeers(scope?: GroupScope): readonly PresenceSession[] {
   const ctx = useContext(AbloInternalContext);
   const engine = ctx?.engine ?? null;
 
@@ -414,19 +415,23 @@ export function usePeers(scope?: GroupScope): readonly Peer[] {
   );
   const groups = useMemo(() => JSON.parse(scopeKey) as string[], [scopeKey]);
 
-  const [peers, setPeers] = useState<readonly Peer[]>(EMPTY_PRESENCE);
+  const [peers, setPeers] = useState<readonly PresenceSession[]>(EMPTY_PRESENCE);
 
   useEffect(() => {
     if (!engine) {
       setPeers(EMPTY_PRESENCE);
       return;
     }
-    const presence = engine.presence;
-    const compute = (): readonly Peer[] =>
+    const presence = presenceOfClient(engine);
+    const compute = (): readonly PresenceSession[] =>
       groups.length === 0
         ? presence.others
-        : presence.others.filter((p) =>
-            p.syncGroups.some((g) => groups.includes(g)),
+        : presence.others.filter((session) =>
+            session.activities.some(({ target }) =>
+              target.id !== undefined && groups.includes(
+                `${target.model.toLowerCase()}:${target.id}`,
+              ),
+            ),
           );
     // Plain useState + onChange — presence changes on connect/disconnect/activity
     // only (never on cursor traffic, a separate channel), so this fires

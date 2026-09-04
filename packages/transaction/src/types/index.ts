@@ -239,7 +239,6 @@ export type {
   // re-exported through streams.ts.
   WireClaim,
   ClaimRejection,
-  PresenceKind,
   ParticipantKind,
   // Participant identity, defined in `./participant.ts`.
   ParticipantRef,
@@ -250,10 +249,6 @@ export type {
   AgentDelta,
   ClaimTarget,
   PresenceTarget,
-  PresenceStream,
-  Activity,
-  Peer,
-  PresenceUpdatePayload,
   ClaimLeaseOptions,
   Duration,
   ClaimOptions,

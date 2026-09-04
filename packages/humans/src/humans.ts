@@ -7,7 +7,7 @@
  */
 import type { AbloPlugin, PluginContext, AppliedChange } from './plugin.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
-import { createPresenceStream, type AttachablePresenceStream } from './presenceStream.js';
+import { createPresence, type AttachablePresence } from './presence/index.js';
 import {
   buildStoreCluster,
   kStoreCluster,
@@ -16,7 +16,7 @@ import {
 } from './local/client/storeCluster.js';
 
 export interface HumansSurface {
-  readonly presence: AttachablePresenceStream;
+  readonly presence: AttachablePresence;
   readonly [kStoreCluster]?: StoreCluster;
 }
 
@@ -45,14 +45,7 @@ export function humans() {
         applyChanges = (changes) => { cluster.store.applyChangesToPool(changes); };
       }
       return {
-        presence: createPresenceStream(
-          {
-            participantId: context.participant?.id ?? '',
-            syncGroups: [...(context.syncGroups ?? [])],
-            isAgent: context.participant?.kind === 'agent',
-          },
-          context.transport ?? null,
-        ),
+        presence: createPresence(context.transport ?? null),
         ...(cluster ? { [kStoreCluster]: cluster } : {}),
       };
     },

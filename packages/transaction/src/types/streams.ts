@@ -21,18 +21,14 @@ import type {
   WireClaim,
   ClaimRejection,
   ClaimLost,
-  PresenceKind,
   ParticipantKind,
   PublicClaimStatus,
-  PresenceUpdatePayload,
 } from '../coordination/schema.js';
 export type {
   WireClaim,
   ClaimRejection,
   ClaimLost,
-  PresenceKind,
   ParticipantKind,
-  PresenceUpdatePayload,
 };
 
 /**
@@ -137,184 +133,6 @@ export interface ClaimTarget<M = ResolveClaimMeta> {
  */
 export type PresenceTarget = ClaimTarget | readonly [type: string, id: string];
 
-/**
- * A reactive, always-on stream of what every participant is doing. Each
- * participant has one, and it stays current for as long as the connection is
- * open.
- */
-export interface PresenceStream {
-  /**
-   * This participant's own broadcast state — the same thing every other
-   * participant sees for it. Read-only here; change it through `update(...)`.
-   */
-  readonly self: Peer;
-
-  /**
-   * Broadcast a new activity. Synchronous — the frame ships on the already-open
-   * connection, with no request-response round-trip to await. Call it as often
-   * as the activity meaningfully changes: on read, on generation start, on
-   * partial output, on write, on done.
-   *
-   * For the common actions, prefer the verb methods below (`editing`,
-   * `viewing`, and so on): they read as one line and save you from remembering
-   * the action strings.
-   */
-  update(activity: Activity): void;
-
-  // ── Verb shortcuts — one call, one sentence ──────────────────────
-  //
-  // Conveniences over `update({ entityType, entityId, action })` — same wire
-  // frame. The set is intentionally small: a few concrete actions a peer can
-  // observe and act on. More abstract phases (analyzing, thinking, planning)
-  // go through `update({ action: 'custom-string' })`, in your app's own
-  // vocabulary.
-
-  /** Participant is actively modifying this entity. */
-  editing(target: PresenceTarget, detail?: string): void;
-  /** Participant is reading this entity; no modifications. */
-  reading(target: PresenceTarget, detail?: string): void;
-  /** Participant is reading this entity; no modifications. */
-  viewing(target: PresenceTarget, detail?: string): void;
-  /** Participant has stepped away from any specific entity. */
-  idle(): void;
-
-  /**
-   * A reactive view of every other participant's current activity on this
-   * participant's sync groups. Reading it returns the current snapshot; pair it
-   * with `onChange(listener)` below to be notified when it changes.
-   *
-   * You can drop `presence.others` into an LLM's system prompt so the model
-   * reasons about what other agents are doing right now — for example,
-   * "copy-bot is generating a new title for section 5; don't duplicate that work."
-   */
-  readonly others: readonly Peer[];
-
-  /** Subset of `others` filtered to a specific sync group. */
-  othersIn(syncGroup: string): readonly Peer[];
-
-  /**
-   * A framework-agnostic reactivity hook. Register a callback that fires
-   * whenever `others` or `othersIn(...)` changes — a peer joined, left, or
-   * updated its activity. Returns a function that unsubscribes.
-   *
-   * React binding:
-   * ```ts
-   * const others = useSyncExternalStore(
-   *   presence.subscribe,
-   *   () => presence.others,
-   * );
-   * ```
-   *
-   * MobX binding:
-   * ```ts
-   * autorun(() => {
-   *   // Triggered on every presence change because the observable
-   *   // version counter inside presence is read here.
-   *   const peers = presence.others;
-   *   // ...
-   * });
-   * ```
-   */
-  onChange(listener: () => void): () => void;
-
-  /**
-   * An async-iterable view of the peer roster. Each iteration yields the
-   * current `others` snapshot whenever it changes, so you can watch the world
-   * update without registering a callback.
-   *
-   * ```ts
-   * for await (const peers of participant.presence) {
-   *   renderAvatars(peers);
-   *   if (peers.length === 0) break; // iteration stops, subscription drops
-   * }
-   * ```
-   *
-   * Each `for await` gets an independent iterator — two loops on the same
-   * stream both see every update rather than stealing values from each other.
-   * Breaking out of the loop, or throwing, tears the subscription down cleanly.
-   */
-  [Symbol.asyncIterator](): AsyncIterableIterator<readonly Peer[]>;
-}
-
-/**
- * What a participant is currently doing. This type is both the SDK shape and
- * the wire shape: a presence broadcast on the `presence_update` frame carries
- * exactly these fields.
- *
- * Every activity is about one entity in focus. An agent working across several
- * entities calls `presence.update(...)` each time its focus shifts, and other
- * participants see the change in real time.
- */
-export interface Activity {
-  /** Entity type the participant is focused on (e.g. "Section", "Document"). */
-  readonly entityType: string;
-  /** Specific entity id. */
-  readonly entityId: string;
-  /** Optional field/property for field-level coordination. */
-  readonly field?: string;
-  /**
-   * Several named parts of the row at once — the same member
-   * {@link ClaimTarget} carries, and the one the presence frame has always
-   * declared. It was missing here, so a set-scoped participant announced
-   * itself as holding the whole row and the overlap filter compared it as if
-   * it named no parts at all.
-   */
-  readonly fields?: readonly string[];
-  /** App-defined structured metadata. Display-only unless app policy uses it. */
-  readonly meta?: Record<string, unknown>;
-  /**
-   * What the participant is doing to that entity. Canonical values:
-   * `'editing'` / `'reviewing'` / `'generating'` / `'analyzing'` /
-   * `'executing'`. Free-form strings are accepted for app-specific
-   * phases.
-   */
-  readonly action: string;
-  /** Human-readable detail — "section 3", "cell A1:B5", etc. */
-  readonly detail?: string;
-  /**
-   * A backpressure signal in the range `[0.0, 1.0]`. When set, orchestrator
-   * agents reading peer activity can route work away from busy participants:
-   * `0.0` means idle, `1.0` means at capacity, and values in between mean "I
-   * have headroom but would rather not." Optional — agents that don't take part
-   * in load-aware routing leave it unset, and orchestrators ignore them when
-   * balancing load. The server passes it through without interpreting it.
-   */
-  readonly loadFactor?: number;
-  /**
-   * A backpressure gate for new work assignments. It defaults to `true` when
-   * unset, so everyone accepts work by default. Set it to `false` during
-   * graceful shutdown, at capacity, or while committed to a long step that
-   * can't be interrupted. Orchestrators should skip a peer showing `false`, and
-   * treat `true` with a high `loadFactor` as available but lower priority.
-   */
-  readonly acceptingNewWork?: boolean;
-}
-
-/**
- * One participant's live state as seen by everyone else in scope — its
- * identity, sync groups, current {@link Activity}, and any open claims.
- */
-export interface Peer {
-  readonly participantKind: ParticipantKind;
-  readonly participantId: string;
-  readonly label?: string;
-  readonly syncGroups: readonly string[];
-  readonly activity: Activity;
-  /** Server timestamp of the most recent frame from this participant. */
-  readonly lastActive: string;
-  /** The claims this participant currently holds. */
-  readonly activeClaims?: readonly Claim[];
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  Wire-format extras
-// ─────────────────────────────────────────────────────────────────────
-
-// `Claim`, `PresenceKind`, and `PresenceUpdatePayload` are defined in
-// `../coordination/schema` and re-exported above. `PresenceUpdatePayload` in
-// particular is derived from `presenceUpdatePayloadSchema` — the schema the
-// server parses inbound frames through — so the type cannot describe a field
-// the parse would drop.
 
 /**
  * A claim is a broadcast that says "I'm about to work on this entity." Claims
@@ -404,7 +222,7 @@ export interface ClaimStream {
 
   /**
    * A framework-agnostic reactivity hook, with the same contract as
-   * {@link PresenceStream.onChange}: register a listener that fires on every
+   * Register a listener that fires on every claim-state change.
    * change — a claim announced, revoked, or expired — and returns a function
    * that unsubscribes. Use `useSyncExternalStore` in React or `autorun` in
    * MobX.

@@ -159,6 +159,41 @@ built; one is genuinely still open. Both are called out so neither is misjudged.
    storms the fleet. The rule to hold: an agent is *rejected at write time* on
    hot data, never *subscribed-and-woken* by it.
 
+## Coordination performance ledger
+
+The fast staging rung is fixed at 20 HTTP agents, three lifecycles per agent,
+and four shared rows. A lifecycle is claim → protected write → release. Change
+the workload shape and it is a new benchmark, not a faster result.
+
+The first correct baseline is staging run `aws-20260904133532-9219` on
+2026-09-04: 60 of 60 lifecycles completed, with zero unexpected errors and zero
+mutual-exclusion violations. Lifecycle throughput was 0.310/s. Claim
+p50/p95/p99 was 18.1/90.5/103.7s, protected-write p50/p95/p99 was
+1.97/20.4/22.3s, release p50/p95/p99 was 0.07/1.26/2.02s, and whole-lifecycle
+p50/p95/p99 was 25.6/92.8/103.8s. This closes the correctness gate and becomes
+the denominator-preserving speed baseline; it does not meet the first speed
+goal.
+
+For comparison, the last run before claim continuation received established
+admission priority completed only 58 of 60 at 0.262/s and had release p95
+20.2s. Preserving admitted lifecycle traffic cut release p95 by about 94% and
+the correct baseline holds that gain, but queue acquisition and protected-write
+tail latency still dominate.
+
+Performance work advances through ordered gates:
+
+1. **Correct baseline:** 60/60 lifecycles, zero mutual-exclusion violations,
+   zero unexpected errors, and natural process exit. Speed claims start here.
+2. **First speed goal:** at least 1.0 completed lifecycle/s, protected-write
+   p95 at most 3s, release p95 at most 1s, and lifecycle p95 at most 45s.
+3. **Stretch goal:** at least 2.0 completed lifecycles/s and lifecycle p95 at
+   most 20s, with the same correctness and drain gates.
+
+Every accepted result records the runner source release, serving image digest,
+agent/operation/shared-row counts, completed denominator, every phase
+percentile, lifecycle throughput, unexpected errors, and drain duration. This
+keeps “faster” tied to the same correct work rather than to abandoned waiters.
+
 ## Related
 
 - [`coordination.md`](../coordination.md) — the public claim/queue/stale-context

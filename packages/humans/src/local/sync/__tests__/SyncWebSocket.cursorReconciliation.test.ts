@@ -122,6 +122,10 @@ describe('SyncWebSocket cursor reconciliation on an empty sync_response', () => 
     ws.connect();
     const fake = FakeWebSocket.last;
     if (!fake) throw new Error('connect() did not construct a socket');
+    deliver(fake, 'presence_session', {
+      presenceSessionId: '00000000-0000-4000-8000-000000000001',
+      resumed: false,
+    });
     return { ws, fake };
   }
 

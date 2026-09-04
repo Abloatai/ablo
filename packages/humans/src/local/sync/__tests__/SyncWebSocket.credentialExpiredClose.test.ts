@@ -71,6 +71,15 @@ class FakeWebSocket {
 function fireOpen(socket: FakeWebSocket): void {
   if (!socket.onopen) throw new Error('expected socket.onopen to be wired');
   socket.onopen();
+  socket.onmessage?.({
+    data: JSON.stringify({
+      type: 'presence_session',
+      payload: {
+        presenceSessionId: 'b6741f5a-e982-4f9c-916b-2d247b8d4646',
+        resumed: FakeWebSocket.instances.length > 1,
+      },
+    }),
+  });
 }
 function fireClose(
   socket: FakeWebSocket,

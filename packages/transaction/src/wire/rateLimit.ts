@@ -36,6 +36,14 @@ export const RATE_LIMIT_HEADER = 'RateLimit';
 /** Seconds to wait before retrying, on a 429 or a 503 (RFC 9110 § 10.2.3). */
 export const RETRY_AFTER_HEADER = 'Retry-After';
 
+/** Parse the delta-seconds form emitted by Ablo for `Retry-After`. */
+export function retryAfterSecondsFromHeader(value: string | null): number | undefined {
+  if (value === null || value.trim() === '') return undefined;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.max(1, Math.ceil(seconds));
+}
+
 /**
  * A policy name as it appears inside the fields. Constrained to characters that
  * need no Structured-Fields escaping, which is what lets the serializers below

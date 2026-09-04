@@ -9,7 +9,6 @@ import type { SyncStatus } from '../storeContract.js';
 import type {
   BootstrapHint,
   BootstrapDataEvent,
-  PresenceUpdate,
   SyncWebSocket,
   EventMap,
 } from './SyncWebSocket.js';
@@ -31,7 +30,6 @@ export interface SocketEventHost<TCollaboration extends EventMap<TCollaboration>
   applyDeltaFrame(deltas: SyncDelta[]): void;
   handleBootstrapRequired(hint: BootstrapHint): void;
   handleBootstrapData(data: BootstrapDataEvent): void;
-  handlePresenceUpdate(data: PresenceUpdate): void;
   performCredentialRefresh(): Promise<'refreshed' | 'session_error' | 'network_error'>;
   handleTerminalSessionError(error: Error): void;
   nudgeReconnect(): void;
@@ -91,11 +89,6 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
     const onBootstrapData = deps.syncWebSocket.subscribe('bootstrap_data', (...args) => {
       const data = args[0];
       deps.handleBootstrapData(data);
-    });
-
-    const onPresenceUpdate = deps.syncWebSocket.subscribe('presence_update', (...args) => {
-      const data = args[0];
-      deps.handlePresenceUpdate(data);
     });
 
     // Error events
@@ -189,7 +182,7 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
     deps.disposers.push(
       onConnected, onDisconnected, onReconnecting,
       onDelta, onDeltaBatch, onBootstrapRequired,
-      onBootstrapData, onPresenceUpdate,
+      onBootstrapData,
       onError, onSessionError, onHandshakeFailed, onReconnectFailed,
       () => { deps.areaOfInterest.dispose(); },
     );

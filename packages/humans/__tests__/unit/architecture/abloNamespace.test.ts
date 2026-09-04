@@ -17,12 +17,12 @@ describe('Ablo namespace — modern-SDK type access', () => {
   it('exposes multiplayer types via namespace dots', () => {
     // Type-position references — these compile only if the namespace
     // re-exports each type. Pure compile-time check.
-    type _Peer = Ablo.Peer;
+    type _PresenceSession = Ablo.PresenceSession;
     // Claims collapsed to a single `Claim` type — there is deliberately no
     // `ActiveClaim`/`ClaimHandle` to disambiguate (see types/streams.ts).
     type _Claim = Ablo.Claim;
     type _ClaimRejection = Ablo.ClaimRejection;
-    type _PresenceStream = Ablo.PresenceStream;
+    type _Presence = Ablo.Presence;
     type _ClaimStream = Ablo.ClaimStream;
     type _ParticipantRef = Ablo.Auth.Actor;
 

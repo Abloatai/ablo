@@ -180,7 +180,7 @@ The repository's
 [`examples/temporal-agent`](../../../../examples/temporal-agent/README.md)
 contains a Workflow, Activities, Worker, client, durable AI SDK tool, and a
 simulated lost-response retry. It is a standalone application on purpose:
-Temporal stays out of Ablo's core packages and out of `packages/agent`.
+Temporal stays out of Ablo's core packages; applications own their agent composition.
 
 A dedicated `@abloatai/temporal` package should be introduced only after
 multiple production integrations reveal substantial, stable behavior that

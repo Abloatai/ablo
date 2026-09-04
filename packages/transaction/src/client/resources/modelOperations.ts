@@ -23,7 +23,6 @@ import type {
   ClaimHeartbeatOptions,
   HeldClaim,
   HeldLease,
-  Peer,
 } from '../../types/streams.js';
 import type { MutationOptions } from './mutationOptions.js';
 import type { LoadWhere } from './where.js';

@@ -157,7 +157,10 @@ export function modelClaim(args: {
 }
 
 /** `POST /v1/models/{model}/{id}/claim` — 201, the lease is yours. */
-export function claimAcquiredResponse(claim: ModelClaim): ClaimAcquiredResponse {
+export function claimAcquiredResponse(
+  claim: ModelClaim,
+  snapshot?: ClaimAcquiredResponse['snapshot'],
+): ClaimAcquiredResponse {
   return {
     id: claim.id,
     object: 'claim',
@@ -165,6 +168,7 @@ export function claimAcquiredResponse(claim: ModelClaim): ClaimAcquiredResponse 
     ...(claim.fenceToken !== undefined ? { fenceToken: claim.fenceToken } : {}),
     expiresAt: claim.expiresAt,
     claim,
+    ...(snapshot ? { snapshot } : {}),
   } satisfies ClaimAcquiredResponse;
 }
 

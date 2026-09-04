@@ -13,12 +13,17 @@
  */
 
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import type { Logger } from '@abloatai/transaction/logger';
 import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
 import {
   createAuthCredentialSource,
   type AuthCredentialSource,
 } from '@abloatai/transaction/auth/credentialSource';
+import {
+  createPresenceSessionSource,
+  type PresenceSessionSource,
+} from '@abloatai/transaction/presence';
 import {
   assertBrowserSafety,
   readProcessEnv,
@@ -47,6 +52,7 @@ export interface ClientPrelude<S extends SchemaRecord> {
    */
   readonly credentialResolver: CredentialProvider | null;
   readonly authCredentials: AuthCredentialSource;
+  readonly presenceSession: PresenceSessionSource;
   readonly logger: Logger;
   readonly url: string;
   /**
@@ -69,6 +75,17 @@ export interface ClientPrelude<S extends SchemaRecord> {
 export function resolveClientPrelude<S extends SchemaRecord>(
   options: AbloOptions<S>,
 ): ClientPrelude<S> {
+  // This package owns the reactive materialiser, not transport selection.
+  // TypeScript can miss excess properties on generic calls and object spreads,
+  // so reject a misplaced selector before resolving any credentials or
+  // constructing local state. The core `Ablo` client owns `transport`.
+  if ('transport' in options) {
+    throw new AbloValidationError(
+      "The reactive client does not accept `transport`. Import `Ablo` from " +
+        "'@abloatai/ablo' when selecting HTTP or WebSocket transport.",
+      { code: 'invalid_options', param: 'transport' },
+    );
+  }
   const env = readProcessEnv();
   const internalOptions = {
     ...options,
@@ -79,9 +96,11 @@ export function resolveClientPrelude<S extends SchemaRecord>(
   const configuredApiKey = resolveApiKey(authInput);
   const configuredAuthToken = resolveAuthToken(authInput);
   const credentialResolver = resolveCredentialResolver(configuredApiKey);
+  const presenceSession = createPresenceSessionSource();
   const authCredentials = createAuthCredentialSource(
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- load-bearing on the self-hosted path; server-internal cap-mint (Phase 3) not shipped
     internalOptions.capabilityToken ?? configuredAuthToken,
+    presenceSession,
   );
   rejectRemovedDatabaseUrlOption(options);
   assertBrowserSafety({
@@ -108,6 +127,7 @@ export function resolveClientPrelude<S extends SchemaRecord>(
     configuredAuthToken,
     credentialResolver,
     authCredentials,
+    presenceSession,
     logger,
     url: resolveBaseURL(authInput),
     participantId,

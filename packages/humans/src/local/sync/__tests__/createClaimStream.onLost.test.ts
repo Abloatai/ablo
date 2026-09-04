@@ -65,14 +65,13 @@ function frameSession(onEmit: (event: string, payload: unknown) => void): WsSess
     handleDelta: () => undefined,
     handleSyncResponse: () => undefined,
     handleBootstrapResponse: () => undefined,
-    handlePresenceUpdate: () => undefined,
   };
 }
 
 describe('createClaimStream.onLost', () => {
   it('ends the exact granted handle when the server reports it lost', () => {
     const ws = fakeWs();
-    const stream = createClaimStream({ participantId: 'me' });
+    const stream = createClaimStream({});
     stream.attach(ws);
     const handle = stream.claim(
       { type: 'item', id: 't1' },
@@ -93,7 +92,7 @@ describe('createClaimStream.onLost', () => {
 
   it('ends grants on disconnect and never re-announces them on reconnect', () => {
     const ws = fakeWs();
-    const stream = createClaimStream({ participantId: 'me' });
+    const stream = createClaimStream({});
     stream.attach(ws);
     const handle = stream.claim(
       { type: 'item', id: 't1' },
@@ -113,7 +112,7 @@ describe('createClaimStream.onLost', () => {
 
   it('delivers claim_lost with reason="preempted" to onLost listeners', () => {
     const ws = fakeWs();
-    const stream = createClaimStream({ participantId: 'me' });
+    const stream = createClaimStream({});
     stream.attach(ws);
 
     const seen: ClaimLost[] = [];
@@ -135,7 +134,7 @@ describe('createClaimStream.onLost', () => {
 
   it('also surfaces reason="expired"', () => {
     const ws = fakeWs();
-    const stream = createClaimStream({ participantId: 'me' });
+    const stream = createClaimStream({});
     stream.attach(ws);
 
     const seen: ClaimLost[] = [];
@@ -205,7 +204,7 @@ describe('createClaimStream.onLost', () => {
 
   it('unsubscribe stops delivery', () => {
     const ws = fakeWs();
-    const stream = createClaimStream({ participantId: 'me' });
+    const stream = createClaimStream({});
     stream.attach(ws);
 
     const seen: ClaimLost[] = [];

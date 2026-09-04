@@ -41,6 +41,7 @@ import type { LoadWhere, Query, WhereClause, WhereOp } from '../query/types.js';
 import { normalizeWhere } from '@abloatai/transaction/client/resources/where';
 import type { Schema } from '@abloatai/transaction/schema/schema';
 import type { LogPositionPort } from '../logPosition.js';
+import type { PresenceSessionSource } from '@abloatai/transaction/presence';
 
 export interface OnDemandLoaderOptions {
   readonly objectPool: InstanceCache;
@@ -58,6 +59,7 @@ export interface OnDemandLoaderOptions {
    * propagate without re-instantiating the coordinator.
    */
   readonly getAuthToken?: () => string | null;
+  readonly presenceSession?: PresenceSessionSource;
   /** @deprecated Use `getAuthToken`. */
   readonly getCapabilityToken?: () => string | null;
   /** The owning client's runtime. Defaults to the module-global bridge. */
@@ -647,6 +649,7 @@ export class OnDemandLoader {
         getAuthToken: this.authTokenProvider ?? undefined,
         recoverCredential: this.credentialRecovery ?? undefined,
         runtime: this.opts.runtime,
+        presenceSession: this.opts.presenceSession,
       },
       { queries: [query] },
     );

@@ -157,13 +157,20 @@ see. Options on the claim:
 - `{ maxQueueDepth }` rejects if the wait line is already too deep.
 
 While waiting, schema clients learn when the claim clears from the live claim
-stream, so they never poll.
+stream, so they never poll. Headless HTTP clients poll the same durable queue;
+the model client keeps the row target on each heartbeat, so a holder releasing
+cannot make the queued ticket unresolvable by id. During fence minting, it also
+keeps polling through a visibility miss only while the server's last enqueue or
+heartbeat acknowledgement still guarantees that ticket is live.
 
 ## Errors
 
 All SDK errors extend `AbloError`. `type` is the class-name discriminator, such
 as `AbloStaleContextError`; `code` is the wire condition, such as
 `stale_context`. Use `instanceof` in-process and `type` after serialization.
+Every error also exposes a typed `recovery` classification and `retryable`
+boolean. When the server requests a minimum delay, `retryAfterSeconds` is
+present on the same error for both 429 and 503 responses.
 
 | Error | Typical cause |
 |---|---|
@@ -196,8 +203,14 @@ Model writes are retry-safe by default because the SDK attaches an idempotency
 key. If you provide your own key, keep it stable for retries of the same logical
 operation and never reuse it for a different payload.
 
-Retry transport failures and 5xx with backoff. Do not blindly retry validation,
-permission, idempotency, or stale-context errors without changing the request.
+Retry transport failures and 5xx with backoff. For example, an
+`instance_at_capacity` error has `recovery === 'transient'`; wait at least
+`retryAfterSeconds` before replaying the unchanged request. The headless HTTP
+client performs that exact replay within `timeoutMs`; importantly, it does not
+restart a larger claim/read/write workflow around the rejected request. If the
+deadline is exhausted, the same actionable error reaches the caller. Do not
+blindly retry validation, permission, idempotency, or stale-context errors
+without changing the request.
 
 ## Logging
 

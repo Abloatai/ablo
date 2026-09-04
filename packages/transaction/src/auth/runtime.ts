@@ -20,6 +20,7 @@ import {
   parseIdentityResolveResponse,
 } from './schemas.js';
 import { AbloAuthenticationError, hasWireCode, translateHttpError } from '../errors.js';
+import { retryAfterSecondsFromHeader } from '../wire/rateLimit.js';
 import type { ParticipantKind } from '../types/participant.js';
 import type {
   CapabilityMintResponse,
@@ -216,7 +217,9 @@ export async function exchangeApiKey(
     // carried no recognizable error code.
     const requestId = response.headers.get('x-request-id') ?? undefined;
     throw hasWireCode(body)
-      ? translateHttpError(response.status, body, requestId)
+      ? translateHttpError(response.status, body, requestId, {
+          retryAfterSeconds: retryAfterSecondsFromHeader(response.headers.get('retry-after')),
+        })
       : new AbloAuthenticationError(
           `apiKey exchange rejected (${response.status})`,
           { code: 'exchange_failed', httpStatus: response.status },
@@ -391,7 +394,9 @@ export async function mintUserSessionKey(
     }
     const requestId = response.headers.get('x-request-id') ?? undefined;
     throw hasWireCode(body)
-      ? translateHttpError(response.status, body, requestId)
+      ? translateHttpError(response.status, body, requestId, {
+          retryAfterSeconds: retryAfterSecondsFromHeader(response.headers.get('retry-after')),
+        })
       : new AbloAuthenticationError(
           `user-session mint rejected (${response.status})`,
           { code: 'exchange_failed', httpStatus: response.status },
