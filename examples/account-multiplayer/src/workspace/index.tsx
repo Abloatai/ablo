@@ -1,6 +1,5 @@
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useSyncStatus } from '@abloatai/ablo/react';
 import { AbloProvider, createClient, post, useAblo, usePresence } from './client.js';
 
 function Conversation({ id, account }: { id: string; account: string }) {
@@ -34,12 +33,12 @@ function ConnectedWorkspace({ account }: { account: string }) {
   </>;
 }
 function Workspace({ account }: { account: string }) {
-  const status = useSyncStatus();
+  const status = useAblo(ablo => ablo.status);
   const [connected, setConnected] = useState(false);
-  useEffect(() => { if (status.name === 'connected') setConnected(true); }, [status.name]);
+  useEffect(() => { if (status?.name === 'connected') setConnected(true); }, [status?.name]);
   return <>
-    <p role="status">{status.name === 'initial' || status.name === 'connecting' ? 'Connecting…' : status.name}</p>
-    {(connected || status.name === 'connected') && <ConnectedWorkspace account={account} />}
+    <p role="status">{status?.name === 'initial' || status?.name === 'connecting' ? 'Connecting…' : status?.name}</p>
+    {(connected || status?.name === 'connected') && <ConnectedWorkspace account={account} />}
   </>;
 }
 function Account({ account }: { account: string }) {

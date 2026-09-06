@@ -325,7 +325,7 @@ describe('humans() constructs the store cluster', () => {
       // store-backed members are wired to it.
       expect(client._store).toBeDefined();
       expect(typeof client.subscribe).toBe('function');
-      expect(client.syncStatus).toBeDefined();
+      expect(client.status).toBeDefined();
     } finally {
       void client.dispose();
     }

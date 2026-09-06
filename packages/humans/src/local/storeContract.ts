@@ -19,8 +19,7 @@ import type { GroupScope } from './sync/scopeGroups.js';
 /**
  * A snapshot of the client's synchronization state, shaped for binding to UI.
  * {@link SyncStoreContract.syncStatus} exposes a reactive instance of this, and
- * the `useSyncStatus()` hook reads its fields to render connection and progress
- * indicators.
+ * the client projects it into `ablo.status` for connection indicators.
  */
 export interface SyncStatus {
   state: 'idle' | 'syncing' | 'error' | 'offline' | 'reconnecting';
@@ -115,7 +114,7 @@ export interface SyncStoreContract {
    * are backed by observable computeds, so reading them inside a reactive
    * context — an observer component or a reaction — re-runs that context when
    * the state changes. Code that prefers not to work with the reactivity system
-   * directly can read the same values through the `useSyncStatus()` hook.
+   * directly can read the same values through `useAblo(ablo => ablo.status)`.
    */
   readonly isReady: boolean;
   readonly isSyncing: boolean;
@@ -137,7 +136,7 @@ export interface SyncStoreContract {
   pinScope?(scope: GroupScope): Promise<void>;
   unpinScope?(scope: GroupScope): Promise<void>;
   /**
-   * The full reactive {@link SyncStatus} record. The `useSyncStatus()` hook
+   * The full reactive {@link SyncStatus} record. The client status projection
    * reads its fields — `state`, `progress`, `pendingChanges`, `isSessionError`,
    * and `error` — to present the current sync state. It is part of the contract
    * so hooks and test doubles can read or set it directly.

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import type { PresenceSession } from '@abloatai/transaction/presence';
 import { AbloValidationError } from '@abloatai/transaction/errors';
 import {
@@ -10,7 +10,8 @@ import {
 import type { AbloClient as Ablo } from '../client.js';
 import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
 import type { ResolveSchema } from '@abloatai/transaction/types/global';
-import { useAbloClientImpl } from './useAblo.js';
+import { useAbloClient } from './useAblo.js';
+import { useReactive } from './useReactive.js';
 
 type DefaultModels = ResolveSchema extends { models: infer M }
   ? M extends SchemaRecord
@@ -46,7 +47,7 @@ export function usePresence<
   modelOrSelect: ModelOperations<T, C> | PresenceModelSelector<R, T, C>,
   recordId: string,
 ): readonly PresenceSession[] {
-  const engine = useAbloClientImpl<R>(null);
+  const engine = useAbloClient<R>();
   return usePresenceImpl(engine, modelOrSelect, recordId);
 }
 
@@ -75,14 +76,8 @@ export function usePresenceImpl<R extends SchemaRecord, T, C>(
     );
   }
 
-  const [, render] = useState(0);
-
-  useEffect(
-    () => presence?.subscribe(() => { render((version) => version + 1); }),
-    [presence],
-  );
-
+  const subscribe = useCallback((notify: () => void) => presence?.subscribe(notify) ?? (() => undefined), [presence]);
+  const sessions = useReactive(() => presence?.get(recordId) ?? [], { subscribe });
   useEffect(() => presence?.read(recordId), [presence, recordId]);
-
-  return presence?.get(recordId) ?? [];
+  return sessions;
 }

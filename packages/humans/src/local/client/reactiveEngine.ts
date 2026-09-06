@@ -29,6 +29,7 @@ import {
 	streamTarget,
 	subTarget,
 } from '@abloatai/transaction/coordination';
+import { readStatus } from './status.js';
 import { validateAbloOptions } from './validateAbloOptions.js';
 import type { StoreCluster } from './storeCluster.js';
 import { startStoreLifecycle } from './storeLifecycle.js';
@@ -842,11 +843,9 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       return store.waitForConfirmation(modelName, modelId);
     },
 
-    // Expose the store's MobX observable directly — single source of truth.
-    // React components using observer() will re-render automatically on
-    // any state change (syncing, error, offline, pendingChanges, progress).
-    get syncStatus() {
-      return store.syncStatus;
+    // One core lifecycle projection; React selects the same observable reads.
+    get status() {
+      return readStatus(store);
     },
 
     // The humans capability owns the connection-backed presence projection.

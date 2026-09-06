@@ -16,7 +16,7 @@
 
 import { useEffect } from 'react';
 import { runInAction } from 'mobx';
-import { useSyncStatus } from '../../src/react/useSyncStatus.js';
+import { useAblo } from '../../src/react/useAblo.js';
 import { act, render, waitFor } from '@testing-library/react';
 import { z } from 'zod';
 
@@ -105,8 +105,8 @@ describe('AbloProvider — reactive binding over a prebuilt client', () => {
 // Status must be usable before identity resolves, including a custom fallback.
 describe('AbloProvider startup status', () => {
   function Status() {
-    const status = useSyncStatus();
-    return <span data-testid="status">{status.name}</span>;
+    const status = useAblo(ablo => ablo.status);
+    return <span data-testid="status">{status?.name}</span>;
   }
 
   it('renders status in passthrough and preserves child state across readiness', async () => {

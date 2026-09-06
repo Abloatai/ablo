@@ -1,3 +1,10 @@
+/** Core client and the explicitly supported React bindings. */
 export { Ablo, humans } from '@abloatai/humans';
-export type { AbloOptions, AbloReads, HumansSurface } from '@abloatai/humans';
-export * from '@abloatai/humans/react';
+export {
+  AbloProvider,
+  createAbloReact,
+  useAblo,
+  usePresence,
+  useMutators,
+  useUndoScope,
+} from '@abloatai/humans/react';

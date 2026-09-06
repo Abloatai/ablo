@@ -12,6 +12,7 @@ npm run build
 
 echo ">>> verify 3/8: typecheck"
 npm run typecheck
+npm run typecheck:react --workspace=@abloatai/humans
 
 echo ">>> verify 4/8: tests"
 npm run test

@@ -19,6 +19,54 @@ The React bindings ship with the main package — no extra install.
 import { useAblo } from '@abloatai/ablo/react';
 ```
 
+React uses the same objects and operations as core Ablo. Read `ablo.status`
+with `useAblo(ablo => ablo.status)`, select `ablo.presence.others` for other
+sessions, and call ordinary model methods from event handlers. React owns the
+subscription or component lifetime; the client owns the behavior.
+
+For mutation failures, subscribe to the core event in an effect:
+
+```tsx
+const ablo = useAblo();
+useEffect(() => ablo?.onMutationFailure(reportFailure), [ablo, reportFailure]);
+```
+
+`reportFailure` receives `Ablo.MutationFailure`. Read application identity from
+your auth provider; Ablo's authenticated authority comes from its session.
+
+## Types follow their owners
+
+Most calls infer their types from your schema. For wrapper components or explicit
+annotations, use the name you already imported:
+
+```tsx
+import { Ablo, AbloProvider, useAblo } from '@abloatai/ablo/react';
+import { schema } from './schema';
+
+type Models = (typeof schema)['models'];
+type Chat = Ablo.Schema.InferRow<typeof schema, 'chats'>;
+
+function Provider(props: AbloProvider.Props<Models>) {
+  return <AbloProvider {...props} />;
+}
+
+function ChatView({ result }: { result: useAblo.Result<Chat> }) {
+  return <p>{result.data?.title}</p>;
+}
+```
+
+The React annotation types are `AbloProvider.Props`, `useAblo.Options`,
+`useAblo.Result`, `useMutators.Options`, `useMutators.Result` and
+`useUndoScope.Result`. Core types remain under `Ablo`, including `Ablo.Options`,
+`Ablo.Reads`, `Ablo.Status` and `Ablo.PresenceSession`. Import annotation owners
+from the SDK entry point; functions destructured from an app binding infer their
+call types but do not create new TypeScript namespaces in the app module.
+
+`createAbloReact(schema)` specializes types and returns the existing provider and
+hooks. Define your binding at module scope. It creates no client, React context
+or component identity. Hooks always read the nearest provider: use the binding
+that matches that provider's client schema.
+
 ## Building the client
 
 You build the Ablo client once — that's where the schema, the session endpoint,
@@ -138,19 +186,19 @@ for the complete ownership boundary and runnable component.
 
 ## Render immediately with connection status
 
-`useSyncStatus()` works during provider startup, in passthrough children and in
+`useAblo(ablo => ablo.status)` works during provider startup, in passthrough children and in
 custom fallbacks. It observes the client's status before row scope is available.
 It still requires a provider. Data hooks that require authenticated scope must
 wait for readiness.
 
 ```tsx
-import { useSyncStatus } from '@abloatai/ablo/react';
+import { useAblo } from '@abloatai/ablo/react';
 
 function ConnectionIndicator() {
-  const status = useSyncStatus();
+  const status = useAblo(ablo => ablo.status);
   return <span role="status">{
-    status.name === 'initial' || status.name === 'connecting'
-      ? 'Connecting…' : status.name
+    status?.name === 'initial' || status?.name === 'connecting'
+      ? 'Connecting…' : status?.name
   }</span>;
 }
 
@@ -174,6 +222,7 @@ export function ReportView({ report: serverReport }: { report: { id: string; loc
     { initial: serverReport },
   );
 
+  if (!report) return <p>This report is not in the local cache.</p>;
   return <article>{report.location}{claimed && <span>Claimed</span>}</article>;
 }
 ```
@@ -183,8 +232,24 @@ The row form subscribes to both data and claim events. It returns `data`,
 
 For data-only reads, selectors such as
 `useAblo(ablo => ablo.weatherReports.local.get(id))` track model fields.
-A selector-only `claim.state({ id })` read does not subscribe to the claim event
-stream. Use the row form above when the UI displays ownership.
+Claim selectors subscribe too: `useAblo(ablo => ablo.weatherReports.claim.state({ id }))`
+updates when ownership changes. Use the row form when you want data and claims together.
+
+Selectors must be pure synchronous reads. Ablo copies selected rows, arrays and plain
+records into frozen snapshots, including nested data and computed fields. Unchanged
+data retains its snapshot identity across renders. Treat copied dates as read-only;
+model API handles and other class instances retain their original identity. Read
+data inside the selector to subscribe to it. Selector errors reach React error boundaries.
+
+`initial` supplies the server HTML and first hydration render; React then reads the
+current local row. Once a local row has appeared, removing it returns `undefined`
+instead of restoring the seed, so `data` remains optional even with `initial`.
+
+A local cache miss (`undefined` or an empty list) does not prove that the server has
+no matching data. Local reads do not fetch rows, and connection status does not
+indicate query completeness. Use your route loader and an awaited server read, such
+as `await ablo.weatherReports.get({ id })`, to establish server results and handle
+request errors before passing an initial row to React.
 
 Use the zero-argument form only when you need the full client for callbacks,
 effects, or writes:
@@ -342,30 +407,28 @@ durable model fields when state must survive reconnects. The sending connection
 does not receive its own event. Coalesce or throttle pointer movement in the
 application; model events do not currently declare a per-event `maxHz`.
 
-## usePeers: read-only presence
+## Presence: the same core read
 
-`usePeers` reads the presence stream already flowing for the client's scoped
-groups. It does not create a second membership or lease and does not change the
-connection's subscriptions.
+Select `ablo.presence.others` for the other sessions visible to this client, or
+filter by a model and record. These reads subscribe to changes without starting
+an activity or claiming ownership.
 
 ```tsx
-'use client';
+import { useAblo } from '@abloatai/ablo/react';
 
-import { usePeers } from '@abloatai/ablo/react';
-
-export function CursorBroadcaster({ workspaceId }: { workspaceId: string }) {
-  const peers = usePeers({ entryCollections: workspaceId });
-  const alone = !peers.some((p) => p.participantKind === 'user');
-  // suppress live-cursor broadcasts while alone
+function Readers({ conversationId }: { conversationId: string }) {
+  const sessions = useAblo(ablo => ablo.presence.forModel('conversations', conversationId)) ?? [];
+  const people = new Set(sessions.filter(session => session.participant.kind === 'user')
+    .map(session => session.participant.id));
+  return <span>{people.size} people, {sessions.length} sessions</span>;
 }
 ```
 
-Pass a schema-shaped group scope to filter the visible peers, or omit it for
-everyone on the client's groups. Returns `ReadonlyArray<Peer>`, where each `Peer` carries
-`participantKind` (`'user' | 'agent' | 'system'`), `participantId`, optional
-`label`, `syncGroups`, `activity`, `lastActive`, and optional `activeClaims`.
-Use `ablo.<model>.claim` when the caller needs exclusion; reading presence does
-not claim anything.
+`usePresence(ablo => ablo.conversations, conversationId)` additionally owns a
+reading activity for the component's lifetime. Use it when mounting the component
+should announce that this session is reading the record. Core code owns the same
+lifecycle explicitly with `ablo.conversations.presence.read(conversationId)` and
+its returned cleanup function.
 
 ## Next.js
 

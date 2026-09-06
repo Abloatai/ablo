@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/humans",
-  "version": "0.63.1",
+  "version": "0.64.0",
   "description": "The optional human-facing local-state package for Ablo: presence, live queries, and React bindings.",
   "license": "Apache-2.0",
   "type": "module",
@@ -78,7 +78,8 @@
     "lint:eslint": "eslint . --cache --suppressions-location eslint-suppressions.json",
     "check:boundary": "node scripts/check-boundary.mjs",
     "test:integration": "npm run build && node scripts/check-package-integration.mjs",
-    "lint:pkg": "publint"
+    "lint:pkg": "publint",
+    "typecheck:react": "tsc -p typetests/binding/tsconfig.json"
   },
   "publishConfig": {
     "access": "public",
@@ -91,7 +92,7 @@
     "directory": "packages/humans"
   },
   "dependencies": {
-    "@abloatai/transaction": "^0.63.1",
+    "@abloatai/transaction": "^0.64.0",
     "mobx": "^6.13.7",
     "uuid": "^11.1.0",
     "zod": "^4.4.3"

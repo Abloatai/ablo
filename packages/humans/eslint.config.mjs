@@ -62,7 +62,7 @@ export default defineConfig(
       '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
     },
   },
-  // The SDK's shipped hooks (useAblo & co). Only the two classic rules —
+  // The SDK's shipped hooks (useAblo & co): module-level identities,
   // rules-of-hooks correctness + the exhaustive-deps hygiene the existing
   // inline disables in src/react reference (without the plugin registered,
   // those directives themselves error with "definition for rule not found").
@@ -71,6 +71,7 @@ export default defineConfig(
     plugins: { 'react-hooks': reactHooks },
     rules: {
       'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/component-hook-factories': 'error',
       'react-hooks/exhaustive-deps': 'warn',
     },
   },

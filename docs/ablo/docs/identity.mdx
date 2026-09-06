@@ -588,7 +588,7 @@ an agent pointed at the entities it's working on. You **never hand-write**
    So an agent's reachable set **accretes** as it works — no extra subscribe call.
 
 3. **Presence follows those same groups.** A reactive client announces one
-   participant on its connection; `usePeers(scope)` filters the roster already
+   participant on its connection; `ablo.presence.forModel(model, id)` filters the roster already
    visible through the session and connection groups. There is no second
    membership lease or participant handle. Use `claim` separately when work needs
    exclusion. See [React](/react#usepeers-read-only-presence).

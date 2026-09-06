@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { reaction } from 'mobx';
 import { createPresence } from '../index.js';
 import { createClaimStream } from '../../local/sync/createClaimStream.js';
 import type { PresenceSession } from '@abloatai/transaction/presence';
@@ -46,6 +47,35 @@ describe('reactive presence', () => {
     expect(presence.others.map(({ presenceSessionId }) => presenceSessionId)).toEqual(['tab-2']);
     expect(presence.forModel('documents', 'doc-1')).toHaveLength(2);
     expect(changed).toHaveBeenCalled();
+    presence.dispose();
+  });
+
+  it('reacts to core presence reads before attachment and after navigation and disconnect', () => {
+    const presence = createPresence();
+    const events = transport();
+    const snapshots: number[] = [];
+    const stop = reaction(
+      () => presence.forModel('documents', 'doc-1').length,
+      count => { snapshots.push(count); },
+    );
+    presence.attach(events);
+    events.emit('presence_snapshot', {
+      presenceSessionId: 'tab-2', participant: { id: 'person-1', kind: 'user' },
+      revision: 1, activities: [activity('read-1', 'Documents', 'doc-1')], tombstones: [],
+    });
+    expect(snapshots).toEqual([1]);
+    events.emit('presence_snapshot', {
+      presenceSessionId: 'tab-2', participant: { id: 'person-1', kind: 'user' },
+      revision: 2, activities: [activity('read-2', 'Documents', 'doc-2')], tombstones: [],
+    });
+    expect(snapshots).toEqual([1, 0]);
+    events.emit('presence_snapshot', {
+      presenceSessionId: 'tab-2', participant: { id: 'person-1', kind: 'user' },
+      revision: 3, activities: [activity('read-3', 'Documents', 'doc-1')], tombstones: [],
+    });
+    events.emit('disconnected');
+    expect(snapshots).toEqual([1, 0, 1, 0]);
+    stop();
     presence.dispose();
   });
 

@@ -2,7 +2,6 @@
 
 import {
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -12,15 +11,11 @@ import {
 } from 'react';
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
 import type { AbloClient as Ablo } from '../client.js';
-import type { PresenceSession } from '@abloatai/transaction/presence';
-import type { GroupScope } from '../local/sync/scopeGroups.js';
-import { resolveScopeGroups } from '../local/sync/scopeGroups.js';
 import { SyncContext, type SyncStoreContract } from './context.js';
 import { AbloInternalContext, type AbloInternalContextValue } from './internalContext.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
-import { useSyncStatus } from './useSyncStatus.js';
+import { useAblo } from './useAblo.js';
 import { DefaultFallback } from './DefaultFallback.js';
-import { presenceOfClient } from '../presence/index.js';
 
 /** Reactive binding over an application-owned client. Starts readiness,
  * forwards errors and gates bootstrap; the application owns client disposal.
@@ -46,107 +41,19 @@ import { presenceOfClient } from '../presence/index.js';
  * </AbloProvider>
  * ```
  *
- * That's it for most apps. `userId` is informational; the `fallback`,
+ * That's it for most apps. The `fallback`,
  * `preventUnsavedChanges`, and `on*` props are opt-in app glue; and the
  * block tagged "Optional DI (advanced)" below is escape-hatch wiring for
  * tests and platform builders — if you don't recognize a prop there, you
  * don't need it.
  */
-export interface AbloProviderProps<R extends SchemaRecord = SchemaRecord> {
-  /**
-   * A prebuilt {@link Ablo} client — **the only way to configure the engine.**
-   * Construct it yourself with `Ablo({ schema, apiKey, ... })` and pass the
-   * instance: the CLIENT owns auth, the credential lifecycle, transport, and
-   * connection; this provider is the thin REACTIVE binding over it (context,
-   * the bootstrap gate, error/​session forwarding).
-   *
-   * Memoize it (build it once, e.g. with `useMemo` or module scope) — a new
-   * instance each render re-keys the bootstrap gate and tears down the socket.
-   */
-  client: Ablo<R>;
-
-  /**
-   * The app user id, surfaced via `useCurrentUserId()` for app-owned fields.
-   * Purely informational for the React tree — sync identity is resolved by the
-   * client from its auth, not from this. Optional.
-   */
-  userId?: string;
-
-  /**
-   * Block tab close while there are unsynced local writes (the standard
-   * `beforeunload` prompt). Browsers ignore custom messages — don't pass one.
-   */
-  preventUnsavedChanges?: boolean;
-
-  /**
-   * Fired after the client has completed its terminal authentication cleanup
-   * (or surfaced a cleanup failure). Use it for app side effects such as a
-   * redirect to sign-in or clearing analytics identity.
-   */
-  onSessionExpired?: () => void | Promise<void>;
-
-  /**
-   * Fired on any error the provider surfaces (engine/WebSocket/bootstrap). For
-   * Sentry/Datadog. React-only consumers can use `useErrorListener()` instead.
-   */
-  onError?: (error: Error) => void;
-
-  /** @internal placeholder so the old WS-URL prop shape doesn't silently leak in. */
-  url?: never;
-
-  /**
-   * Rendered in place of `children` during the *first* bootstrap pass —
-   * while the engine is actively transitioning from `initial` →
-   * `connected` and has never successfully connected before. Once the
-   * engine reaches `connected` the gate latches open for the lifetime
-   * of this provider instance; transient `reconnecting` / `needs-auth`
-   * states do NOT re-show the fallback (the app's own UI handles those
-   * by then).
-   *
-   * Defaults to `<DefaultFallback />` — a neutral theme-adaptive
-   * spinner that uses `currentColor`, ships with zero design-system
-   * dependencies, and self-centers in a full-parent container. Pass
-   * your own `<Skeleton />` for a branded loading UX. Pass `null` to
-   * render nothing during bootstrap. Pass the string literal
-   * `"passthrough"` to opt out of the gate entirely — children render
-   * immediately and consumers are responsible for their own gating
-   * (`<ClientSideSuspense>` or manual `useSyncStatus()` checks).
-   * Useful for pages that mount debug helpers, error boundaries, or
-   * analytics that must run pre-ready.
-   */
-  fallback?: ReactNode | 'passthrough';
-
-  children: ReactNode;
-}
-
 // ── Implementation ───────────────────────────────────────────────────
 
-/**
- * Lightweight event emitter for provider-level errors. Lives on the
- * provider instance (ref-based) so `useErrorListener` subscriptions
- * survive re-renders without thrashing.
- */
-function createErrorEmitter() {
-  const listeners = new Set<(err: Error) => void>();
-  return {
-    subscribe(fn: (err: Error) => void): () => void {
-      listeners.add(fn);
-      return () => { listeners.delete(fn); };
-    },
-    emit(err: Error): void {
-      for (const fn of listeners) {
-        try { fn(err); } catch {}
-      }
-    },
-  };
-}
-
 export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
-  props: AbloProviderProps<R>,
+  props: AbloProvider.Props<R>,
 ): React.ReactElement {
   const {
     client,
-    userId,
     preventUnsavedChanges,
     onSessionExpired,
     onError,
@@ -168,20 +75,13 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   // resolves the identity from the client's auth.
   const [resolvedScope, setResolvedScope] = useState<{ engine: typeof engine; account: string | null } | null>(null);
 
-  // ── Error emitter (provider-instance scoped) ─────────────────────
-  const errorEmitterRef = useRef<ReturnType<typeof createErrorEmitter> | null>(null);
-  if (!errorEmitterRef.current) {
-    errorEmitterRef.current = createErrorEmitter();
-  }
-  const errorEmitter = errorEmitterRef.current;
-
   // Stash callbacks in refs so a new identity each render doesn't re-run the
   // start effect (the `useEventCallback` idiom).
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
-  useEffect(() => {
-    return errorEmitter.subscribe((err) => onErrorRef.current?.(err));
-  }, [errorEmitter]);
+  const reportError = useCallback((error: Error) => {
+    try { onErrorRef.current?.(error); } catch { /* Error reporting must not interrupt session cleanup. */ }
+  }, []);
   const onSessionExpiredRef = useRef(onSessionExpired);
   onSessionExpiredRef.current = onSessionExpired;
 
@@ -206,15 +106,15 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
     let stale = false;
 
     const unsubscribeSession = engine.onSessionError((err) => {
-      errorEmitter.emit(err);
+      reportError(err);
       void (async () => {
         try {
           await onSessionExpiredRef.current?.();
         } catch (hookErr) {
-          errorEmitter.emit(hookErr as Error);
+          reportError(hookErr as Error);
         }
       })().catch(() => {
-        // Only a throwing errorEmitter subscriber can land here — it was
+        // This was
         // already the error-reporting path, so swallow rather than surface
         // an unhandled rejection loop.
       });
@@ -231,14 +131,14 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
       })
       .catch((err) => {
         if (stale) return;
-        errorEmitter.emit(err as Error);
+        reportError(err as Error);
       });
 
     return () => {
       stale = true;
       unsubscribeSession();
     };
-  }, [engine, errorEmitter]);
+  }, [engine, reportError]);
 
   // ── beforeunload + preventUnsavedChanges ─────────────────────────
 
@@ -275,14 +175,11 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
     };
   }, [engine, resolvedScope, schema]);
 
-  // ── Internal context (currentUserId + error subscription) ────────
+  // The React tree holds the same client used by core code.
 
   const internalValue = useMemo<AbloInternalContextValue>(() => ({
-    currentUserId: userId ?? null,
-    subscribeError: errorEmitter.subscribe,
-    emitError: errorEmitter.emit,
     engine: engine as Ablo<SchemaRecord>,
-  }), [userId, errorEmitter, engine]);
+  }), [engine]);
 
   // ── Render ───────────────────────────────────────────────────────
   //
@@ -323,155 +220,83 @@ function BootstrapGate({
   readonly fallback: ReactNode;
   readonly children: ReactNode;
 }): ReactNode {
-  const status = useSyncStatus();
+  const status = useAblo(ablo => ablo.status);
   const [everConnected, setEverConnected] = useState(false);
 
   useEffect(() => {
     if (
-      status.name === 'connected' ||
-      status.name === 'reconnecting' ||
-      status.name === 'disconnected'
+      status?.name === 'connected' ||
+      status?.name === 'reconnecting' ||
+      status?.name === 'disconnected'
     ) {
       setEverConnected(true);
     }
-  }, [status.name]);
+  }, [status?.name]);
 
-  const showFallback = !everConnected && status.name === 'connecting';
+  const showFallback = !everConnected && status?.name === 'connecting';
   return <>{showFallback ? fallback : children}</>;
 }
 
+/** Props for wrappers around the provider, using the same schema parameter. */
+// eslint-disable-next-line @typescript-eslint/no-namespace
+export namespace AbloProvider {
+  export interface Props<R extends SchemaRecord = SchemaRecord> {
+    /**
+     * A prebuilt {@link Ablo} client — **the only way to configure the engine.**
+     * Construct it yourself with `Ablo({ schema, apiKey, ... })` and pass the
+     * instance: the CLIENT owns auth, the credential lifecycle, transport, and
+     * connection; this provider is the thin REACTIVE binding over it (context,
+     * the bootstrap gate, error/​session forwarding).
+     *
+     * Memoize it (build it once, e.g. with `useMemo` or module scope) — a new
+     * instance each render re-keys the bootstrap gate and tears down the socket.
+     */
+    client: Ablo<R>;
 
-const EMPTY_PRESENCE: readonly PresenceSession[] = Object.freeze([]);
+    /**
+     * Block tab close while there are unsynced local writes (the standard
+     * `beforeunload` prompt). Browsers ignore custom messages — don't pass one.
+     */
+    preventUnsavedChanges?: boolean;
 
-export type { GroupScope };
+    /**
+     * Fired after the client has completed its terminal authentication cleanup
+     * (or surfaced a cleanup failure). Use it for app side effects such as a
+     * redirect to sign-in or clearing analytics identity.
+     */
+    onSessionExpired?: () => void | Promise<void>;
 
-/**
- * Read-only presence: the other sessions currently visible to this
- * connection, bridged to React. This is a pure reader of the engine's
- * already-flowing presence stream; it does not mutate connection groups.
- *
- * Pass `scope` to narrow to the peers on that scope's sync group(s); omit
- * it to get everyone on the engine's groups. Membership is driven entirely
- * by the presence channel (set server-side on connect, independent of any
- * cursor/collaboration traffic), so reading it never affects what the
- * connection is subscribed to and can't deadlock against a gated channel.
- *
- * Use this to answer "is anyone else here?", for example to suppress
- * live-cursor broadcasts while alone.
- *
- * ```ts
- * const peers = usePeers({ reports: reportId });
- * const alone = !peers.some((p) => p.participantKind === 'user');
- * ```
- */
-export function usePeers(scope?: GroupScope): readonly PresenceSession[] {
-  const ctx = useContext(AbloInternalContext);
-  const engine = ctx?.engine ?? null;
+    /**
+     * Fired on any error the provider surfaces (engine/WebSocket/bootstrap). For
+     * Sentry/Datadog or application error UI.
+     */
+    onError?: (error: Error) => void;
 
-  // Resolve scope → groups through the schema.
-  // The stringified, sorted key is the stable effect dependency.
-  const scopeKey = JSON.stringify(
-    resolveScopeGroups(scope, engine?.schema).sort(),
-  );
-  const groups = useMemo(() => JSON.parse(scopeKey) as string[], [scopeKey]);
+    /** @internal placeholder so the old WS-URL prop shape doesn't silently leak in. */
+    url?: never;
 
-  const [peers, setPeers] = useState<readonly PresenceSession[]>(EMPTY_PRESENCE);
+    /**
+     * Rendered in place of `children` during the *first* bootstrap pass —
+     * while the engine is actively transitioning from `initial` →
+     * `connected` and has never successfully connected before. Once the
+     * engine reaches `connected` the gate latches open for the lifetime
+     * of this provider instance; transient `reconnecting` / `needs-auth`
+     * states do NOT re-show the fallback (the app's own UI handles those
+     * by then).
+     *
+     * Defaults to `<DefaultFallback />` — a neutral theme-adaptive
+     * spinner that uses `currentColor`, ships with zero design-system
+     * dependencies, and self-centers in a full-parent container. Pass
+     * your own `<Skeleton />` for a branded loading UX. Pass `null` to
+     * render nothing during bootstrap. Pass the string literal
+     * `"passthrough"` to opt out of the gate entirely — children render
+     * immediately and consumers are responsible for their own gating
+     * (for example, `useAblo(ablo => ablo.status)` checks).
+     * Useful for pages that mount debug helpers, error boundaries, or
+     * analytics that must run pre-ready.
+     */
+    fallback?: ReactNode | 'passthrough';
 
-  useEffect(() => {
-    if (!engine) {
-      setPeers(EMPTY_PRESENCE);
-      return;
-    }
-    const presence = presenceOfClient(engine);
-    const compute = (): readonly PresenceSession[] =>
-      groups.length === 0
-        ? presence.others
-        : presence.others.filter((session) =>
-            session.activities.some(({ target }) =>
-              target.id !== undefined && groups.includes(
-                `${target.model.toLowerCase()}:${target.id}`,
-              ),
-            ),
-          );
-    // Plain useState + onChange — presence changes on connect/disconnect/activity
-    // only (never on cursor traffic, a separate channel), so this fires
-    // rarely; a frame of stale presence is harmless.
-    setPeers(compute());
-    return presence.onChange(() => { setPeers(compute()); });
-  }, [engine, groups, scopeKey]);
-
-  return peers;
-}
-
-// ── Escape-hatches: raw engine/store access ──────────────────────────
-
-/**
- * Returns the raw `SyncEngine` proxy. Typically you want the typed
- * hooks (`useQuery`, `useOne`, `useMutate`) — this is for rare cases
- * where you need direct access (e.g., `sync.items.onChange(cb)`).
- *
- * The generic parameter narrows the return type to your schema's
- * model record so call sites get typed `sync.items.findMany()` /
- * `sync.sections.create(...)` without a cast at the call site:
- *
- * ```ts
- * const sync = useSync<(typeof schema)['models']>();
- * ```
- *
- * The runtime value is the exact engine the provider constructed;
- * the generic just widens the compile-time type.
- */
-export function useSync<R extends SchemaRecord = SchemaRecord>(): Ablo<R> {
-  const ctx = useContext(AbloInternalContext);
-  if (!ctx) {
-    throw new AbloValidationError(
-      'useSync: no <AbloProvider> mounted above this component.',
-      { code: 'no_ablo_provider' },
-    );
+    children: ReactNode;
   }
-  if (!ctx.engine) {
-    throw new AbloValidationError(
-      'useSync: the sync engine has not yet initialized. Wrap your ' +
-        'consumer in <ClientSideSuspense> or guard on useSyncStatus().',
-      { code: 'sync_not_ready' },
-    );
-  }
-  return rebindProviderEngine(ctx.engine);
-}
-
-function rebindProviderEngine<R extends SchemaRecord>(
-  engine: Ablo<SchemaRecord>,
-): Ablo<R> {
-  return engine as Ablo<R>;
-}
-
-/**
- * Returns the underlying `SyncStoreContract` (the BaseSyncedStore).
- * Most consumers should prefer the typed hooks (`useQuery` etc.); this
- * is for advanced cases like direct InstanceCache access or custom
- * reactive bridges. Throws if the provider hasn't mounted the store
- * yet — wrap consumers in `<ClientSideSuspense>` to gate correctly.
- *
- * The generic parameter lets consumers widen the return type to a
- * concrete `BaseSyncedStore<...>` subclass if they track one:
- *
- * ```ts
- * type AppStore = BaseSyncedStore<AppEvents, typeof schema>;
- * const store = useSyncStore<AppStore>();  // no cast needed at call site
- * ```
- *
- * The runtime value is always the concrete store the SDK constructed,
- * so widening the type is safe. The bounded generic (`T extends
- * SyncStoreContract`) keeps the widening honest.
- */
-export function useSyncStore<T extends SyncStoreContract = SyncStoreContract>(): T {
-  const sync = useContext(SyncContext);
-  if (!sync?.store) {
-    throw new AbloValidationError(
-      'useSyncStore: the sync engine has not yet initialized. Wrap ' +
-        'consumers in <ClientSideSuspense> or guard on useSyncStatus().',
-      { code: 'sync_not_ready' },
-    );
-  }
-  return sync.store as T;
 }

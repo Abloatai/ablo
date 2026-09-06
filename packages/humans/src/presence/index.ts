@@ -1,3 +1,4 @@
+import { observable, runInAction } from 'mobx';
 import {
   createPresenceProjection,
   type PresenceProjection,
@@ -44,11 +45,13 @@ export function createPresence(
 ): AttachablePresence {
   let projection: PresenceProjection | null = null;
   let attachedTransport: PresenceTransport | null = null;
+  const version = observable.box(0);
   const listeners = new Set<() => void>();
   const reads = new Set<ReadActivityLifetime>();
   let unsubscribe: (() => void) | null = null;
 
   const notify = (): void => {
+    runInAction(() => { version.set(version.get() + 1); });
     for (const listener of listeners) listener();
   };
 
@@ -63,8 +66,8 @@ export function createPresence(
   if (transport !== null) attach(transport);
 
   return {
-    get active() { return projection?.active ?? []; },
-    get others() { return projection?.others ?? []; },
+    get active() { version.get(); return projection?.active ?? []; },
+    get others() { version.get(); return projection?.others ?? []; },
     onChange(listener) {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
@@ -85,6 +88,7 @@ export function createPresence(
       };
     },
     forModel(model, recordId) {
+      version.get();
       return projection?.forModel(model, recordId) ?? [];
     },
     dispose() {

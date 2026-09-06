@@ -1,6 +1,6 @@
 'use client';
 
-import { useContext, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo } from 'react';
 import { AbloInternalContext } from './internalContext.js';
 import type { AbloClient as Ablo, AbloReads } from '../client.js';
 import type { ModelClaim } from '@abloatai/transaction/coordination';
@@ -8,10 +8,9 @@ import {
   getModelClientMeta,
   type ModelOperations,
 } from '../local/client/createModelOperations.js';
-import { Model } from '../local/Model.js';
 import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
 import type { ResolveSchema } from '@abloatai/transaction/types/global';
-import { useReactive } from '../useReactive.js';
+import { useReactive } from './useReactive.js';
 
 /**
  * The app's resolved schema-record type. It reads your `Register` module
@@ -56,64 +55,23 @@ export type ModelClientSelector<R extends SchemaRecord, T, C> =
   (ablo: AbloReads<R>) => ModelOperations<T, C>;
 export type AbloSelector<R extends SchemaRecord, T> = (ablo: AbloReads<R>) => T;
 
-export interface UseAbloModelOptions<T> {
-  /**
-   * An initial row, usually from a server component or a route loader. The hook
-   * returns it until sync delivers a newer row for the same id.
-   */
-  readonly initial?: T;
-}
-
-export interface UseAbloModelResult<T> {
-  /** The current row for the id, or `initial` until the row has synced. */
-  readonly data: T | undefined;
-  /** The work claims currently held on this row by any participant. */
-  readonly claims: readonly ModelClaim[];
-  /** True while another participant holds a claim — handy for disabling UI. */
-  readonly claimed: boolean;
-}
-
-export type UseAbloHydratedModelResult<T> =
-  Omit<UseAbloModelResult<T>, 'data'> & { readonly data: T };
-
 function readModelResult<R extends SchemaRecord, T, C>(
   engine: Ablo<R> | null,
   modelClient: ModelOperations<T, C> | undefined,
   id: string | undefined,
   initial: T | undefined,
-): UseAbloModelResult<T> {
+): useAblo.Result<T> {
   if (!modelClient || id === undefined) {
     return { data: initial, claims: EMPTY_CLAIMS, claimed: false };
   }
 
-  const data = snapshotValue(modelClient.local.get(id) ?? initial);
+  const data = modelClient.local.get(id) ?? initial;
   const meta = getModelClientMeta(modelClient);
   const claims = meta && engine
     ? engine.claims.list({ model: meta.key, id })
     : EMPTY_CLAIMS;
 
   return { data, claims, claimed: claims.length > 0 };
-}
-
-/**
- * Projects a reactive read into the value that `useReactive` caches and
- * returns.
- *
- * For a `Model`, this reads the row's fields through `toReactiveSnapshot`
- * rather than returning the instance itself. Property access is what subscribes
- * the reaction to those fields, so the read has to happen inside this tracked
- * function; returning the live instance without reading its fields would leave
- * the component blind to later edits. The fresh object it produces also lets
- * `useReactive`'s equality check detect an in-place update.
- */
-function snapshotValue<T>(value: T): T {
-  if (value instanceof Model) {
-    return value.toReactiveSnapshot<T>();
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => snapshotValue(item)) as T;
-  }
-  return value;
 }
 
 /**
@@ -150,9 +108,10 @@ function snapshotValue<T>(value: T): T {
  * const ablo = useAblo<(typeof schema)['models']>();
  * ```
  *
- * The no-argument form returns `null` while the engine is still bootstrapping.
- * Branch on `null` and render a loading state — or gate on `useSyncStatus()`
- * reaching `'connected'` — before calling model methods.
+ * The client and its status are available during provider startup. Select
+ * `ablo.status` to display connection state; await `ablo.ready()` before
+ * operations that require an initialized client. Without a provider, the
+ * no-argument form returns `null` and selectors return `undefined`.
  */
 export function useAblo<R extends SchemaRecord = DefaultModels>(): Ablo<R> | null;
 export function useAblo<
@@ -164,8 +123,8 @@ export function useAblo<
 export function useAblo<T, C>(
   modelClient: ModelOperations<T, C>,
   id: string,
-  options: UseAbloModelOptions<T> & { readonly initial: T },
-): UseAbloHydratedModelResult<T>;
+  options?: useAblo.Options<T>,
+): useAblo.Result<T>;
 export function useAblo<
   R extends SchemaRecord = DefaultModels,
   T = Record<string, unknown>,
@@ -173,22 +132,8 @@ export function useAblo<
 >(
   select: ModelClientSelector<R, T, C>,
   id: string,
-  options: UseAbloModelOptions<T> & { readonly initial: T },
-): UseAbloHydratedModelResult<T>;
-export function useAblo<T, C>(
-  modelClient: ModelOperations<T, C>,
-  id: string,
-  options?: UseAbloModelOptions<T>,
-): UseAbloModelResult<T>;
-export function useAblo<
-  R extends SchemaRecord = DefaultModels,
-  T = Record<string, unknown>,
-  C = unknown,
->(
-  select: ModelClientSelector<R, T, C>,
-  id: string,
-  options?: UseAbloModelOptions<T>,
-): UseAbloModelResult<T>;
+  options?: useAblo.Options<T>,
+): useAblo.Result<T>;
 export function useAblo<
   R extends SchemaRecord = DefaultModels,
   T = Record<string, unknown>,
@@ -196,34 +141,9 @@ export function useAblo<
 >(
   modelOrSelect?: ModelOperations<T, C> | ModelClientSelector<R, T, C> | AbloSelector<R, T>,
   id?: string,
-  options?: UseAbloModelOptions<T>,
-): Ablo<R> | null | UseAbloModelResult<T> | T | undefined {
-  return useAbloImpl<R, T, C>(null, modelOrSelect, id, options);
-}
-
-/**
- * @internal The one implementation behind `useAblo` and the bound hooks a
- * `createAbloReact` binding returns — written once so the reactive read path
- * cannot fork between the global hook and a factory's.
- *
- * `boundClient` is a binding's own context value — typed `Ablo<S>` at the
- * factory, so that path never rebinds and never casts. `null` means "no
- * binding provider in this tree": the global hook always passes it, and a
- * binding hook mounted under a legacy provider falls through to the erased
- * internal context, which is what keeps both mounts working while the last
- * legacy mount migrates.
- */
-export function useAbloImpl<
-  R extends SchemaRecord,
-  T = Record<string, unknown>,
-  C = unknown,
->(
-  boundClient: Ablo<R> | null,
-  modelOrSelect?: ModelOperations<T, C> | ModelClientSelector<R, T, C> | AbloSelector<R, T>,
-  id?: string,
-  options?: UseAbloModelOptions<T>,
-): Ablo<R> | null | UseAbloModelResult<T> | T | undefined {
-  const engine = useAbloClientImpl(boundClient);
+  options?: useAblo.Options<T>,
+): Ablo<R> | null | useAblo.Result<T> | T | undefined {
+  const engine = useAbloClient<R>();
   const initial = options?.initial;
   const isSelectorOnly = typeof modelOrSelect === 'function' && id === undefined;
   const modelClient: ModelOperations<T, C> | undefined =
@@ -235,51 +155,65 @@ export function useAbloImpl<
         ? undefined
         : modelOrSelect;
 
-  // Claims arrive through an event emitter (engine.claims), not through MobX, so
-  // the useReactive reactions below cannot track them; we bridge changes with a
-  // setState bump instead. Subscribe the model-row form (`id !== undefined`)
-  // to claims. Selector-only reads track MobX model data; callers displaying
-  // ownership use the row form's `claims` / `claimed` result.
-  const [claimVersion, setClaimVersion] = useState(0);
+  // The initial row is a seed for this client/model/id, not a permanent
+  // fallback: once local data has been committed to the UI, its removal must
+  // not resurrect the seed. Only committed effects change this marker.
+  // These dependencies define when the seed belongs to a different row.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const seed = useMemo(() => ({ received: false }), [engine, modelClient, id]);
+  const reading = modelOrSelect !== undefined;
+  const subscribe = useCallback((notify: () => void) => {
+    if (!engine || !reading) return () => undefined;
+    return engine.claims.onChange(notify);
+  }, [engine, reading]);
+  const value = useReactive<T | useAblo.Result<T> | undefined>(() => {
+    if (isSelectorOnly && typeof modelOrSelect === 'function') {
+      return engine ? modelOrSelect(reactiveReads<R>(engine)) as T : undefined;
+    }
+    if (modelOrSelect) {
+      return readModelResult(engine, modelClient, id, seed.received ? undefined : initial);
+    }
+    return undefined;
+  }, {
+    subscribe,
+    // The same seed produces the server HTML and the first hydration render,
+    // even if the browser already has a newer row or claim in its local cache.
+    ...(id !== undefined && initial !== undefined ? {
+      serverSnapshot: () => ({ data: initial, claims: EMPTY_CLAIMS, claimed: false }),
+    } : {}),
+  });
   useEffect(() => {
-    if (!engine || id === undefined) return;
-    return engine.claims.onChange(() => { setClaimVersion((version) => version + 1); });
-  }, [engine, id]);
+    if (id !== undefined && modelClient?.local.get(id) !== undefined) seed.received = true;
+  }, [seed, modelClient, id, value]);
 
-  const selected = useReactive<T | undefined>(
-    () => {
-      if (!engine || !isSelectorOnly || typeof modelOrSelect !== 'function') {
-        return undefined;
-      }
-      // The selector runs against the real engine — reads inside it return the
-      // pool's model instances. `snapshotValue` then converts the RESULT to
-      // plain snapshot rows, which is what the selector's `AbloReads`
-      // parameter type already promised.
-      return snapshotValue(modelOrSelect(reactiveReads<R>(engine)) as T);
-    },
-  );
-
-  const modelResult = useReactive<UseAbloModelResult<T>>(
-    () => {
-      void claimVersion;
-      return readModelResult(engine, modelClient, id, initial);
-    },
-  );
-
-  if (isSelectorOnly) return selected;
-  if (modelOrSelect) return modelResult;
+  if (isSelectorOnly || modelOrSelect) return value;
   return engine;
 }
 
-/** @internal Resolve the bound or legacy provider client through one rebind seam. */
-export function useAbloClientImpl<R extends SchemaRecord>(
-  boundClient: Ablo<R> | null,
-): Ablo<R> | null {
+/** @internal Resolve the nearest provider's client through one schema rebind. */
+export function useAbloClient<R extends SchemaRecord>(): Ablo<R> | null {
   const ctx = useContext(AbloInternalContext);
-  // The bound client wins — it is already `Ablo<R>`, no rebinding. The
-  // fallback is the ONE remaining schema rebind in the SDK; it retires with
-  // the last legacy provider mount (docs/plans/typed-react-binding.md).
-  const engine: Ablo<R> | null =
-    boundClient ?? (ctx?.engine ? rebindEngine<R>(ctx.engine) : null);
-  return engine;
+  return ctx?.engine ? rebindEngine<R>(ctx.engine) : null;
+}
+
+/** Type annotations belong to the operation; most callers rely on inference. */
+// eslint-disable-next-line @typescript-eslint/no-namespace
+export namespace useAblo {
+  export interface Options<T> {
+    /**
+     * An initial row, usually from a server component or a route loader. The hook
+     * uses it for hydration and until a local row has been observed. A later
+     * local removal returns undefined instead of restoring this seed.
+     */
+    readonly initial?: T;
+  }
+
+  export interface Result<T> {
+    /** The local row or its initial seed. Undefined is a local cache miss, not proof of server absence. */
+    readonly data: T | undefined;
+    /** The work claims currently held on this row by any participant. */
+    readonly claims: readonly ModelClaim[];
+    /** True while another participant holds a claim — handy for disabling UI. */
+    readonly claimed: boolean;
+  }
 }

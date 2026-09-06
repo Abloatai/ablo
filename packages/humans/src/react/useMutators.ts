@@ -26,7 +26,7 @@ import { getContext } from '../local/context.js';
  * If a mutator throws, the error propagates to the caller and any writes it
  * already dispatched stay in place — there is no automatic rollback. Wrap the
  * call in your own try/catch and issue compensating writes when you need to
- * undo a partial change, or pass an `undoScope` (see {@link UseMutatorsOptions})
+ * undo a partial change, or pass an `undoScope` (see {@link useMutators.Options})
  * to record inverses for undo and redo.
  */
 
@@ -50,28 +50,12 @@ export type InvokerFor<F> = F extends (options: infer O) => Promise<infer R>
  * The hook's return shape: same tree as the input `MutatorDefs`, every leaf
  * rewritten to its invoker form.
  */
-export type MutatorInvokers<M> = {
-  [K in keyof M]: {
-    [N in keyof M[K]]: InvokerFor<M[K][N]>;
-  };
-};
-
-/**
- * Options passed to `useMutators`. When `undoScope` is set, every mutator
- * invocation is wrapped in a `RecordingMutation` and its inverses are
- * pushed to the scope as one undo entry.
- */
-export interface UseMutatorsOptions<S extends Schema> {
-  /** Target undo scope for recording inverses. Omit to disable recording. */
-  undoScope?: UndoScope<S>;
-}
-
 /** Mutator invokers (explicit schema arg). */
 export function useMutators<S extends Schema, M extends MutatorDefs<S>>(
   schema: S,
   mutators: M,
-  options?: UseMutatorsOptions<S>,
-): MutatorInvokers<M>;
+  options?: useMutators.Options<S>,
+): useMutators.Result<M>;
 
 /** Mutator invokers via the `Register` module augmentation. Schema comes
  * from the `SyncProvider`'s context; the mutator tree is typed against
@@ -80,14 +64,14 @@ export function useMutators<
   M extends ResolveSchema extends Schema ? MutatorDefs<ResolveSchema> : MutatorDefs<Schema>,
 >(
   mutators: M,
-  options?: UseMutatorsOptions<ResolveSchema extends Schema ? ResolveSchema : Schema>,
-): MutatorInvokers<M>;
+  options?: useMutators.Options<ResolveSchema extends Schema ? ResolveSchema : Schema>,
+): useMutators.Result<M>;
 
 export function useMutators(
   schemaOrMutators: Schema | MutatorDefs<Schema>,
-  mutatorsOrOptions?: MutatorDefs<Schema> | UseMutatorsOptions<Schema>,
-  maybeOptions?: UseMutatorsOptions<Schema>,
-): MutatorInvokers<MutatorDefs<Schema>> {
+  mutatorsOrOptions?: MutatorDefs<Schema> | useMutators.Options<Schema>,
+  maybeOptions?: useMutators.Options<Schema>,
+): useMutators.Result<MutatorDefs<Schema>> {
   const { store, organizationId, schema: ctxSchema } = useSyncContext();
 
   // Disambiguate: explicit-schema path has the schema object in first slot;
@@ -101,7 +85,7 @@ export function useMutators(
   const schema = isExplicit ? (schemaOrMutators as Schema) : ctxSchema;
   const mutators = (isExplicit ? mutatorsOrOptions : schemaOrMutators) as MutatorDefs<Schema>;
   const options = (isExplicit ? maybeOptions : mutatorsOrOptions) as
-    | UseMutatorsOptions<Schema>
+    | useMutators.Options<Schema>
     | undefined;
 
   if (!schema) {
@@ -115,7 +99,7 @@ export function useMutators(
 
   const { undoScope } = options ?? {};
 
-  return useMemo<MutatorInvokers<MutatorDefs<Schema>>>(() => {
+  return useMemo<useMutators.Result<MutatorDefs<Schema>>>(() => {
     const out: Record<string, Record<string, (args: unknown) => Promise<unknown>>> = {};
 
     for (const modelKey of Object.keys(mutators)) {
@@ -181,4 +165,24 @@ export function useMutators(
 
     return out;
   }, [schema, mutators, store, organizationId, undoScope]);
+}
+
+/** Optional annotations for custom mutation bindings. */
+// eslint-disable-next-line @typescript-eslint/no-namespace
+export namespace useMutators {
+  export type Result<M> = {
+    [K in keyof M]: {
+      [N in keyof M[K]]: InvokerFor<M[K][N]>;
+    };
+  };
+
+  /**
+   * Options passed to `useMutators`. When `undoScope` is set, every mutator
+   * invocation is wrapped in a `RecordingMutation` and its inverses are
+   * pushed to the scope as one undo entry.
+   */
+  export interface Options<S extends Schema> {
+    /** Target undo scope for recording inverses. Omit to disable recording. */
+    undoScope?: UndoScope<S>;
+  }
 }

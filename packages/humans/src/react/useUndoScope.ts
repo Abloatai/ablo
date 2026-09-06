@@ -29,17 +29,6 @@ import { AbloValidationError } from '@abloatai/transaction/errors';
  * useHotkey('mod+z', () => { if (canUndo) void undo(); });
  */
 
-export interface UseUndoScopeResult<S extends Schema> {
-  /** Pass to `useMutators(..., { undoScope })` to enable recording. */
-  scope: UndoScope<S>;
-  undo: () => Promise<void>;
-  redo: () => Promise<void>;
-  canUndo: boolean;
-  canRedo: boolean;
-  /** Drop history. Use after sync errors / auth context changes. */
-  clear: () => void;
-}
-
 // Module-level weak registry: `SyncStoreContract` → `UndoManager`.
 // A single app wiring through one SyncProvider shares one manager across
 // every useUndoScope call, so scopes with the same name are identity-equal.
@@ -66,19 +55,19 @@ export function useUndoScope<S extends Schema>(
   schema: S,
   name: string,
   options?: UndoScopeOptions,
-): UseUndoScopeResult<S>;
+): useUndoScope.Result<S>;
 
 /** Per-surface undo/redo via the `Register` module augmentation. */
 export function useUndoScope(
   name: string,
   options?: UndoScopeOptions,
-): UseUndoScopeResult<ResolveSchema extends Schema ? ResolveSchema : Schema>;
+): useUndoScope.Result<ResolveSchema extends Schema ? ResolveSchema : Schema>;
 
 export function useUndoScope(
   schemaOrName: Schema | string,
   nameOrOptions?: string | UndoScopeOptions,
   maybeOptions?: UndoScopeOptions,
-): UseUndoScopeResult<Schema> {
+): useUndoScope.Result<Schema> {
   const { store, organizationId, schema: ctxSchema } = useSyncContext();
 
   const isExplicit = typeof schemaOrName !== 'string';
@@ -140,4 +129,19 @@ export function useUndoScope(
       setTick((t: number) => t + 1);
     },
   };
+}
+
+/** The state returned by an undo scope; inferred for ordinary hook calls. */
+// eslint-disable-next-line @typescript-eslint/no-namespace
+export namespace useUndoScope {
+  export interface Result<S extends Schema> {
+    /** Pass to `useMutators(..., { undoScope })` to enable recording. */
+    scope: UndoScope<S>;
+    undo: () => Promise<void>;
+    redo: () => Promise<void>;
+    canUndo: boolean;
+    canRedo: boolean;
+    /** Drop history. Use after sync errors / auth context changes. */
+    clear: () => void;
+  }
 }

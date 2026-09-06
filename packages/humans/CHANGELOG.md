@@ -1,5 +1,59 @@
 # @abloatai/humans
 
+## 0.64.0
+
+### Minor Changes
+
+- React reads the same core objects as ordinary Ablo code. Read connection state with `ablo.status` outside React and `useAblo(ablo => ablo.status)` inside React; its type is `Ablo.Status`. Presence reads through `useAblo(ablo => ablo.presence.others)` or `ablo.presence.forModel(model, id)` now react to activity changes. The unregistered-schema selector also preserves core properties and methods.
+
+  This is a breaking API cleanup for 0.64, with no compatibility aliases:
+
+  - Replace `useSyncStatus()` with `useAblo(ablo => ablo.status)`, and `SyncStatusSnapshot` with `Ablo.Status`. Replace the client's raw `syncStatus` with `status`; raw transport details remain internal to the store.
+  - Replace `useSync()` with `useAblo()`. The client is available during startup; await `client.ready()` before operations that require initialization.
+  - Replace `usePeers()` with `useAblo(ablo => ablo.presence.others)`. Replace scoped peer reads with `useAblo(ablo => ablo.presence.forModel(model, id))`; this returns sessions, including the current session when it has activity on that record. Filter by session ID when you specifically need other sessions.
+  - Replace `useMutationFailureListener(listener)` with `useEffect(() => ablo?.onMutationFailure(listener), [ablo, listener])`; the payload type is `Ablo.MutationFailure`.
+  - Handle provider startup errors with `<AbloProvider onError={...}>` instead of `useErrorListener()`.
+  - Read application identity from your authentication client or application context instead of `useCurrentUserId()`. The informational `AbloProvider.userId` prop is removed; authenticated Ablo authority still comes from the client's session.
+  - `GroupScope` leaves the React entry point with `usePeers`; presence filtering uses model and record arguments.
+  - `useSyncStore`, `SyncStoreContract`, and `useReactive` are no longer React entry-point exports. Use the core client; framework integration internals remain under the humans runtime boundary.
+  - `ClientSideSuspense` and `DefaultFallback` are no longer public components. Supply your own UI through the provider's `fallback` prop or render from `ablo.status`.
+
+  The React entry point explicitly exports its supported bindings instead of forwarding all implementation exports through a wildcard. Existing model operations, claims, and reading-activity lifetimes remain on their core owners.
+
+  React type annotations now follow their owners. The entry point has eight runtime exports (`Ablo`, `humans`, `AbloProvider`, `createAbloReact`, `useAblo`, `usePresence`, `useMutators`, `useUndoScope`) and no standalone type exports:
+
+  | Removed React type export                                 | Replacement                                                                                         |
+  | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+  | `AbloOptions`                                             | `Ablo.Options`                                                                                      |
+  | `AbloReads`                                               | `Ablo.Reads`                                                                                        |
+  | `HumansSurface`                                           | Infer the plugin result; low-level plugin authors can still import the type from `@abloatai/humans` |
+  | `AbloProviderProps`                                       | `AbloProvider.Props`                                                                                |
+  | `AbloReactBinding`                                        | Infer the binding, or `ReturnType<typeof createAbloReact<Models>>`                                  |
+  | `PresenceModelSelector`                                   | Infer an inline selector against the bound schema                                                   |
+  | `UseAbloModelOptions`                                     | `useAblo.Options<Row>`                                                                              |
+  | `UseAbloModelResult`                                      | `useAblo.Result<Row>`                                                                               |
+  | `UseAbloHydratedModelResult`                              | `useAblo.Result<Row>`; handle optional data after local removal, even with `initial`                |
+  | `InvokerFor`                                              | `typeof mutations.model.operation`                                                                  |
+  | `MutatorInvokers`                                         | `useMutators.Result<typeof definitions>`                                                            |
+  | `UseMutatorsOptions`                                      | `useMutators.Options<typeof schema>`                                                                |
+  | `UseUndoScopeResult`                                      | `useUndoScope.Result<typeof schema>`                                                                |
+  | `ResolveSchema`                                           | Existing core `Ablo.ResolveSchema`, when using module registration                                  |
+  | `ResolveModelKey`                                         | `keyof typeof schema.models`                                                                        |
+  | `DefaultSyncShape`, `ResolveUserMeta`, `ResolveClaimMeta` | Internal registration details; use schema inference and the core presence/claim types               |
+  | `MutateActions`                                           | `Ablo.Mutator.Transaction<typeof schema>['mutate'][ModelKey]`                                       |
+  | `ReaderActions`                                           | `Ablo.Mutator.Transaction<typeof schema>['read'][ModelKey]`                                         |
+  | `ReaderFindOptions`                                       | Infer read options; advanced callers can import the existing type from `@abloatai/ablo/client`      |
+
+  `ModelScope` is no longer re-exported by React; its existing advanced owner is `@abloatai/ablo/client`. Ordinary model reads use their `state` option.
+
+  `createAbloReact(schema)` now specializes only types and returns the existing module-level provider and hooks. It creates no React context or component identity. Hooks always read the nearest AbloProvider, including when bindings for different schemas are nested; do not call a binding's hooks below a provider for another schema. Recreating a binding no longer remounts its children. Keep the application binding at module scope for clear ownership.
+
+  Selectors now preserve equal snapshot identity, detach nested row data, and subscribe to claim events. Subscriptions survive suspended renders and catch changes between render and subscription. Initial rows match server rendering during hydration, then yield to local data; a later removal no longer restores the seed. Local cache absence remains distinct from server absence.
+
+### Patch Changes
+
+- @abloatai/transaction@0.64.0
+
 ## 0.63.1
 
 ### Patch Changes

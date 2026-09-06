@@ -118,8 +118,8 @@ The example claims both `executionOwner` and `executionState`, writes with the
 claim, simulates generating, then stays idle while still holding ownership.
 The `executionOwner` row value is historical metadata after release; the UI uses
 `useAblo(client => client.conversations, id).claimed` for reactive ownership.
-The row form subscribes to claim events; a selector-only call to `claim.state`
-is only a snapshot and can miss ownership changes. Applications decide how to recover
+Both the row form and `useAblo(client => client.conversations.claim.state({ id }))`
+subscribe to claim events. Applications decide how to recover
 an interrupted execution-state field; a lease is not proof of ongoing generation.
 
 Text buffering, tool execution and queued-message scheduling belong to the

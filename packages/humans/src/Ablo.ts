@@ -264,6 +264,11 @@ import type * as _Global from '@abloatai/transaction/types/global';
  */
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace Ablo {
+  /** Payload delivered by the core client's onMutationFailure subscription. */
+  export type MutationFailure = Parameters<Parameters<AbloClient<SchemaRecord>['onMutationFailure']>[0]>[0];
+  /** Current client lifecycle, also selected through React's useAblo. */
+  export type Status = import('./local/client/status.js').ClientStatus;
+
   // ── Factory options ────────────────────────────────────────────────
   export type Options<S extends SchemaRecord = SchemaRecord> = AbloOptions<S>;
   /**

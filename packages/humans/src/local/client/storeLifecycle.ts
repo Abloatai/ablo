@@ -301,7 +301,7 @@ export function startStoreLifecycle<S extends SchemaRecord>(
         //
         // The store.initialize() generator updates store.syncStatus as it
         // progresses (syncing → idle on success, error on failure), so the
-        // consumer's `sync.syncStatus` observable reflects real-time state.
+        // consumer's `ablo.status` projection reflects real-time state.
         // Resolve bootstrap mode: explicit option wins; otherwise
         // agents default to 'none' (transactional participant — see
         // option doc) and everyone else defaults to 'full'.
@@ -386,7 +386,7 @@ export function startStoreLifecycle<S extends SchemaRecord>(
   if (!validationError && internalOptions.autoStart) {
     void ready().catch(() => {
       // Error is captured in store.syncStatus; consumers should check
-      // `sync.syncStatus.state === 'error'` to detect failures.
+      // `ablo.status.name === 'disconnected'` to detect failures.
     });
   }
 

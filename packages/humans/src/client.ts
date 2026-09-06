@@ -19,9 +19,9 @@ import type {
   InferRow,
 } from '@abloatai/transaction/schema/schema';
 import type { InstanceCache } from './local/InstanceCache.js';
-import type { SyncStoreContract } from './react/context.js';
+import type { SyncStoreContract } from './local/storeContract.js';
 import type { SyncWebSocket, CoreSyncEventMap } from './local/sync/SyncWebSocket.js';
-import type { SyncStatus } from './local/BaseSyncedStore.js';
+import type { ClientStatus } from './local/client/status.js';
 import type { ModelOperations } from './local/client/createModelOperations.js';
 import type {
   ClaimResource,
@@ -39,7 +39,10 @@ export type AbloClient<S extends SchemaRecord> = {
     Model<Schema<S>, K>,
     InferCreate<Schema<S>, K>
   >;
-} & {
+} & AbloCore<S>;
+
+/** Core members stay intact even when the model schema is not registered. */
+interface AbloCore<S extends SchemaRecord> {
   /**
    * Wait for the sync engine to finish its initial bootstrap.
    * Resolves once entity data is loaded and the WebSocket is connected.
@@ -65,7 +68,7 @@ export type AbloClient<S extends SchemaRecord> = {
    * acknowledged everything before continuing — for example, before
    * navigating away, before triggering a server-side workflow, or in tests.
    *
-   * Resolves when `syncStatus.pendingChanges` reaches 0. If the engine is
+   * Resolves when all pending local changes are confirmed. If the engine is
    * offline, this waits until reconnect + flush completes.
    *
    * ```ts
@@ -205,32 +208,10 @@ export type AbloClient<S extends SchemaRecord> = {
   waitForConfirmation(modelName: string, modelId: string): Promise<void>;
 
   /**
-   * Reactive sync status — a MobX observable.
-   *
-   * Single source of truth for "what's the sync engine doing?" Contains:
-   * - `state`: `'idle' | 'syncing' | 'error' | 'offline' | 'reconnecting'`
-   * - `progress`: 0-100 for bootstrap progress
-   * - `error?`: Error object when `state === 'error'`
-   * - `pendingChanges`: Number of unconfirmed mutations in the queue
-   * - `lastSyncAt?`: Timestamp of the last successful delta processing
-   * - `offlineSince?`: When the connection dropped
-   * - `isSessionError`: True when the error requires re-authentication
-   *
-   * React components using `observer()` re-render automatically when
-   * any field changes — no manual subscription or polling needed.
-   *
-   * ```tsx
-   * import { observer } from 'mobx-react-lite';
-   *
-   * const SyncIndicator = observer(() => {
-   *   if (sync.syncStatus.state === 'syncing') return <Spinner />;
-   *   if (sync.syncStatus.state === 'error') return <Error msg={sync.syncStatus.error} />;
-   *   if (sync.syncStatus.state === 'offline') return <OfflineBadge />;
-   *   return null;
-   * });
-   * ```
+   * Current connection and confirmation state. Available before ready().
+   * React reads the same value with `useAblo(ablo => ablo.status)`.
    */
-  readonly syncStatus: SyncStatus;
+  readonly status: ClientStatus;
 
   /**
    * Session-owned live activity projected from this client's existing
@@ -290,7 +271,7 @@ export type AbloClient<S extends SchemaRecord> = {
    * no window in which this is absent and nothing needs to guard for one.
    */
   readonly _ws: SyncWebSocket;
-};
+}
 
 /**
  * The reactive-read client a `useAblo` selector receives. The same surface as
@@ -301,7 +282,7 @@ export type AbloClient<S extends SchemaRecord> = {
  * compile error here instead of a silent runtime `undefined`; compose
  * relations through selectors or hooks that resolve the pool's instance.
  */
-export type AbloReads<S extends SchemaRecord> = Omit<AbloClient<S>, keyof S & string> & {
+export type AbloReads<S extends SchemaRecord> = AbloCore<S> & {
   readonly [K in keyof S & string]: ModelOperations<
     InferRow<Schema<S>, K>,
     InferCreate<Schema<S>, K>

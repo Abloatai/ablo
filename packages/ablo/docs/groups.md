@@ -46,7 +46,7 @@ question you have.
 ablo.records.onChange((docs) => render(docs));
 
 // In React: who else is visible on this client's scoped groups?
-const peers = usePeers({ records: documentId });
+const peers = useAblo(ablo => ablo.presence.forModel('records', documentId)) ?? [];
 
 // Stop this write if the thing I read moved while I composed it.
 const record = await ablo.records.read({ id: 's-1' });
@@ -57,10 +57,10 @@ await ablo.blocks.update({ id, data, reads: [record] });
 | Question | Channel | Arrives |
 | --- | --- | --- |
 | What do the rows say right now? | `onChange` | As deltas land, on the socket |
-| Who else is working here? | `usePeers` over the session/client groups | As participants connect, disconnect, or change activity |
+| Who else is working here? | `useAblo(ablo => ablo.presence.others)` over the session/client groups | As participants connect, disconnect, or change activity |
 | Did the premise for **this** write move? | `reads` on the write | On that write's receipt, before it applies |
 
-`onChange` and `usePeers` use the reactive client's socket. `reads` rides the
+`onChange` and `useAblo(ablo => ablo.presence.others)` use the reactive client's socket. `reads` rides the
 commit, so it reaches a socketless actor over HTTP too. The row returned by
 `read` privately carries its model, id, and
 watermark; passing that row in `reads` is enough to protect a later write. Ablo
@@ -183,6 +183,6 @@ them coarse everywhere else.
   [`concurrency-convention.md`](./concurrency-convention.md) (§4 and §5).
 - **The mechanics**, the three coordination blocks underneath, are
   [`coordination.md`](./coordination.md).
-- **Presence** is read with `usePeers`; active exclusions remain on the
+- **Presence** is read with `useAblo(ablo => ablo.presence.others)`; active exclusions remain on the
   `claim` namespace. See [`react.md`](./react.md) and
   [`coordination.md`](./coordination.md).

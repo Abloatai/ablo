@@ -1,55 +1,31 @@
 'use client';
 
 /**
- * The typed react binding — the schema generic is captured ONCE, at a factory
- * call in app code, and every hook the factory returns is born typed. This is
- * a schema-bound shape with no module augmentation or generic parameters at call sites,
- * and — once the legacy generic erasure retires — no casts anywhere on the
- * path from context to component.
+ * Capture schema inference once while reusing module-level React functions.
+ * This helper creates no components, hooks, contexts or client instances.
  *
- * The app's one binding file, by convention:
- *
- * ```ts
- * // lib/ablo.ts
- * import { createAbloReact } from '@abloatai/ablo/react';
- * import { schema } from './schema';
- *
- * export const { AbloProvider, useAblo } = createAbloReact(schema);
- * ```
- *
- * Components then import `useAblo` from `lib/ablo` and never spell a type
- * argument; `useAblo()` is `Ablo<S> | null`, and a selector's `ablo`
- * parameter is the reactive-read view of the same `S`.
+ * Define the app binding at module scope:
+ * `export const { AbloProvider, useAblo, usePresence } = createAbloReact(schema)`.
  */
 
-import { createContext, createElement, useContext, type ReactElement } from 'react';
+import type { ReactElement } from 'react';
+import { AbloProvider } from './AbloProvider.js';
 import {
-  AbloProvider,
-  type AbloProviderProps,
-} from './AbloProvider.js';
-import {
-  useAbloImpl,
-  useAbloClientImpl,
+  useAblo,
   type AbloSelector,
   type ModelClientSelector,
-  type UseAbloHydratedModelResult,
-  type UseAbloModelOptions,
-  type UseAbloModelResult,
 } from './useAblo.js';
 import type { AbloClient as Ablo } from '../client.js';
 import type { ModelOperations } from '../local/client/createModelOperations.js';
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
-import {
-  usePresenceImpl,
-  type PresenceModelSelector,
-} from './usePresence.js';
+import { usePresence, type PresenceModelSelector } from './usePresence.js';
 import type { PresenceSession } from '@abloatai/transaction/presence';
 
 /** What a binding returns: the provider and the hook, with `S` fixed. */
 export interface AbloReactBinding<S extends SchemaRecord> {
   /** `AbloProvider` with its `client` prop typed `Ablo<S>` — same component,
    *  no per-app generics. */
-  AbloProvider: (props: AbloProviderProps<S>) => ReactElement;
+  AbloProvider: (props: AbloProvider.Props<S>) => ReactElement;
   /** `useAblo` with the schema bound — the same overloads as the global
    *  hook, minus the type arguments. */
   useAblo: {
@@ -58,13 +34,8 @@ export interface AbloReactBinding<S extends SchemaRecord> {
     <T, C>(
       modelClientOrSelect: ModelOperations<T, C> | ModelClientSelector<S, T, C>,
       id: string,
-      options: UseAbloModelOptions<T> & { readonly initial: T },
-    ): UseAbloHydratedModelResult<T>;
-    <T, C>(
-      modelClientOrSelect: ModelOperations<T, C> | ModelClientSelector<S, T, C>,
-      id: string,
-      options?: UseAbloModelOptions<T>,
-    ): UseAbloModelResult<T>;
+      options?: useAblo.Options<T>,
+    ): useAblo.Result<T>;
   };
   /** Declare and reactively read record presence with the same model clients. */
   usePresence: <T, C>(
@@ -73,68 +44,16 @@ export interface AbloReactBinding<S extends SchemaRecord> {
   ) => readonly PresenceSession[];
 }
 
-/**
- * Bind the react surface to one schema. The schema value is taken for
- * inference — write `createAbloReact(schema)`, never a hand-spelled type
- * argument — and it is the seam where the binding's own typed context arrives
- * when the legacy erasure retires (docs/plans/typed-react-binding.md, step 3).
- */
+/** Bind the existing React functions to one schema's types. */
 export function createAbloReact<S extends SchemaRecord>(
   schema: Schema<S>,
 ): AbloReactBinding<S> {
   void schema;
 
-  // The binding's own context — created here, AFTER the schema generic is
-  // known, so it is typed `Ablo<S>` from birth. A hook that reads it never rebinds and
-  // never casts; a binding hook mounted under a legacy provider (no bound
-  // provider in the tree) reads `null` here and falls through to the shared
-  // implementation's internal-context fallback.
-  const BoundClientContext = createContext<Ablo<S> | null>(null);
-
-  function BoundAbloProvider(props: AbloProviderProps<S>): ReactElement {
-    return createElement(
-      BoundClientContext.Provider,
-      { value: props.client },
-      createElement(AbloProvider<S>, props),
-    );
-  }
-
-  function useBoundAblo(): Ablo<S> | null;
-  function useBoundAblo<T>(select: AbloSelector<S, T>): T | undefined;
-  function useBoundAblo<T, C>(
-    modelClientOrSelect: ModelOperations<T, C> | ModelClientSelector<S, T, C>,
-    id: string,
-    options: UseAbloModelOptions<T> & { readonly initial: T },
-  ): UseAbloHydratedModelResult<T>;
-  function useBoundAblo<T, C>(
-    modelClientOrSelect: ModelOperations<T, C> | ModelClientSelector<S, T, C>,
-    id: string,
-    options?: UseAbloModelOptions<T>,
-  ): UseAbloModelResult<T>;
-  function useBoundAblo<T, C>(
-    modelOrSelect?:
-      | ModelOperations<T, C>
-      | ModelClientSelector<S, T, C>
-      | AbloSelector<S, T>,
-    id?: string,
-    options?: UseAbloModelOptions<T>,
-  ): Ablo<S> | null | UseAbloModelResult<T> | T | undefined {
-    const bound = useContext(BoundClientContext);
-    return useAbloImpl<S, T, C>(bound, modelOrSelect, id, options);
-  }
-
-  function useBoundPresence<T, C>(
-    modelOrSelect: ModelOperations<T, C> | PresenceModelSelector<S, T, C>,
-    recordId: string,
-  ): readonly PresenceSession[] {
-    const bound = useContext(BoundClientContext);
-    const engine = useAbloClientImpl(bound);
-    return usePresenceImpl(engine, modelOrSelect, recordId);
-  }
-
-  return {
-    AbloProvider: BoundAbloProvider,
-    useAblo: useBoundAblo,
-    usePresence: useBoundPresence,
-  };
+  // TypeScript cannot partially specialize the generic overloads, so this
+  // assertion binds their schema parameter. Positive and negative consumer
+  // type tests verify the specialization; no runtime value changes.
+  // Specialize types only. Every binding uses the same module-level functions,
+  // so calling this helper again cannot change component identity or reset state.
+  return { AbloProvider, useAblo, usePresence } as AbloReactBinding<S>;
 }
