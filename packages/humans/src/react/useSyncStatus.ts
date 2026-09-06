@@ -1,10 +1,12 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useContext } from 'react';
 import {
-  useSyncContext,
+  SyncContext,
   type SyncStoreContract,
 } from './context.js';
+import { AbloInternalContext } from './internalContext.js';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { useReactive } from '../useReactive.js';
 
 export type SyncStatusSnapshot =
@@ -17,7 +19,16 @@ export type SyncStatusSnapshot =
 
 /** Reactively exposes the local store's connection and confirmation status. */
 export function useSyncStatus(): SyncStatusSnapshot {
-  const { store } = useSyncContext();
+  const provider = useContext(AbloInternalContext);
+  const sync = useContext(SyncContext);
+  // Status does not require authenticated row scope. The client exists before
+  // ready() resolves, including inside passthrough children and custom fallbacks.
+  const store = provider?.engine?._store ?? sync?.store;
+  if (!store) {
+    throw new AbloValidationError('Sync hooks must be used within an <AbloProvider>.', {
+      code: 'sync_context_missing_provider',
+    });
+  }
   const compute = useCallback(() => deriveStatus(store), [store]);
   return useReactive(compute, sameSnapshot);
 }

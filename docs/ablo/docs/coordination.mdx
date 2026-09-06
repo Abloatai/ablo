@@ -37,6 +37,30 @@ result rather than reasoning against state that has since moved.
 The important boundary is explicit: a plain update does not claim a row and
 does not carry a stale premise. It is intentionally last-write-wins.
 
+## Claim permissions
+
+Claims coordinate authority already granted by a session; they do not grant it.
+The `can` API has no separate `claim` operation.
+
+| Operation | Required model permission | Authority received |
+|---|---|---|
+| Read / list | `read` | Read authorized rows |
+| Acquire a row or field claim | `update` or `delete` | Coordinate the target, with the corresponding mutation authority |
+| Update through a claim | `update` | Update authorized rows; the claim guards its selected target |
+| Delete through a claim | `delete` | Delete authorized rows |
+
+For example, `can: { conversations: ['read', 'update'] }` permits updates to
+**all fields on authorized conversation rows**, not just `executionOwner`.
+Selecting `fields: fields => fields.executionOwner` narrows coordination,
+not the session's write permission. Omit `delete` and `create` when unnecessary.
+Use a subject rule and server-verified membership to restrict rows. If a worker
+must only change execution state, put that state in a separately authorized
+model or keep mutations behind an application endpoint that validates the patch.
+
+For a process that outlives its starting function, see the runnable
+[account multiplayer ownership lifecycle](/examples/account-multiplayer).
+It handles contention, failed initialization, ownership loss and shared cleanup.
+
 ## Explicit read dependencies
 
 Pass the exact rows that produced a decision on the write:

@@ -1,0 +1,28 @@
+{
+  "name": "@ablo/example-account-multiplayer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --import tsx src/index.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "test:smoke": "ABLO_API_KEY=sk_local_reference_smoke DEMO_PASSWORD=local-smoke playwright test startup.spec.ts"
+  },
+  "dependencies": {
+    "@abloatai/ablo": "file:../../packages/ablo",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "events": "^3.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "^4.20.3",
+    "typescript": "6.0.2",
+    "vite": "^7.0.0"
+  }
+}

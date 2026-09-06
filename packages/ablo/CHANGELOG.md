@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.63.1
+
+React workspaces can render immediately while collaboration connects.
+`useSyncStatus()` now works during provider startup, passthrough children retain
+their state when the provider becomes ready, and replacing a client moves account
+scope and reactive subscriptions to the new client.
+
+The runnable account multiplayer reference combines authenticated people and
+agents, account isolation, presence and claims. Its walkthrough covers client
+disposal, permissions, ownership loss and cleanup, with browser tests for
+competing agents, account switching and data catch-up after reconnect.
+
+The accompanying sync-server update registers HTTP agent presence, preserves
+manually held claims across writes, and reports repeated releases accurately.
+It also adds organization isolation to claim activity evidence. Deploy the
+server update and its database migration to receive these server-side fixes.
+
 ## 0.63.0
 
 Reactive model clients now expose live awareness beneath the model namespace.

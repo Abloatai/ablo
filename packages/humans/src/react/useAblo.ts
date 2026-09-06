@@ -144,7 +144,7 @@ function snapshotValue<T>(value: T): T {
  * // are typed as snapshot rows — data fields + computeds, no relation
  * // accessors — matching what the hook actually returns:
  * const doc = useAblo((ablo) => ablo.records.local.get(id)) ?? serverDoc;
- * const active = useAblo((ablo) => ablo.records.claim.state({ id }));
+ * const { claimed } = useAblo((ablo) => ablo.records, id);
  *
  * // Without the augmentation, pass the schema as a type argument:
  * const ablo = useAblo<(typeof schema)['models']>();
@@ -237,12 +237,9 @@ export function useAbloImpl<
 
   // Claims arrive through an event emitter (engine.claims), not through MobX, so
   // the useReactive reactions below cannot track them; we bridge changes with a
-  // setState bump instead. Only the model-row form (`id !== undefined`) reads
-  // claims, so we subscribe only when `id` is set. The selector-only form never
-  // reads claims, and subscribing it to the workspace-wide claim stream would
-  // re-render and recompute it on every claim or presence change anywhere — a
-  // real storm during AI editing or live collaboration — for a value that cannot
-  // change.
+  // setState bump instead. Subscribe the model-row form (`id !== undefined`)
+  // to claims. Selector-only reads track MobX model data; callers displaying
+  // ownership use the row form's `claims` / `claimed` result.
   const [claimVersion, setClaimVersion] = useState(0);
   useEffect(() => {
     if (!engine || id === undefined) return;

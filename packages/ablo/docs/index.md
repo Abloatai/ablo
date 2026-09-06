@@ -77,3 +77,6 @@ Ablo is designed to be implemented by agents as well as people. Use
 index, or connect an assistant to the [documentation MCP server](./mcp.md). The
 coordination MCP package also ships its agent-facing skill as
 `@abloatai/mcp/skill.md`.
+
+For a complete human-and-agent application, follow the
+[account multiplayer reference](./examples/account-multiplayer.md).

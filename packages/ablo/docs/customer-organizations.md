@@ -5,18 +5,19 @@
 Serving many customers from one backend has two shapes, and the first question
 is whether isolating them is a security boundary or a routing convenience.
 
-**One Ablo organization per customer** is the hard boundary. Every row carries
-the organization, and the engine compares it on every read and every write,
-below your code. Choose it when one customer reading another's rows would be an
-incident.
+**Use a model `subject` rule for account isolation inside one project.** Bind
+`accountId` to the `account` group, mint sessions only after verifying membership,
+and use those scoped sessions for server operations too. The complete
+[account multiplayer walkthrough](./examples/account-multiplayer.md) shows this
+composition and its verification path.
 
-**One organization, customers as rows told apart by sync groups** is delivery
-and read routing. It is declarative, it depends on every model being covered,
-and it is not enforced on every path. Choose it when cross-customer reads are
-tolerable or intentional, not when they are a breach.
+A separate Ablo organization per customer is another tenant boundary. It is not
+required merely because your application has accounts.
 
-The rest of this page is the second shape. Read *Where the boundary is enforced*
-before you rely on it.
+**Sync-group routing alone is not subject authorization.** The older routing-only
+example below illustrates delivery configuration; add subject rules before using
+that pattern as a customer security boundary. The limitations below describe
+models without subject rules, not subject-protected models.
 
 ```ts
 // 1. src/ablo/schema.ts — your customer table is a scope root.
@@ -91,8 +92,7 @@ organization, project, and branch, and all three are compared on every read and
 every write, from the credential rather than the request. A client cannot reach
 past them by asking. This is the boundary that holds unconditionally.
 
-**Sync groups are a cut inside your account, and they are not applied
-everywhere.** They decide which changes are delivered and which rows a
+**Without a subject rule, sync groups are a routing cut inside your account.** They decide which changes are delivered and which rows a
 log-served read returns. That is routing. It is not a universal authorization
 boundary, and the gaps are specific:
 

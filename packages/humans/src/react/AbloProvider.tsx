@@ -22,24 +22,8 @@ import { useSyncStatus } from './useSyncStatus.js';
 import { DefaultFallback } from './DefaultFallback.js';
 import { presenceOfClient } from '../presence/index.js';
 
-/**
- * Ablo umbrella provider — owns the sync engine, multiplayer, and
- * the full lifecycle (Strict-Mode-safe singleton, `beforeunload`,
- * session-expiry handling, post-bootstrap hooks).
- *
- * Design goals:
- *
- *   - **One component, one import.** Consumers write the provider
- *     once at the root; nothing else needs to plumb the engine.
- *   - **Multiplayer is default.** React consumers share the client's scoped
- *     groups, presence stream, and model surface without another join step.
- *   - **Declarative props for app glue.** `preventUnsavedChanges`,
- *     `onSessionExpired`, `postBootstrap`, `resolveUsers` — each
- *     absorbs a class of integration code that previously lived in
- *     userland.
- *   - **Singleton safety.** The engine lives in a ref and rotates
- *     only when `userId` / account scope / `url` change. React
- *     Strict Mode double-mount does not leak a second WebSocket.
+/** Reactive binding over an application-owned client. Starts readiness,
+ * forwards errors and gates bootstrap; the application owns client disposal.
  */
 
 // ── Props ────────────────────────────────────────────────────────────
@@ -182,7 +166,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
 
   // Account scope isn't a prop — read it from `_store.orgId` once `ready()`
   // resolves the identity from the client's auth.
-  const [resolvedAccountScope, setResolvedAccountScope] = useState<string | null>(null);
+  const [resolvedScope, setResolvedScope] = useState<{ engine: typeof engine; account: string | null } | null>(null);
 
   // ── Error emitter (provider-instance scoped) ─────────────────────
   const errorEmitterRef = useRef<ReturnType<typeof createErrorEmitter> | null>(null);
@@ -240,9 +224,10 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
       .ready()
       .then(() => {
         if (stale) return;
-        setResolvedAccountScope(
-          (engine._store as SyncStoreContract & { orgId?: string }).orgId ?? null,
-        );
+        setResolvedScope({
+          engine,
+          account: (engine._store as SyncStoreContract & { orgId?: string }).orgId ?? null,
+        });
       })
       .catch((err) => {
         if (stale) return;
@@ -280,7 +265,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   // then, which drives the initial fallback below.
   const syncValue = useMemo(() => {
     const currentAccountScope =
-      resolvedAccountScope ??
+      (resolvedScope?.engine === engine ? resolvedScope.account : null) ??
       (engine._store as SyncStoreContract & { orgId?: string }).orgId;
     if (!currentAccountScope) return null;
     return {
@@ -288,7 +273,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
       organizationId: currentAccountScope,
       schema,
     };
-  }, [engine, resolvedAccountScope, schema]);
+  }, [engine, resolvedScope, schema]);
 
   // ── Internal context (currentUserId + error subscription) ────────
 
@@ -301,44 +286,20 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
 
   // ── Render ───────────────────────────────────────────────────────
   //
-  // Two-phase gate (see `BootstrapGate` below for the latch logic):
-  //
-  //   1. Engine is null on first render (constructed in the effect
-  //      above, not in render). We render `fallback` directly — there
-  //      is no SyncContext to read status from, and by definition the
-  //      engine hasn't started bootstrapping.
-  //   2. Engine exists. Mount SyncContext. `BootstrapGate` then reads
-  //      `useSyncStatus()` and shows `fallback` only during the very
-  //      first `connecting` transition; children render on every
-  //      subsequent state change, including reconnects and auth
-  //      failures (the app's own UI handles those).
-  //
-  // `fallback === 'passthrough'` short-circuits both branches — children
-  // render immediately without any gate, restoring pre-gate behavior
-  // for consumers who need debug helpers / error boundaries / analytics
-  // to mount before the engine is ready.
-
+  // Keep the context tree stable during startup so passthrough children retain
+  // their component state when authenticated row scope becomes available.
   const passthrough = fallback === 'passthrough';
-  const initialFallback = passthrough ? children : fallback;
-
-  if (!syncValue) {
-    return (
-      <AbloInternalContext.Provider value={internalValue}>
-        {initialFallback}
-      </AbloInternalContext.Provider>
-    );
-  }
 
   return (
     <AbloInternalContext.Provider value={internalValue}>
       <SyncContext.Provider value={syncValue}>
         {passthrough ? (
           children
-        ) : (
+        ) : syncValue ? (
           <BootstrapGate key={engineKey} fallback={fallback}>
             {children}
           </BootstrapGate>
-        )}
+        ) : fallback}
       </SyncContext.Provider>
     </AbloInternalContext.Provider>
   );
@@ -352,8 +313,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
  * re-show the fallback, because by then the app has already rendered
  * once and its own reconnect UI should take over.
  *
- * Re-keyed on `engineState.key` in the parent so engine rotations
- * (userId/org/url change) reset the latch — a new engine genuinely IS
+ * Re-keyed when the client instance changes so account rotations reset the latch — a new engine genuinely IS
  * a new "first bootstrap" cycle.
  */
 function BootstrapGate({

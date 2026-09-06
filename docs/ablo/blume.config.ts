@@ -169,6 +169,7 @@ export default defineConfig({
           items: [
             "/examples/ai-sdk-tool",
             "/examples/agent-human",
+            "/examples/account-multiplayer",
             "/examples/scoped-agent",
             "/examples/server-agent",
             "/examples/coordination-conformance",

@@ -16,7 +16,6 @@ export function useReactive<T>(
   const computeRef = useRef(compute);
   const equalsRef = useRef(equals);
   const snapshotRef = useRef<{ value: T } | null>(null);
-  const versionRef = useRef(0);
 
   equalsRef.current = equals;
   if (snapshotRef.current === null) {
@@ -25,7 +24,6 @@ export function useReactive<T>(
     const next = compute();
     if (!equals(snapshotRef.current.value, next)) {
       snapshotRef.current = { value: next };
-      versionRef.current++;
     }
   }
   computeRef.current = compute;
@@ -39,7 +37,7 @@ export function useReactive<T>(
         onChange();
       }
     },
-  ), [versionRef.current]);
+  ), [compute]);
   const getSnapshot = useCallback(() => snapshotRef.current!.value, []);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

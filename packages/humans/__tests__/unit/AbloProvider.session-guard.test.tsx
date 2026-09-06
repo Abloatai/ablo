@@ -14,7 +14,10 @@
  *   3. NOT dispose a consumer-owned client on unmount.
  */
 
-import { render, waitFor } from '@testing-library/react';
+import { useEffect } from 'react';
+import { runInAction } from 'mobx';
+import { useSyncStatus } from '../../src/react/useSyncStatus.js';
+import { act, render, waitFor } from '@testing-library/react';
 import { z } from 'zod';
 
 import { AbloProvider } from '../../src/react/AbloProvider.js';
@@ -96,5 +99,63 @@ describe('AbloProvider — reactive binding over a prebuilt client', () => {
     await waitFor(() => { expect(client.ready).toHaveBeenCalled(); });
     unmount();
     expect(client.dispose).not.toHaveBeenCalled();
+  });
+});
+
+// Status must be usable before identity resolves, including a custom fallback.
+describe('AbloProvider startup status', () => {
+  function Status() {
+    const status = useSyncStatus();
+    return <span data-testid="status">{status.name}</span>;
+  }
+
+  it('renders status in passthrough and preserves child state across readiness', async () => {
+    const { client } = makeClient();
+    let ready!: () => void;
+    jest.spyOn(client, 'ready').mockImplementation(() => new Promise<void>((resolve) => { ready = resolve; }));
+    let mounts = 0;
+    function Workspace() {
+      useEffect(() => { mounts++; }, []);
+      return <Status />;
+    }
+    const view = render(<AbloProvider client={client} fallback="passthrough"><Workspace /></AbloProvider>);
+    expect(view.getByTestId('status')).toBeTruthy();
+    jest.spyOn(client._store, 'orgId', 'get').mockReturnValue('account-a');
+    await act(async () => { ready(); await Promise.resolve(); });
+    expect(mounts).toBe(1);
+    act(() => { runInAction(() => { client._store.syncStatus.state = 'reconnecting'; }); });
+    expect(view.getByTestId('status').textContent).toBe('reconnecting');
+  });
+
+  it('subscribes to a replacement client even when its initial status is identical', () => {
+    const first = makeClient().client;
+    const second = makeClient().client;
+    jest.spyOn(first, 'ready').mockImplementation(() => new Promise(() => { /* Keep identity unresolved for this render. */ }));
+    jest.spyOn(second, 'ready').mockImplementation(() => new Promise(() => { /* Keep identity unresolved for this render. */ }));
+    const view = render(<AbloProvider client={first} fallback="passthrough"><Status /></AbloProvider>);
+    view.rerender(<AbloProvider client={second} fallback="passthrough"><Status /></AbloProvider>);
+    act(() => { runInAction(() => { second._store.syncStatus.state = 'reconnecting'; }); });
+    expect(view.getByTestId('status').textContent).toBe('reconnecting');
+    act(() => { runInAction(() => { first._store.syncStatus.state = 'offline'; }); });
+    expect(view.getByTestId('status').textContent).toBe('reconnecting');
+  });
+
+  it('supports a status indicator in the initial fallback', () => {
+    const { client } = makeClient();
+    jest.spyOn(client, 'ready').mockImplementation(() => new Promise(() => { /* Keep identity unresolved for this render. */ }));
+    const view = render(<AbloProvider client={client} fallback={<Status />}><div>workspace</div></AbloProvider>);
+    expect(view.getByTestId('status')).toBeTruthy();
+  });
+
+  it('does not reuse the previous client scope while switching accounts', async () => {
+    const first = makeClient().client;
+    const second = makeClient().client;
+    jest.spyOn(first._store, 'orgId', 'get').mockReturnValue('account-a');
+    jest.spyOn(second, 'ready').mockImplementation(() => new Promise(() => { /* Keep identity unresolved for this render. */ }));
+    const view = render(<AbloProvider client={first}><div>private workspace</div></AbloProvider>);
+    await act(async () => { await Promise.resolve(); });
+    view.rerender(<AbloProvider client={second} fallback={<Status />}><div>private workspace</div></AbloProvider>);
+    expect(view.queryByText('private workspace')).toBeNull();
+    expect(view.getByTestId('status')).toBeTruthy();
   });
 });

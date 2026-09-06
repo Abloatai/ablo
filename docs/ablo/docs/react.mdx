@@ -52,8 +52,9 @@ react-redux's typed hooks.
 
 ## AbloProvider
 
-Mount it once near the root of your tree. It owns the connection, the local
-pool, and the engine lifecycle; everything below it reads with `useAblo`.
+Mount it once near the root of your tree. **The application owns the client
+and must dispose it.** The provider starts readiness and binds React to the
+client; unmounting the provider does not dispose a shared client.
 
 ```tsx
 'use client';
@@ -92,6 +93,73 @@ identity comes from, and why the API key never reaches the browser, is the whole
 of [Identity & Sync Groups](/identity) — read that if it isn't obvious how
 org / team / user map to what a participant can see.
 
+## Client lifetime and account switching
+
+For an application-owned singleton, create it once as above. Your application
+session owner calls `await ablo.dispose()` on logout or before replacing that
+client. Provider remounts can reuse it. Never share a browser singleton across
+server requests. When changing accounts, remove the old account UI and create a
+fresh client whose session endpoint grants the newly verified membership.
+A query filter and the provider's `userId` prop do not change authorization.
+
+For a component-owned client, create and dispose the instance in the same effect.
+React Strict Mode can replay setup and cleanup, so each setup creates a fresh
+instance rather than reusing one that cleanup already disposed:
+
+```tsx
+const createClient = (accountId: string) => Ablo({
+  schema,
+  persistence: 'memory',
+  session: { endpoint: `/api/accounts/${encodeURIComponent(accountId)}/ablo-session` },
+});
+
+function AccountWorkspace({ accountId }: { accountId: string }) {
+  const [owned, setOwned] = useState<{
+    accountId: string;
+    client: ReturnType<typeof createClient>;
+  } | null>(null);
+
+  useEffect(() => {
+    const client = createClient(accountId);
+    setOwned({ accountId, client });
+    return () => { void client.dispose().catch(reportError); };
+  }, [accountId]);
+
+  // Never render an old account's client under the new account's heading.
+  if (!owned || owned.accountId !== accountId) return <AppSkeleton />;
+  return <AbloProvider key={accountId} client={owned.client}><Workspace /></AbloProvider>;
+}
+```
+
+Import `useEffect` and `useState` from React. The endpoint must verify membership
+for the requested account on every mint; the URL itself grants no access.
+See the [account multiplayer walkthrough](/examples/account-multiplayer)
+for the complete ownership boundary and runnable component.
+
+## Render immediately with connection status
+
+`useSyncStatus()` works during provider startup, in passthrough children and in
+custom fallbacks. It observes the client's status before row scope is available.
+It still requires a provider. Data hooks that require authenticated scope must
+wait for readiness.
+
+```tsx
+import { useSyncStatus } from '@abloatai/ablo/react';
+
+function ConnectionIndicator() {
+  const status = useSyncStatus();
+  return <span role="status">{
+    status.name === 'initial' || status.name === 'connecting'
+      ? 'Connecting…' : status.name
+  }</span>;
+}
+
+<AbloProvider client={ablo} fallback="passthrough">
+  <ConnectionIndicator />
+  <ExistingWorkspace />
+</AbloProvider>
+```
+
 ## useAblo: model client
 
 ```tsx
@@ -100,23 +168,23 @@ org / team / user map to what a participant can see.
 import { useAblo } from '@abloatai/ablo/react';
 
 export function ReportView({ report: serverReport }: { report: { id: string; location: string } }) {
-  const report = useAblo((ablo) => ablo.weatherReports.local.get(serverReport.id)) ?? serverReport;
-  const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
-  const claimed = Boolean(active);
+  const { data: report, claimed } = useAblo(
+    ablo => ablo.weatherReports,
+    serverReport.id,
+    { initial: serverReport },
+  );
 
-  return <article>{report.location}</article>;
+  return <article>{report.location}{claimed && <span>Claimed</span>}</article>;
 }
 ```
 
-The hook:
+The row form subscribes to both data and claim events. It returns `data`,
+`claims`, and `claimed`, and accepts an initial server-rendered row.
 
-1. Uses the same `ablo.<model>.local.get(id)` / `.local.list()` methods you'd call anywhere
-   else in the SDK — the hook just makes them reactive.
-2. Tracks the model fields read by the selector and re-renders when confirmed
-   deltas arrive.
-3. Lets Server Component data stay outside the hook: use `?? serverReport` when a
-   parent already loaded the row.
-4. Works for coordination state too, such as `ablo.weatherReports.claim.state({ id })`.
+For data-only reads, selectors such as
+`useAblo(ablo => ablo.weatherReports.local.get(id))` track model fields.
+A selector-only `claim.state({ id })` read does not subscribe to the claim event
+stream. Use the row form above when the UI displays ownership.
 
 Use the zero-argument form only when you need the full client for callbacks,
 effects, or writes:
@@ -168,7 +236,7 @@ await ablo.weatherReports.update({
 });
 ```
 
-For client event handlers, get the provider-owned client and call the same
+For client event handlers, get the application-owned client and call the same
 model client:
 
 ```tsx
@@ -229,6 +297,15 @@ The hook returns the complete matching session projection, including the
 current session. Use `session.participant` for identity and inspect
 `session.activities` when the UI needs to distinguish reading from claiming or
 writing.
+
+A presence session is a connection, not a unique person. Two tabs can share
+`participant.id` while having different `presenceSessionId` values. For a people
+count, deduplicate by both `participant.kind` and `participant.id`; retain the
+sessions when displaying connection details. Reading declares attention; claiming
+declares ownership. Neither proves that an agent is generating text. Label a held
+claim “Agent owns this chat.” Drive “Generating” from application execution state.
+On navigation, the hook releases its old read lease. After a lost connection,
+remote presence may remain until its lease expires; disappearance is not immediate.
 
 ## Model events: cursors and selections
 

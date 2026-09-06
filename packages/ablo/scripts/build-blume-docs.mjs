@@ -49,6 +49,7 @@ const CHANGELOG_DIR = resolve(OUT, 'changelog');
 // the package-doc H1s differ, e.g. "Coordination Reference" vs the site's
 // "Coordination"). Only slugs listed here are generated.
 const TITLES = {
+  'examples/account-multiplayer': 'Account multiplayer',
   api: 'API',
   coordination: 'Coordination',
   quickstart: 'Quickstart',

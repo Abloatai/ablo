@@ -24,6 +24,9 @@ Three things hold no matter which actor is writing:
   credential scoped to just what that run can touch, verified per request and
   revocable instantly. (See the Agents section below for the actual calls.)
 
+For account-scoped humans and agents together, start with the maintained
+[account multiplayer walkthrough](./examples/account-multiplayer.md).
+
 ## The integration in one diagram
 
 The normal integration is one client:

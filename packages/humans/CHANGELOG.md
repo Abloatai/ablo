@@ -1,5 +1,15 @@
 # @abloatai/humans
 
+## 0.63.1
+
+### Patch Changes
+
+- Make connection status usable during React provider startup, preserve passthrough
+  children through readiness, and isolate scope and reactive subscriptions when a
+  client is replaced. Document application-owned client teardown, account subject
+  authorization, claim permissions and the runnable multiplayer reference.
+  - @abloatai/transaction@0.63.1
+
 ## 0.63.0
 
 ### Minor Changes

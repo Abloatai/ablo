@@ -29,7 +29,7 @@ fi
 
 DIRTY="$(git -C "$MONOREPO_ROOT" status --porcelain -- \
   packages/ablo packages/transaction packages/humans packages/cli \
-  packages/product-analytics docs/ablo | grep -v '^??' || true)"
+  packages/product-analytics docs/ablo examples/account-multiplayer | grep -v '^??' || true)"
 if [[ -n "$DIRTY" && "${ALLOW_DIRTY:-}" != "1" ]]; then
   echo "error: refusing to build a public snapshot from a dirty tree" >&2
   echo "$DIRTY" | sed 's/^/  /' >&2
@@ -63,6 +63,7 @@ for package_name in "${PACKAGES[@]}"; do
   copy_tree "packages/$package_name" "packages/$package_name"
 done
 copy_tree "docs/ablo" "docs/ablo"
+copy_tree "examples/account-multiplayer" "examples/account-multiplayer"
 
 # Repository-level branding belongs at the public workspace root as well as in
 # the npm package. This is a monorepo landing page, not a flattened source tree.
