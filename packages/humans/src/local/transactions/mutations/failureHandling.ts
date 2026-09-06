@@ -19,6 +19,7 @@ export interface FailureHandlingContext {
     error?: Error,
   ) => Promise<void>;
   readonly enqueue: (transaction: QueuedMutation) => void;
+  readonly scheduleRetry: (callback: () => void, delayMs: number) => void;
   readonly getLastPermanentErrorSignature: () => string | undefined;
   readonly setLastPermanentErrorSignature: (signature: string) => void;
   readonly emit: (event: string, payload: object) => boolean;
@@ -102,7 +103,7 @@ export async function handleFailure(
     );
 
     ctx.store.updateStatus(transaction.id, 'pending');
-    setTimeout(() => {
+    ctx.scheduleRetry(() => {
       // The queue may have shut down or the tx may have been settled
       // (e.g. delta-confirmed) while we backed off.
       if (ctx.store.get(transaction.id)?.status !== 'pending') return;

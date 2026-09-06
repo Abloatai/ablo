@@ -78,6 +78,27 @@ describe('timer teardown on dispose', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it('DeltaConfirmationTracker cannot re-arm after disposal', () => {
+    const tx = makeTx('tx_late');
+    const tracker = new DeltaConfirmationTracker({
+      store: {
+        get: () => tx,
+        getByStatus: () => [tx],
+        updateStatus: jest.fn(),
+      },
+      optimisticUpdates: new Map(),
+      emit: jest.fn(),
+      isConnected: () => true,
+      position: new LogPosition(),
+    });
+    const base = jest.getTimerCount();
+
+    tracker.dispose();
+    tracker.scheduleDeltaConfirmationTimeout(tx, 30_000);
+
+    expect(jest.getTimerCount()).toBe(base);
+  });
+
   it('MutationQueue.dispose clears the commit offline-grace timer', () => {
     const queue = new MutationQueue({ enablePersistence: false });
     const base = jest.getTimerCount();
@@ -90,5 +111,29 @@ describe('timer teardown on dispose', () => {
 
     // The grace callback must not fire post-dispose.
     expect(() => { jest.advanceTimersByTime(10 * 60_000); }).not.toThrow();
+  });
+
+  it('MutationQueue cannot re-arm timers after disposal', async () => {
+    const queue = new MutationQueue({ enablePersistence: false });
+    const base = jest.getTimerCount();
+    const scheduleDeltaConfirmationTimeout = Reflect.get(queue, 'scheduleDeltaConfirmationTimeout');
+    const scheduleReplicationLagTimeout = Reflect.get(queue, 'scheduleReplicationLagTimeout');
+    const handleFailure = Reflect.get(queue, 'handleFailure');
+    if (
+      typeof scheduleDeltaConfirmationTimeout !== 'function'
+      || typeof scheduleReplicationLagTimeout !== 'function'
+      || typeof handleFailure !== 'function'
+    ) {
+      throw new Error('MutationQueue timer lifecycle methods are unavailable');
+    }
+    const retrying = { ...makeTx('tx_retry'), status: 'executing' as const };
+
+    queue.dispose();
+    queue.setConnectionState('disconnected');
+    scheduleDeltaConfirmationTimeout.call(queue, retrying, 30_000);
+    scheduleReplicationLagTimeout.call(queue, retrying.id);
+    await handleFailure.call(queue, retrying, new Error('retryable'));
+
+    expect(jest.getTimerCount()).toBe(base);
   });
 });

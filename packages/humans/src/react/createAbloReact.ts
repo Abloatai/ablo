@@ -29,6 +29,7 @@ import {
 } from './AbloProvider.js';
 import {
   useAbloImpl,
+  useAbloClientImpl,
   type AbloSelector,
   type ModelClientSelector,
   type UseAbloHydratedModelResult,
@@ -38,6 +39,11 @@ import {
 import type { AbloClient as Ablo } from '../client.js';
 import type { ModelOperations } from '../local/client/createModelOperations.js';
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
+import {
+  usePresenceImpl,
+  type PresenceModelSelector,
+} from './usePresence.js';
+import type { PresenceSession } from '@abloatai/transaction/presence';
 
 /** What a binding returns: the provider and the hook, with `S` fixed. */
 export interface AbloReactBinding<S extends SchemaRecord> {
@@ -60,6 +66,11 @@ export interface AbloReactBinding<S extends SchemaRecord> {
       options?: UseAbloModelOptions<T>,
     ): UseAbloModelResult<T>;
   };
+  /** Declare and reactively read record presence with the same model clients. */
+  usePresence: <T, C>(
+    modelOrSelect: ModelOperations<T, C> | PresenceModelSelector<S, T, C>,
+    recordId: string,
+  ) => readonly PresenceSession[];
 }
 
 /**
@@ -112,5 +123,18 @@ export function createAbloReact<S extends SchemaRecord>(
     return useAbloImpl<S, T, C>(bound, modelOrSelect, id, options);
   }
 
-  return { AbloProvider: BoundAbloProvider, useAblo: useBoundAblo };
+  function useBoundPresence<T, C>(
+    modelOrSelect: ModelOperations<T, C> | PresenceModelSelector<S, T, C>,
+    recordId: string,
+  ): readonly PresenceSession[] {
+    const bound = useContext(BoundClientContext);
+    const engine = useAbloClientImpl(bound);
+    return usePresenceImpl(engine, modelOrSelect, recordId);
+  }
+
+  return {
+    AbloProvider: BoundAbloProvider,
+    useAblo: useBoundAblo,
+    usePresence: useBoundPresence,
+  };
 }

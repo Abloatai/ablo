@@ -49,6 +49,7 @@ export class DeltaConfirmationTracker {
 
   // Track retry attempts per transaction for exponential backoff
   private deltaConfirmationRetries = new Map<string, number>();
+  private disposed = false;
 
   private readonly runtime: RuntimeContext;
 
@@ -162,6 +163,7 @@ export class DeltaConfirmationTracker {
   // server has already confirmed. A rollback happens only on an explicit server
   // rejection, never on a timeout.
   scheduleDeltaConfirmationTimeout(tx: QueuedMutation, timeoutMs: number): void {
+    if (this.disposed) return;
     // Cancel any existing timeout for this transaction
     this.cancelDeltaConfirmationTimeout(tx.id);
 
@@ -289,6 +291,7 @@ export class DeltaConfirmationTracker {
    * would keep the process alive and fire callbacks against a cleared store.
    */
   dispose(): void {
+    this.disposed = true;
     for (const timeoutHandle of this.deltaConfirmationTimeouts.values()) {
       clearTimeout(timeoutHandle);
     }

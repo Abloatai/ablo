@@ -95,6 +95,20 @@ function deliverCursorFrame(socket: FakeWebSocket, x: number): void {
   });
 }
 
+function deliverAttributedCursorFrame(socket: FakeWebSocket, x: number): void {
+  socket.onmessage?.({
+    data: JSON.stringify({
+      type: 'entry_cursor',
+      payload: { collectionId: 'd1', entryId: 's1', x, y: 0 },
+      sender: {
+        presenceSessionId: 'b6741f5a-e982-4f9c-916b-2d247b8d4646',
+        participant: { id: 'agent-1', kind: 'agent' },
+      },
+      sentAt: '2026-09-05T10:00:00.000Z',
+    }),
+  });
+}
+
 describe('BaseSyncedStore.subscribe — durable across inner-socket churn', () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
@@ -137,6 +151,26 @@ describe('BaseSyncedStore.subscribe — durable across inner-socket churn', () =
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ collectionId: 'd1', x: 10 }),
+    );
+  });
+
+  it('delivers authenticated collaboration context after the unchanged payload', () => {
+    const { store, ws } = makeStore();
+    const handler = jest.fn();
+
+    store.subscribe('entry:cursor', handler);
+    const socket = openInnerSocket(ws);
+    deliverAttributedCursorFrame(socket, 10);
+
+    expect(handler).toHaveBeenCalledWith(
+      { collectionId: 'd1', entryId: 's1', x: 10, y: 0 },
+      {
+        sender: {
+          presenceSessionId: 'b6741f5a-e982-4f9c-916b-2d247b8d4646',
+          participant: { id: 'agent-1', kind: 'agent' },
+        },
+        sentAt: '2026-09-05T10:00:00.000Z',
+      },
     );
   });
 

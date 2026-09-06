@@ -246,6 +246,8 @@ export class MutationQueue extends EventEmitter {
   private isProcessing = false;
   private processTimer?: NodeJS.Timeout;
   private processScheduled = false;
+  private disposed = false;
+  private retryTimers = new Set<ReturnType<typeof setTimeout>>();
 
   // Staging area for transactions created in the same event-loop tick. Each one
   // lands here first, then a microtask commits them together.
@@ -331,10 +333,11 @@ export class MutationQueue extends EventEmitter {
       isDefinitiveRejection: (error) => this.isDefinitiveRejection(error),
       isPermanentError: (error) => this.isPermanentError(error),
       scheduleRetry: (delayMs) => {
+        if (this.disposed) return;
         if (this.commitRetryTimer !== null) clearTimeout(this.commitRetryTimer);
         this.commitRetryTimer = setTimeout(() => {
           this.commitRetryTimer = null;
-          void this.processCommitLane();
+          if (!this.disposed) void this.processCommitLane();
         }, delayMs);
       },
       emitCommitLifecycle: (event, payload) => { this.emitCommitLifecycle(event, payload); },
@@ -463,6 +466,7 @@ export class MutationQueue extends EventEmitter {
       isPermanentError: (error) => this.isPermanentError(error),
       rollbackOptimistic: (transaction, reason, error) => this.rollbackOptimistic(transaction, reason, error),
       enqueue: (transaction) => { this.enqueue(transaction); },
+      scheduleRetry: (callback, delayMs) => { this.scheduleRetry(callback, delayMs); },
       getLastPermanentErrorSignature: () => this.lastPermanentErrorSig,
       setLastPermanentErrorSignature: (signature) => { this.lastPermanentErrorSig = signature; },
       emit: (event, payload) => this.emit(event, payload),
@@ -968,6 +972,7 @@ export class MutationQueue extends EventEmitter {
     clientTxId = transactionId,
     correlationId?: string,
   ): void {
+    if (this.disposed) return;
     const previous = this.replicationLagTimeouts.get(transactionId);
     if (previous) clearTimeout(previous);
     this.replicationLagErrors.delete(transactionId);
@@ -1182,6 +1187,7 @@ export class MutationQueue extends EventEmitter {
    * {@link drainPending} resumes the work when the owner decides to drain.
    */
   setConnectionState(state: 'connected' | 'disconnected'): void {
+    if (this.disposed) return;
     if (state === 'connected') {
       if (this.commitOfflineGraceTimer !== null) {
         clearTimeout(this.commitOfflineGraceTimer);
@@ -1400,13 +1406,15 @@ export class MutationQueue extends EventEmitter {
   }
 
   private scheduleProcessing(immediate = false): void {
+    if (this.disposed) return;
     scheduleProcessingExternal(this.processingSchedulerContext, immediate);
   }
 
   private async processBatch(): Promise<void> {
+    if (this.disposed) return;
     if (this.modelProcessingPromise) {
       await this.modelProcessingPromise;
-      if (this.executionQueue.length > 0) await this.processBatch();
+      if (!this.disposed && this.executionQueue.length > 0) await this.processBatch();
       return;
     }
     const processing = processBatch(this.batchProcessingContext);
@@ -1500,7 +1508,17 @@ export class MutationQueue extends EventEmitter {
   // Schedule the retry-and-reconciliation wait for a transaction's confirming
   // delta; see {@link DeltaConfirmationTracker} in `./deltaConfirmation.js`.
   private scheduleDeltaConfirmationTimeout(tx: QueuedMutation, timeoutMs: number): void {
+    if (this.disposed) return;
     this.deltaConfirmation.scheduleDeltaConfirmationTimeout(tx, timeoutMs);
+  }
+
+  private scheduleRetry(callback: () => void, delayMs: number): void {
+    if (this.disposed) return;
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(timer);
+      if (!this.disposed) callback();
+    }, delayMs);
+    this.retryTimers.add(timer);
   }
 
   /**
@@ -1566,6 +1584,7 @@ export class MutationQueue extends EventEmitter {
   }
 
   private async processCommitLane(): Promise<void> {
+    if (this.disposed) return;
     await processCommitLane(this.commitLaneContext);
   }
 
@@ -1854,6 +1873,9 @@ export class MutationQueue extends EventEmitter {
    * clears all timers and stored transactions, and removes event listeners.
    */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+
     // Cancel all active optimistic updates
     for (const [, optimistic] of this.localMutationPort.updates) {
       this.emit('optimistic:rollback', {
@@ -1888,6 +1910,8 @@ export class MutationQueue extends EventEmitter {
       clearTimeout(this.commitRetryTimer);
       this.commitRetryTimer = null;
     }
+    for (const timer of this.retryTimers) clearTimeout(timer);
+    this.retryTimers.clear();
 
     // Clear store
     this.store.clear();

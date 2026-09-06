@@ -42,6 +42,7 @@ import {
   presencePatchSchema,
   presenceSnapshotSchema,
 } from '../presence/projections.js';
+import { modelEventEnvelopeSchema } from '../collaboration/contract.js';
 
 /**
  * The envelope itself: a type and a payload. `catchall` keeps the extra keys,
@@ -128,6 +129,7 @@ export const WS_INBOUND_FRAMES = {
   presence_snapshot: { validation: 'schema', payload: presenceSnapshotSchema },
   presence_patch: { validation: 'schema', payload: presencePatchSchema },
   presence_session: { validation: 'schema', payload: presenceSessionEstablishedSchema },
+  model_event: { validation: 'schema', payload: modelEventEnvelopeSchema },
   claim_rejected: { validation: 'schema', payload: claimRejectionSchema },
   claim_acquired: { validation: 'schema', payload: claimAcquiredSchema },
   claim_abandon_ack: {

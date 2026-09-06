@@ -203,7 +203,23 @@ connection follows, but it cannot widen the authority granted by
 
 ## collaborationEvents
 
-Application-defined WebSocket event names accepted by `subscribe()`.
+Legacy store-level WebSocket event names accepted by `subscribe()`. New React
+and reactive-client code should prefer the record-scoped
+`ablo.<model>.events.send(...)` and `.subscribe(...)` surface. A
+collaboration-event handler receives the application's unchanged payload first
+and optional server-authenticated context second:
+
+```ts
+store.subscribe('document:cursor', (cursor, context) => {
+  context?.sender.presenceSessionId;
+  context?.sender.participant; // { id, kind }
+  context?.sentAt;
+});
+```
+
+The context is optional while connecting to a server version that predates
+authenticated collaboration-event attribution. Never put caller-authored user
+identity in the application payload.
 
 ## cursorStore
 

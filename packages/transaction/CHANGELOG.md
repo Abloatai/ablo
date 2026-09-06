@@ -1,5 +1,11 @@
 # @abloatai/transaction
 
+## 0.63.0
+
+### Minor Changes
+
+- Attach server-authenticated presence-session and participant context to application collaboration events while preserving their existing payload and event APIs. Add a model-addressed React presence hook that owns read activity refresh, reconnect, and cleanup for a mounted record view. Add lossy record-scoped events at `ablo.<model>.events` for cursor and selection signals with authenticated sender context and sync-group routing.
+
 ## 0.62.0
 
 ### Minor Changes

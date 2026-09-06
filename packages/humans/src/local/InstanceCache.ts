@@ -1257,7 +1257,7 @@ export class InstanceCache {
   }
 
   private startGC(): void {
-    if (this.gcTimer) return;
+    if (this.gcTimer || this.config.gcInterval <= 0) return;
     this.gcTimer = setInterval(() => this.gc(), this.config.gcInterval);
     // Don't hold a headless Node process open just for pool GC — without
     // this, an agent that never calls disconnect() can never exit. No-op in

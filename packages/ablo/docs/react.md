@@ -39,10 +39,10 @@ export const ablo = Ablo({
 // The typed binding: capture the schema once, and every component imports
 // born-typed hooks from this file — `useAblo()` takes no type arguments,
 // and a selector's `ablo` parameter knows your models.
-export const { AbloProvider, useAblo } = createAbloReact(schema);
+export const { AbloProvider, useAblo, usePresence } = createAbloReact(schema);
 ```
 
-Import `AbloProvider` and `useAblo` from `lib/ablo` rather than from the
+Import `AbloProvider`, `useAblo`, and `usePresence` from `lib/ablo` rather than from the
 package, and the schema generic never appears at a call site again — the
 same one-binding-file convention as tRPC's `createTRPCReact` or
 react-redux's typed hooks.
@@ -187,6 +187,80 @@ The selector form is for render-time reads. The zero-argument form is for
 imperative work after an event or effect.
 
 See [API reference](/docs/api) for the full options surface.
+
+## usePresence: viewers and active participants
+
+`usePresence` declares that the mounted component is reading one model record
+and returns the live sessions active on that record. Use the selector form with
+the schema-bound hook:
+
+```tsx
+import { usePresence } from '@/lib/ablo';
+
+export function ChatView({ chatId }: { chatId: string }) {
+  const viewers = usePresence((ablo) => ablo.chats, chatId);
+
+  return viewers.map((session) => (
+    <Avatar
+      key={session.presenceSessionId}
+      participantId={session.participant.id}
+      kind={session.participant.kind}
+    />
+  ));
+}
+```
+
+The component chooses the model and record. Ablo owns the authenticated
+session identity, read lease, refresh, reconnect re-announcement, and removal
+on cleanup. Multiple tabs remain separate sessions, and human and agent
+participants use the same result shape. Do not build a separate `chat:view`
+event, heartbeat, or stale-viewer timer in the app.
+
+If you already have the client, the direct model form is equivalent:
+
+```tsx
+const viewers = usePresence(ablo.chats, chatId);
+```
+
+The hook returns the complete matching session projection, including the
+current session. Use `session.participant` for identity and inspect
+`session.activities` when the UI needs to distinguish reading from claiming or
+writing.
+
+## Model events: cursors and selections
+
+Use the `events` namespace already attached to each model for transient UI
+signals. The model and record choose the authorized sync group; the payload
+does not need routing fields or caller-authored identity.
+
+```tsx
+const ablo = useAblo();
+
+useEffect(() => {
+  if (!ablo) return;
+  return ablo.slideDecks.events.subscribe(deckId, 'cursor', (cursor, context) => {
+    drawRemoteCursor(context.sender.presenceSessionId, cursor);
+  });
+}, [ablo, deckId]);
+
+function onPointerMove(x: number, y: number) {
+  ablo?.slideDecks.events.send(deckId, 'cursor', { slideId, x, y });
+}
+```
+
+The same shape works for code editors:
+
+```ts
+ablo.files.events.send(fileId, 'selection', { anchor, head });
+```
+
+Events are lossy and are not replayed after reconnect, which fits cursor and
+live-selection updates. Ablo enters and leaves the record scope with each
+subscription, routes only inside that scope, and delivers authenticated
+`sender` and `sentAt` context separately from the application payload. Use
+durable model fields when state must survive reconnects. The sending connection
+does not receive its own event. Coalesce or throttle pointer movement in the
+application; model events do not currently declare a per-event `maxHz`.
 
 ## usePeers: read-only presence
 

@@ -526,6 +526,8 @@ that guarantee as eventual completion with repair—not atomicity.
 | `persistence: 'indexeddb'`                | Durable browser cache that survives reloads, for apps that need it. |
 | `durableWrites: { store, namespace? }`     | Recover unacknowledged worker writes after a process restart.      |
 | `claim` / `claim.state` / `claim.queue`          | Show active work and coordinate before a write.                   |
+| `usePresence` / `<model>.presence`         | Show the human and agent sessions active on a row.                 |
+| `<model>.events`                           | Send lossy row-scoped cursor, selection, and similar UI signals.   |
 | `read` + `reads`                          | Reject writes based on stale state.                               |
 | `mutable`, `readOnly`, `field`, `indexed` | Advanced schema and read tuning.                                  |
 
@@ -549,7 +551,16 @@ them.
 | `delete({ id, ...opts })`              | Delete through the model client.                                                 |
 | `claim.state({ id })`                  | See who is currently working on a row (synchronous).                             |
 | `claim({ id, description?, ttl? })`    | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
+| `presence(id?)`                        | Read live human and agent sessions on a reactive client.                         |
+| `events.send(id, name, payload)`       | Send a transient row-scoped signal; disconnected sends are dropped.              |
+| `events.subscribe(id, name, handler)`  | Listen until its returned disposer is called; events are not replayed.            |
 
 Keep first integrations on the model methods above. Every mutation and
 server-read verb takes one options object; the synchronous `local.get(id)` stays
 positional.
+
+Presence and events require the reactive WebSocket client. Server-side agents
+using the stateless HTTP client still coordinate through reads, claims, and
+writes, but they do not open a cursor/selection event channel. Event payloads
+carry application data only; Ablo derives the model scope and supplies
+authenticated participant context to receivers.

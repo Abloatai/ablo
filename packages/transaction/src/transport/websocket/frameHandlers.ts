@@ -33,6 +33,10 @@ import { recordClaim, type CommitAck } from './commitFrames.js';
 import type { Logger } from '../../logger.js';
 import type { SocketObservability } from '../../observability.js';
 import type { PresenceSessionEstablished } from '../../presence/session.js';
+import {
+  collaborationEventContext,
+  collaborationEventEnvelopeSchema,
+} from '../../collaboration/contract.js';
 
 /**
  * In-flight `commit` request record, keyed by clientTxId in the session.
@@ -420,6 +424,13 @@ const validatedFrameHandlers: Record<
       session.emit('presence_patch', payload);
     },
   ),
+  model_event: validating(
+    WS_INBOUND_FRAMES.model_event.payload,
+    'model_event',
+    (session, payload) => {
+      session.emit('model_event', payload);
+    },
+  ),
   claim_rejected: validating(
     WS_INBOUND_FRAMES.claim_rejected.payload,
     'claim_rejected',
@@ -545,7 +556,18 @@ export function dispatchWsFrame(session: WsSession, message: WsInboundFrame): vo
   // Convert to colon format for the event map (e.g., 'section:selection')
   const eventKey = frameType.replace(/_/g, ':');
   if (session.collaborationEventTypes.has(eventKey)) {
-    session.emit(eventKey, message.payload);
+    const attributed = collaborationEventEnvelopeSchema.safeParse(message);
+    if (attributed.success) {
+      session.emit(
+        eventKey,
+        attributed.data.payload,
+        collaborationEventContext(attributed.data),
+      );
+    } else {
+      // Older servers sent only the application payload. Preserve that rollout
+      // direction; optional context tells consumers whether attribution exists.
+      session.emit(eventKey, message.payload);
+    }
     return;
   }
 

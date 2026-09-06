@@ -46,6 +46,7 @@ describe('reactive presence', () => {
     expect(presence.others.map(({ presenceSessionId }) => presenceSessionId)).toEqual(['tab-2']);
     expect(presence.forModel('documents', 'doc-1')).toHaveLength(2);
     expect(changed).toHaveBeenCalled();
+    presence.dispose();
   });
 
   it('feeds authoritative claim activities into the existing claim reader', () => {

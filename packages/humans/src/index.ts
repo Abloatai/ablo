@@ -9,6 +9,7 @@ export type {
 } from './Ablo.js';
 export { humans, type HumansSurface } from './humans.js';
 export type { AbloClient } from './client.js';
+export type { CollaborationEventContext } from '@abloatai/transaction/collaboration';
 export type {
   AbloPlugin,
   MergedSurface,

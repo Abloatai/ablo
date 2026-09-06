@@ -69,6 +69,9 @@ Each schema model becomes a typed model on the client:
 - `ablo.weatherReports.update({ id, data, ...options })` updates a row.
 - `ablo.weatherReports.delete({ id, ...options })` deletes a row.
 - `ablo.weatherReports.claim({ id, description })` acquires a durable write lease; the HTTP form is awaited.
+- `ablo.weatherReports.presence(id)` reads the live session projection for one row on a reactive client.
+- `ablo.weatherReports.events.send(id, name, payload)` sends a transient row-scoped event on a reactive client.
+- `ablo.weatherReports.events.subscribe(id, name, handler)` subscribes to that transient event and returns a disposer.
 
 `local.` narrows a query to what has already synced. `get({ id })`, `read({ id })`, and
 `list({ where })` answer from the local graph and fall back to IndexedDB and
@@ -94,10 +97,47 @@ fallback removed — nothing to await, so they return a value.
 | `claim.queue({ id })` | `Promise<ClaimQueueView>` on HTTP | You need the durable wait line. |
 | `claim.release({ id })` | `Promise<void>` on HTTP | You need to release a claim early. |
 | `claim.reorder({ id, order })` | `Promise<void>` on HTTP | A privileged coordinator needs to reorder the wait line. |
+| `presence(id?)` | `readonly PresenceSession[]` on reactive clients | You need the sessions currently active on a model or row. |
+| `events.send(id, name, payload)` | `void` on reactive clients | You need to send a cursor, selection, or other transient signal. |
+| `events.subscribe(id, name, handler)` | `() => void` on reactive clients | You need transient signals for one row until cleanup. |
 
 `get`, `read`, `list`, `create`, `update`, `delete`, and `claim` go
 through the server. The `local` reads work off the rows a session has already
 synced, so a cheap re-read needs no round-trip.
+
+### Live presence and model events
+
+Presence and events belong to the reactive WebSocket client. They are not on
+the stateless HTTP client used by server-side agents and workers.
+
+Use presence for who is active on a row. In React, `usePresence` also owns the
+mounted component's read activity and cleanup:
+
+```tsx
+const viewers = usePresence((ablo) => ablo.chats, chatId);
+```
+
+Use model events for short-lived UI detail that should not become a database
+field:
+
+```ts
+const stop = ablo.files.events.subscribe(fileId, 'cursor', (cursor, context) => {
+  renderCursor(context.sender.presenceSessionId, cursor);
+});
+
+ablo.files.events.send(fileId, 'cursor', { line: 12, column: 4 });
+stop();
+```
+
+The model and row determine the sync group. Ablo excludes the sending
+connection, validates the wire envelope, and supplies authenticated
+`context.sender` and `context.sentAt`; identity does not belong in the payload.
+Event names are strings and payloads are objects. Payloads are not inferred
+from the schema today.
+
+Delivery is lossy: sending while disconnected is dropped, and events are not
+replayed after reconnect. Cursor and live selection fit this contract. Persist
+anything that must be recovered as ordinary model data.
 
 ## Atomic commits
 

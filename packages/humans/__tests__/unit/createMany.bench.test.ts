@@ -1,3 +1,5 @@
+/** @jest-environment node */
+
 /**
  * Performance benchmark — quantifies the microtask coalescer.
  *
@@ -68,7 +70,7 @@ async function bench(
   await flushMicrotasks();
   const wallMs = performance.now() - start;
 
-  queue.removeAllListeners();
+  queue.dispose();
   ctx.cleanup();
 
   return {

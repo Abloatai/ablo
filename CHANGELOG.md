@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.63.0
+
+Reactive model clients now expose live awareness beneath the model namespace.
+`usePresence((ablo) => ablo.chats, chatId)` owns the mounted view's read
+activity, refresh, reconnect announcement, and cleanup, and returns the human
+and agent sessions active on that record. Multiple tabs remain distinct
+authenticated sessions.
+
+Transient collaboration now uses `ablo.<model>.events`. Applications can send
+and subscribe to cursor, selection, and similar signals by record id without
+putting routing or caller-authored identity in the payload. Ablo derives the
+record sync group, routes only to other connections in that group, and supplies
+the authenticated participant, presence session, and server timestamp to the
+receiver.
+
+Model events are deliberately lossy: disconnected sends are dropped and
+events are not replayed after reconnect. Persist state that must recover as
+ordinary model data, and throttle high-frequency pointer updates in the
+application. The legacy store-level collaboration-event API remains available
+and now receives optional authenticated context from updated servers.
+
 ## 0.62.0
 
 Every live client now exposes one session-owned `ablo.presence` projection.

@@ -144,6 +144,13 @@ import type {
 } from '@abloatai/transaction/transport/http';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 import type { PresenceSession } from '@abloatai/transaction/presence';
+import type {
+  CollaborationEventContext,
+  ModelEventEnvelope,
+  ModelEventInput,
+  ModelEventTarget,
+} from '@abloatai/transaction/collaboration';
+import { modelEventInputSchema } from '@abloatai/transaction/collaboration';
 import {
   capturePointRead,
   prepareReadSet,
@@ -152,10 +159,16 @@ import {
 
 const ignoreSeparatelyObservedMutationFailure = (): undefined => undefined;
 const ignoreBestEffortClaimReleaseFailure = (): undefined => undefined;
+const ignoreBestEffortScopeFailure = (): undefined => undefined;
 
 export interface ModelClientMeta {
   readonly key: string;
   readonly typename: string;
+  readonly presence?: {
+    get(recordId: string): readonly PresenceSession[];
+    subscribe(listener: () => void): () => void;
+    read(recordId: string): () => void;
+  };
 }
 
 const modelClientMeta = new WeakMap<object, ModelClientMeta>();
@@ -180,6 +193,13 @@ type EntityHalf = Pick<ModelTarget, 'model' | 'id'>;
 export interface ModelCollaboration {
   /** Session projections already held by this client's one presence store. */
   presence(model: string, recordId?: string): readonly PresenceSession[];
+  /** Subscribe once to the connection-owned presence projection. */
+  onPresenceChange(listener: () => void): () => void;
+  /** Start one session-owned read activity and return its cleanup. */
+  startReadPresence(target: EntityHalf): () => void;
+  modelEventTarget(recordId: string): ModelEventTarget;
+  sendModelEvent(input: ModelEventInput): void;
+  onModelEvent(listener: (event: ModelEventEnvelope) => void): () => void;
   /** Exact point evidence from the HTTP read boundary (stamp captured before data). */
   readPoint(model: string, id: string): Promise<{ data: unknown; stamp: number }>;
   /**
@@ -281,6 +301,8 @@ export interface ModelCollaboration {
    * test doubles can omit it.
    */
   enterScope?(scope: Record<string, string>): void | Promise<void>;
+  /** Release read interest previously acquired through {@link enterScope}. */
+  leaveScope?(scope: Record<string, string>): void | Promise<void>;
   /**
    * Pins a scope's sync group(s) — write intent: a row this client holds an
    * active claim on stays subscribed regardless of navigation. Same
@@ -342,6 +364,9 @@ interface ReactiveModelSurface<T, Fields = T> {
   /** Sessions currently active on this model, optionally narrowed to one record. */
   presence(recordId?: string): readonly PresenceSession[];
 
+  /** Lossy, model-record-addressed application events such as cursor or selection. */
+  events: ModelEvents;
+
   /**
    * Claim a row so other writers wait or are rejected until you're done, and
    * inspect or manage that coordination through the same namespace. Call it to
@@ -375,6 +400,50 @@ interface ReactiveModelSurface<T, Fields = T> {
     callback: (entities: T[]) => void,
     options?: LocalReadOptions<T>,
   ): () => void;
+}
+
+export interface ModelEvents {
+  send(
+    recordId: string,
+    event: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): void;
+  subscribe(
+    recordId: string,
+    event: string,
+    handler: (
+      payload: Readonly<Record<string, unknown>>,
+      context: CollaborationEventContext,
+    ) => void,
+  ): () => void;
+}
+
+function subscribeInModelScope(
+  collaboration: ModelCollaboration,
+  scope: Record<string, string>,
+  subscribe: () => () => void,
+): () => void {
+  let stopped = false;
+  let entered = false;
+  let unsubscribe: (() => void) | null = null;
+
+  void Promise.resolve(collaboration.enterScope?.(scope))
+    .then(() => {
+      entered = true;
+      if (stopped) {
+        void collaboration.leaveScope?.(scope);
+        return;
+      }
+      unsubscribe = subscribe();
+    })
+    .catch(ignoreBestEffortScopeFailure);
+
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    unsubscribe?.();
+    if (entered) void collaboration.leaveScope?.(scope);
+  };
 }
 
 /**
@@ -1411,6 +1480,52 @@ export function createModelOperations<T, C>(
 
     presence: (recordId?: string) => collaboration?.presence(registeredModelName, recordId) ?? [],
 
+    events: {
+      send(recordId, event, payload) {
+        if (!collaboration) return;
+        const target = collaboration.modelEventTarget(recordId);
+        const parsed = modelEventInputSchema.safeParse({ target, event, payload });
+        if (!parsed.success) {
+          throw new AbloValidationError('Invalid model event.', {
+            code: 'invalid_request',
+            param: 'event',
+            cause: parsed.error,
+          });
+        }
+        const scope = { [schemaKey]: recordId };
+        void Promise.resolve(collaboration.enterScope?.(scope))
+          .then(() => { collaboration.sendModelEvent(parsed.data); })
+          .finally(() => { void collaboration.leaveScope?.(scope); });
+      },
+      subscribe(recordId, event, handler) {
+        if (!collaboration) return () => undefined;
+        const target = collaboration.modelEventTarget(recordId);
+        const parsed = modelEventInputSchema.safeParse({ target, event, payload: {} });
+        if (!parsed.success) {
+          throw new AbloValidationError('Invalid model event subscription.', {
+            code: 'invalid_request',
+            param: 'event',
+            cause: parsed.error,
+          });
+        }
+        const scope = { [schemaKey]: recordId };
+        return subscribeInModelScope(collaboration, scope, () =>
+          collaboration.onModelEvent((incoming) => {
+            if (
+              incoming.target.model !== target.model ||
+              incoming.target.id !== target.id ||
+              incoming.target.syncGroup !== target.syncGroup ||
+              incoming.event !== parsed.data.event
+            ) return;
+            handler(incoming.payload, {
+              sender: incoming.sender,
+              sentAt: incoming.sentAt,
+            });
+          }),
+        );
+      },
+    },
+
     get,
     read,
 
@@ -1666,6 +1781,23 @@ export function createModelOperations<T, C>(
   modelClientMeta.set(operations, {
     key: schemaKey,
     typename: registeredModelName,
+    ...(collaboration
+      ? {
+          presence: {
+            get: (recordId: string) => collaboration.presence(registeredModelName, recordId),
+            subscribe: (listener: () => void) => collaboration.onPresenceChange(listener),
+            read: (recordId: string) => {
+              const scope = { [schemaKey]: recordId };
+              return subscribeInModelScope(collaboration, scope, () =>
+                collaboration.startReadPresence({
+                  model: registeredModelName,
+                  id: recordId,
+                }),
+              );
+            },
+          },
+        }
+      : {}),
   });
 
   return operations;

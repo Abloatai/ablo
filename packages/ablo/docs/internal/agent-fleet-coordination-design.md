@@ -1,6 +1,6 @@
 # Coordination as Eyes and Ears for Agent Fleets
 
-The design intent behind claims, presence, and stale-context — stated as one
+The design intent behind presence, model events, claims, and stale-context — stated as one
 picture so it can be argued about and built against, not re-derived each time
 someone asks "how do the coordination agents work?"
 
@@ -33,23 +33,55 @@ this safe *and* loop-free at machine speed.
   is rejected if the row moved underneath it. The rejection is the signal, and it
   only ever fires when an agent actually chooses to write. A pull channel cannot
   loop — nothing is being pushed.
-- **Awareness is push, and it is the only channel that can storm.** So it is the
-  only channel we coalesce and rate-limit. Hot data that changes every
-  millisecond lives entirely on the safe *pull* side and therefore generates zero
-  awareness traffic — an agent that cares about a fast-ticking value just tries
-  its write and re-reads if it lost, rather than being woken on every tick.
+- **Awareness is push, and it is the only channel that can storm.** So it must
+  stay bounded: durable notifications need coalescing and relevance gates, and
+  transient cursor-style producers must throttle their own sends today. Hot
+  data that changes every millisecond lives entirely on the safe *pull* side
+  and therefore generates zero awareness traffic — an agent that cares about a
+  fast-ticking value just tries its write and re-reads if it lost, rather than
+  being woken on every tick.
 
 Collapse the two channels — "notify every reader on every change" — and a
 millisecond-ticking field produces read → notify → re-read → act → notify →
 forever. Keeping them separate is the whole reason that loop can't form.
 
+Awareness has two small surfaces under the same authenticated session and
+model scope:
+
+- **Presence** answers who is here and what authoritative read, claim, or write
+  activity the session is performing.
+- **Events** carry lossy application detail such as cursor coordinates or a
+  live selection. They do not reserve anything and are not replayed.
+
+Both humans and agents use the same participant shape. Events add detail to
+presence; they do not replace claims or stale-write protection.
+
 ## The six behaviors
 
-### 1. Eyes: see who is working where
+### 1. Eyes: see who is here and where
 
-Presence broadcasts, live, which agent holds which row. Before an agent commits
-to work, it can see the area is already taken. This is advisory: it informs, it
-forces nothing.
+Presence projects the human and agent sessions reading or working on a row.
+For interfaces, the record-bound React hook owns the read activity lifecycle:
+
+```ts
+const viewers = usePresence((ablo) => ablo.chats, chatId);
+```
+
+Events add transient location detail without turning it into durable model
+state:
+
+```ts
+ablo.slideDecks.events.send(deckId, 'cursor', { slideId, x, y });
+ablo.files.events.send(fileId, 'selection', { anchor, head });
+```
+
+The model namespace supplies the model and row. The server routes only inside
+that active record group, excludes the sender, and attaches the authenticated
+presence session and participant. This is advisory: it informs and forces
+nothing.
+
+Before a participant commits to slow work, claim state shows whether the area
+is already taken:
 
 ```ts
 const who = ablo.records.claim.state({ id: 'record_123' }); // holder or null
@@ -122,27 +154,34 @@ agent). A fast-ticking value never wakes anyone; a rarely-changing value that
 matters can push one settled signal. Same primitive, two behaviors, chosen by
 whether reacting is worth it — see the two-channel principle above.
 
-## The three layers, as a rising scale
+## The surfaces, by role
 
-The behaviors above compose into three layers of increasing firmness. An agent
-climbs only as high as the situation needs.
+The behaviors compose without merging awareness into safety. A participant
+uses only the surface the interaction needs.
 
-| Layer | Kind | What it does | Forces anything? |
+| Role | Surface | What it does | Forces anything? |
 | --- | --- | --- | --- |
-| **Presence** | awareness (push) | Shows who holds what, and why, live. | No: informs only. |
-| **Stale-context** | safety (pull) | Rejects a write built on a read the row has moved past. | Yes: at write time. |
-| **Claim + queue** | reservation (push) | Reserves a row across a slow gap; contenders take turns. | Yes: mutual exclusion. |
+| Awareness | **Presence** | Shows which human and agent sessions are active on a row. | No. |
+| Awareness | **Events** | Adds lossy cursor, selection, or similar live detail. | No. |
+| Safety | **Stale-context** | Rejects a write built on a read the row has moved past. | Yes, at write time. |
+| Safety | **Claim + queue** | Reserves a row across a slow gap; contenders take turns. | Yes, mutual exclusion. |
 
 Most work is a quick write and needs only the safety layer. An agent reaches for
 a claim only when it will *hold* a row across a slow gap (read → LLM → write) —
 the case where taking a turn beats colliding.
 
-## What's shipped, and the one open point
+## What's shipped, and what remains open
 
-One piece of the fleet story that once read as future design work is already
-built; one is genuinely still open. Both are called out so neither is misjudged.
+The shipped awareness path and the remaining notification problem are separate:
 
-1. **Rich work surfaced at reject time — shipped.** A claim carries a single
+1. **Record-scoped presence and events — shipped.** A mounted model record can
+   announce read presence and receive human or agent sessions through
+   `usePresence`. Its `events` namespace sends lossy cursor, selection, and
+   similar signals inside the same record group. The server stamps identity;
+   callers do not send `userId`. Events have no reconnect replay, durable
+   latest-value state, or per-event `maxHz` policy yet.
+
+2. **Rich work surfaced at reject time — shipped.** A claim carries a single
    `description` (behavior 2) as a first-class field on the wire. It rides the
    presence broadcast, comes back inside the rejection's holder summary
    (`heldByClaim`), and the SDK's `formatClaimedErrorMessage` renders it into the
@@ -150,7 +189,7 @@ built; one is genuinely still open. Both are called out so neither is misjudged.
    the risk section" (behavior 4) — the piece that prevents the wasteful blind
    retry works today.
 
-2. **Coalesced, relevance-gated notify — open.** The anti-loop guarantee
+3. **Coalesced, relevance-gated notify — open.** The anti-loop guarantee
    (behavior 6) depends on the awareness channel being coalesced and gated by
    relevance, and on hot data staying on the pull side. This is the sharp one,
    and it is the one not yet built: what exists is the write-time pull guard

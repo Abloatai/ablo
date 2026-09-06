@@ -31,6 +31,11 @@ import type { BootstrapReason } from '../../wire/bootstrapReason.js';
 import type { ClientSyncDelta } from '../../observation/contract.js';
 import type { PresenceCommand } from '../../presence/commands.js';
 import type { PresencePatch, PresenceSnapshot } from '../../presence/projections.js';
+import type { CollaborationEventContext } from '../../collaboration/contract.js';
+import type {
+  ModelEventEnvelope,
+  ModelEventInput,
+} from '../../collaboration/contract.js';
 import type {
   ClaimAcquired,
   ClaimAbandonAckPayload,
@@ -195,6 +200,7 @@ export interface CoreSyncEventMap {
   bootstrap_data: [BootstrapDataEvent];
   presence_snapshot: [PresenceSnapshot];
   presence_patch: [PresencePatch];
+  model_event: [ModelEventEnvelope];
   error: [Error];
   session_error: [Error];
   protocol_mismatch: [CloseEvent];
@@ -263,13 +269,17 @@ export type DefaultCollaborationEvents = Record<string, never>;
  */
 export type EventMap<T> = { [K in keyof T]: unknown[] };
 
+type CollaborationEventMap<T extends EventMap<T>> = {
+  [K in keyof T]: [...T[K], context?: CollaborationEventContext];
+};
+
 /**
  * Full event map = core + collaboration events.
  * Pass your own TCollaboration to add app-specific events.
  */
 export type SyncWebSocketEventMap<
   TCollaboration extends EventMap<TCollaboration> = DefaultCollaborationEvents
-> = CoreSyncEventMap & TCollaboration;
+> = CoreSyncEventMap & CollaborationEventMap<TCollaboration>;
 
 // ---------------------------------------------------------------------------
 // Consumers pass their own event types as the TCollaboration generic parameter.
@@ -302,6 +312,12 @@ export class WsTransport<
       type: messageType.replace(/:/g, '_'), // 'document:selection' → 'document_selection' wire format
       payload: { ...payload, timestamp: Date.now() },
     });
+  }
+
+  /** Send one lossy application event addressed to a model record. */
+  sendModelEvent(input: ModelEventInput): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.send({ type: 'model_event', payload: input });
   }
   private ws: WebSocket | null = null;
   protected options: Required<

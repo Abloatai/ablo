@@ -38,6 +38,7 @@ export const PUBLIC_MODEL_VERBS = [
   'listAll',
   'local',
   'presence',
+  'events',
   'create',
   'update',
   'delete',

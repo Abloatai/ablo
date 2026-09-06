@@ -78,6 +78,7 @@ import {
   prepareReadSet,
 } from '@abloatai/transaction/internal/read-set';
 import { contextOnChange } from '../sync/contextOnChange.js';
+import { resolveScopeGroups } from '../sync/scopeGroups.js';
 import type { ReadDependency } from '@abloatai/transaction/coordination';
 import type { CapturedRow } from '@abloatai/transaction/transport/http';
 
@@ -575,6 +576,20 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       hydration,
       {
         presence: (model, recordId) => presenceStream.forModel(model, recordId),
+        onPresenceChange: (listener) => presenceStream.onChange(listener),
+        startReadPresence: (target) => presenceStream.startRead(target),
+        modelEventTarget: (recordId) => {
+          const syncGroup = resolveScopeGroups({ [schemaKey]: recordId }, schema)[0];
+          if (syncGroup === undefined) {
+            throw new AbloValidationError('A model event requires a record scope.', {
+              code: 'invalid_request',
+              param: 'recordId',
+            });
+          }
+          return { model: registeredModelName, id: recordId, syncGroup };
+        },
+        sendModelEvent: (input) => { transport.sendModelEvent(input); },
+        onModelEvent: (listener) => transport.subscribe('model_event', listener),
         createClaim: (claimOptions) => publicClaims.create(claimOptions),
         // Lazily referenced: `commits` is declared below this loop, and this
         // only runs when someone actually writes a batch.
@@ -617,6 +632,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
         // stay fire-and-forget. It's soft either way — the store swallows
         // reconcile errors so read interest never makes a read reject or stall.
         enterScope: (scope) => store.enterScope(scope),
+        leaveScope: (scope) => store.leaveScope(scope),
         pinScope: (scope) => store.pinScope(scope),
       },
       readSetContext,

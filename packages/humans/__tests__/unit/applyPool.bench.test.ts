@@ -1,3 +1,5 @@
+/** @jest-environment node */
+
 /**
  * Performance benchmark — decomposes the delta-apply cost per mechanism.
  *
@@ -176,6 +178,9 @@ function runScenario(
     return { scenario, totalDeltas, wallMs, perDeltaUs: (wallMs * 1000) / totalDeltas };
   } finally {
     restore?.();
+    client.dispose();
+    pool.stopGC();
+    pool.clear();
     clearActiveRegistry();
   }
 }
@@ -239,6 +244,9 @@ function runAddScenario(
     const totalDeltas = FRAMES * FRAME_DELTAS;
     return { scenario, totalDeltas, wallMs, perDeltaUs: (wallMs * 1000) / totalDeltas };
   } finally {
+    client.dispose();
+    pool.stopGC();
+    pool.clear();
     clearActiveRegistry();
   }
 }
@@ -265,11 +273,14 @@ describe('applyDeltaBatchToPool cost decomposition', () => {
 
   it('separates MobX instrumentation layers from the base apply cost', () => {
     // One-time M1 install cost, charged by first-touch activation today.
-    const { pool } = setup();
+    const { pool, client } = setup();
     const models = seedRows(pool);
     const installStart = performance.now();
     for (const model of models) model.ensureObservable();
     const installMs = performance.now() - installStart;
+    client.dispose();
+    pool.stopGC();
+    pool.clear();
     clearActiveRegistry();
 
     const instrumented = runScenario('activated (consumer-read)', (rows) => {
@@ -339,7 +350,7 @@ describe('applyDeltaBatchToPool cost decomposition', () => {
     });
 
     // Construction alone: createFromData without the pool insert.
-    const { pool } = setup2({ maxSize: 100 });
+    const { pool, client } = setup2({ maxSize: 100 });
     const frames = Array.from({ length: FRAMES }, (_, i) => addFrame(i + 1000));
     const constructStart = performance.now();
     let built = 0;
@@ -354,6 +365,9 @@ describe('applyDeltaBatchToPool cost decomposition', () => {
       }
     }
     const constructMs = performance.now() - constructStart;
+    client.dispose();
+    pool.stopGC();
+    pool.clear();
     clearActiveRegistry();
     expect(built).toBe(FRAMES * FRAME_DELTAS);
     const constructPerDeltaUs = (constructMs * 1000) / built;

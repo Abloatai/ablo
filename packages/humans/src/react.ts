@@ -4,6 +4,10 @@ export { useCurrentUserId } from './react/useCurrentUserId.js';
 export { useErrorListener } from './react/useErrorListener.js';
 export { useSyncStatus, type SyncStatusSnapshot } from './react/useSyncStatus.js';
 export {
+  usePresence,
+  type PresenceModelSelector,
+} from './react/usePresence.js';
+export {
   useMutationFailureListener,
   type MutationFailurePayload,
 } from './react/useMutationFailureListener.js';

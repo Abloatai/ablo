@@ -390,6 +390,39 @@ describe('agent WebSocket transport', () => {
     await session.close();
   });
 
+  it('delivers only validated authenticated model events', async () => {
+    const opening = createWebSocketSession({
+      baseUrl: 'https://cell.example.test',
+      access: access('rk_agent_1'),
+      syncGroups: ['file:file-1'],
+    });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    const session = await opening;
+    const received: unknown[] = [];
+    session.subscribe('model_event', (event) => { received.push(event); });
+
+    const payload = {
+      target: { model: 'File', id: 'file-1', syncGroup: 'file:file-1' },
+      event: 'selection',
+      payload: { anchor: 2, head: 9 },
+      sender: {
+        presenceSessionId: 'b6741f5a-e982-4f9c-916b-2d247b8d4646',
+        participant: { id: 'agent-coder', kind: 'agent' },
+      },
+      sentAt: NOW,
+    };
+    socket.receive({ type: 'model_event', payload });
+    socket.receive({
+      type: 'model_event',
+      payload: { ...payload, sender: { participant: { id: 'forged', kind: 'agent' } } },
+    });
+
+    expect(received).toEqual([payload]);
+    await session.close();
+  });
+
   it('does not invent a WebSocket claim timeout when timeoutMs is omitted', async () => {
     const opening = createWebSocketSession({
       baseUrl: 'https://cell.example.test',

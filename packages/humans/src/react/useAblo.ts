@@ -223,12 +223,7 @@ export function useAbloImpl<
   id?: string,
   options?: UseAbloModelOptions<T>,
 ): Ablo<R> | null | UseAbloModelResult<T> | T | undefined {
-  const ctx = useContext(AbloInternalContext);
-  // The bound client wins — it is already `Ablo<R>`, no rebinding. The
-  // fallback is the ONE remaining schema rebind in the SDK; it retires with
-  // the last legacy provider mount (docs/plans/typed-react-binding.md).
-  const engine: Ablo<R> | null =
-    boundClient ?? (ctx?.engine ? rebindEngine<R>(ctx.engine) : null);
+  const engine = useAbloClientImpl(boundClient);
   const initial = options?.initial;
   const isSelectorOnly = typeof modelOrSelect === 'function' && id === undefined;
   const modelClient: ModelOperations<T, C> | undefined =
@@ -276,5 +271,18 @@ export function useAbloImpl<
 
   if (isSelectorOnly) return selected;
   if (modelOrSelect) return modelResult;
+  return engine;
+}
+
+/** @internal Resolve the bound or legacy provider client through one rebind seam. */
+export function useAbloClientImpl<R extends SchemaRecord>(
+  boundClient: Ablo<R> | null,
+): Ablo<R> | null {
+  const ctx = useContext(AbloInternalContext);
+  // The bound client wins — it is already `Ablo<R>`, no rebinding. The
+  // fallback is the ONE remaining schema rebind in the SDK; it retires with
+  // the last legacy provider mount (docs/plans/typed-react-binding.md).
+  const engine: Ablo<R> | null =
+    boundClient ?? (ctx?.engine ? rebindEngine<R>(ctx.engine) : null);
   return engine;
 }

@@ -39,6 +39,14 @@ describe('ObjectPool.stopGC', () => {
     pool.stopGC();
     expect(jest.getTimerCount()).toBe(before);
   });
+
+  it('does not arm gc when the interval is disabled', () => {
+    const before = jest.getTimerCount();
+    const pool = new ObjectPool({ gcInterval: 0 }, new ModelRegistry());
+
+    expect(jest.getTimerCount()).toBe(before);
+    pool.stopGC();
+  });
 });
 
 describe('BaseSyncedStore.disconnect stops pool GC', () => {

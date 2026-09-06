@@ -39,6 +39,18 @@ const ModelClasses: Record<ModelClassName, new (data: Record<string, unknown>) =
 
 describe('Property: MutationQueue Invariants', () => {
   let ctx: TestContextResult;
+  const queues = new Set<MutationQueue>();
+
+  const createQueue = (): MutationQueue => {
+    const queue = new MutationQueue({ batchDelay: 0 });
+    queues.add(queue);
+    return queue;
+  };
+
+  const disposeQueue = (queue: MutationQueue): void => {
+    queue.dispose();
+    queues.delete(queue);
+  };
 
   beforeEach(() => {
     resetFixtureCounter();
@@ -46,6 +58,8 @@ describe('Property: MutationQueue Invariants', () => {
   });
 
   afterEach(() => {
+    for (const queue of queues) queue.dispose();
+    queues.clear();
     ctx.cleanup();
   });
 
@@ -61,7 +75,7 @@ describe('Property: MutationQueue Invariants', () => {
       fc.asyncProperty(
         fc.constantFrom(...parentChild),
         async ([parentModel, childModel]) => {
-          const queue = new MutationQueue({ batchDelay: 0 });
+          const queue = createQueue();
 
           const parentInstance = new ModelClasses[parentModel]({ id: `p-${Math.random()}` });
           const childInstance = new ModelClasses[childModel]({ id: `c-${Math.random()}` });
@@ -72,7 +86,7 @@ describe('Property: MutationQueue Invariants', () => {
           ]);
 
           expect(parentTx.priorityScore).toBeLessThanOrEqual(childTx.priorityScore);
-          queue.removeAllListeners();
+          disposeQueue(queue);
         }
       ),
       { numRuns: 20 }
@@ -88,7 +102,7 @@ describe('Property: MutationQueue Invariants', () => {
         fc.constantFrom(...opTypes),
         fc.constantFrom(...modelNames),
         async (opType, modelName) => {
-          const queue = new MutationQueue({ batchDelay: 0 });
+          const queue = createQueue();
           const model = new ModelClasses[modelName]({ id: `m-${Math.random()}` });
           model.markAsPersisted();
           if (opType === 'update') {
@@ -98,7 +112,7 @@ describe('Property: MutationQueue Invariants', () => {
           const tx = await (queue as unknown as Record<(typeof opTypes)[number], (m: Model, ctx: typeof USER_CTX) => Promise<{ priorityScore: number }>>)[opType](model, USER_CTX);
 
           expect(tx.priorityScore).toBe(50);
-          queue.removeAllListeners();
+          disposeQueue(queue);
         }
       ),
       { numRuns: 20 }
@@ -113,7 +127,7 @@ describe('Property: MutationQueue Invariants', () => {
           { minLength: 2, maxLength: 8 }
         ),
         async (opSequence) => {
-          const queue = new MutationQueue({ batchDelay: 0 });
+          const queue = createQueue();
           let createdCount = 0;
           let resolvedCount = 0;
 
@@ -160,7 +174,7 @@ describe('Property: MutationQueue Invariants', () => {
           expect(createdCount).toBeGreaterThan(0);
           expect(resolvedCount).toBe(createdCount);
 
-          queue.removeAllListeners();
+          disposeQueue(queue);
           ctx.mocks.mutationExecutor.reset();
         }
       ),
@@ -176,7 +190,7 @@ describe('Property: MutationQueue Invariants', () => {
           status: fc.constantFrom('todo', 'doing', 'done'),
         }),
         async (data) => {
-          const queue = new MutationQueue({ batchDelay: 0 });
+          const queue = createQueue();
           const item = new TestItem({ id: `idem-${Math.random()}`, ...data });
           item.markAsPersisted();
           item.propertyChanged('title', 'old', data.title);
@@ -191,7 +205,7 @@ describe('Property: MutationQueue Invariants', () => {
           const calls = ctx.mocks.mutationExecutor.getCallsByMethod('batchAck');
           expect(calls.length).toBeLessThanOrEqual(2);
 
-          queue.removeAllListeners();
+          disposeQueue(queue);
           ctx.mocks.mutationExecutor.reset();
         }
       ),
