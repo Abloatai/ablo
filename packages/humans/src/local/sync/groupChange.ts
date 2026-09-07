@@ -1,10 +1,13 @@
 /**
  * Handles the delta types that change which sync groups a session can see. A
- * sync group is a fan-out scope the server uses to decide which entities a
- * client receives. When a session's membership changes, these handlers update
+ * sync group connects shared state to authorized participant subscriptions.
+ * This module owns the client side of membership changes and local-state
+ * rebuilding; it neither grants server authority nor configures per-group loading.
+ * When a session's membership changes, these handlers update
  * the client's subscription list; when access is revoked, they clear cached
- * data and trigger a full re-bootstrap so revoked rows cannot linger on the
- * device.
+ * managed data and request re-bootstrap. Clients without automatic bootstrap
+ * rely on covering deltas or explicit reads instead. This cannot retract copies
+ * retained outside the managed cache.
  *
  * Every handler takes a {@link GroupChangeContext}, the narrow facade through
  * which it reaches the client's local storage and connection lifecycle hooks.

@@ -16,6 +16,12 @@ schema** — your migration tool stays in charge of the shape of your database.
 > or separate database, and connect your production one when you're ready for it
 > to be the system of record.
 
+Groups structure which shared state reaches each person or agent. Declare the
+data's scope and participant authority, then let authorized subscriptions keep
+reactive views current; HTTP agents explicitly read or observe changes. Start
+with [Groups and shared context](./groups.md) to connect membership, access,
+loading and updates.
+
 ## 1. Install and initialize
 
 ```bash
@@ -82,6 +88,7 @@ every type is one parameter away — no `typeof schema` re-stating, anywhere:
 
 ```ts
 // ablo/register.ts — scaffolded by `npx ablo init`, sits beside ablo/schema.ts
+import type {} from '@abloatai/ablo';
 import type { schema } from './schema';
 declare module '@abloatai/ablo' {
   interface Register { Schema: typeof schema }
@@ -89,11 +96,11 @@ declare module '@abloatai/ablo' {
 export {};
 ```
 
-It's a regular `.ts` module, not a hand-authored `.d.ts`. The top-level
-`import type { schema }` makes the `declare module` block *merge* into (augment)
-the SDK's `Register` interface instead of colliding with it — the same shape
-[TanStack Router uses in `src/router.tsx`](https://tanstack.com/router/latest/docs/framework/react/guide/type-safety). Any `.ts` file in your
-`tsconfig` `include` works; it never needs to be imported.
+It's a regular `.ts` module, not a hand-authored `.d.ts`. The empty
+`import type {} from '@abloatai/ablo'` loads the SDK's module declaration so the
+`declare module` block augments its existing `Register` interface. The schema
+import supplies your schema's type. Both imports are erased at runtime. Any `.ts`
+file in your `tsconfig` `include` works; it never needs a runtime import.
 
 ```ts
 import type { Model } from '@abloatai/ablo/schema';

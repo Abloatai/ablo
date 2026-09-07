@@ -1,5 +1,11 @@
 # @abloatai/cli
 
+## 0.64.2
+
+`ablo upgrade` now reports removed `SyncProvider` imports and `AbloProvider`
+`userId` props, including aliased imports, with guidance for the current React
+API. The CLI declares compatibility with the 0.64.2 package family.
+
 ## 0.64.1
 
 `ablo upgrade` reports actionable migration hints for removed React hooks and zero-argument `useAblo()` calls. Generated components use `useAbloClient()` for writes, and generated registration modules explicitly load the public type registry. The CLI declares exact SDK compatibility with the 0.64.1 package family.

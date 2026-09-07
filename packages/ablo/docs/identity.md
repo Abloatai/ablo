@@ -1,6 +1,10 @@
-# Identity & Sync Groups
+# Identity and credentials
 
 > Who is connecting, and which slice of state they are allowed to see.
+
+Start with [Groups and shared context](./groups.md) for how data membership,
+authorization, subscriptions and local state fit together. This guide owns
+authentication, credential issuance and the schema wiring behind that view.
 
 This is the doc the Quickstart skips: **who is connecting, and which slice
 of shared state do they get?** If you've wired `<AbloProvider client={ablo}>`
@@ -15,7 +19,7 @@ Ablo is not an identity provider. It has no login, no password store, no
 session of its own. You keep whatever you already use — Clerk, Auth0,
 NextAuth, WorkOS, your own session table. Ablo's job begins **after** you've
 authenticated the user: you hand Ablo the already-authenticated identity, and
-Ablo decides which **sync groups** that identity may read and write.
+Ablo enforces that credential's groups, model read policies and operation grants.
 
 ## Inspect the credential the application is actually using
 
@@ -75,13 +79,12 @@ that.
 
 ## What a sync group is
 
-A **sync group** is a named channel of shared state — a string like
-`org:acme` or `workspace:abc123`. It is simultaneously:
-
-- **the unit of fan-out:** a confirmed write to a row publishes a delta to
-  every participant subscribed to that row's sync group(s), and
-- **the unit of access:** a participant receives a row's deltas *only if* the
-  row's sync group is in their allowed set.
+A **sync group** names shared state, such as `org:acme` or `workspace:abc123`.
+The server checks allowed groups for delivery; model `policy` and `subject`
+rules govern row access, and capability operations govern permitted actions.
+Routing a row to a group does not itself authorize an HTTP read or write.
+See [the group lifecycle](./groups.md#a-participants-lifecycle) for loading,
+updates, reconnects and removal.
 
 There is no built-in `org` / `team` / `user` concept in the engine. Those are
 *your* domain words. Ablo only knows sync-group strings. The mapping from "this
@@ -133,7 +136,7 @@ export const schema = defineSchema(
 // 2. app/providers.tsx — a HUMAN gets their full org / team scope.
 // teamIds is set on the client you build (Ablo({ schema, teamIds: user.teamIds })),
 // not passed to the provider; the provider just takes that client.
-<AbloProvider client={ablo} userId={user.id}>
+<AbloProvider client={ablo}>
   {children}
 </AbloProvider>
 ```
@@ -255,9 +258,11 @@ Delivery scoping is two declarations that meet in the middle. One describes the
 changes when the row's sync groups intersect the participant's allowed set.
 
 That intersection does not itself authorize an HTTP read. A model's `policy`
-governs read access. Treat sync-groups as change routing and `policy` (plus the
-organization boundary beneath it) as authorization; declaring one never
-silently creates the other.
+governs read access, while `subject` can require a credential group for a row
+field. Operation grants bound the actions. A subject-scoped row uses only its
+subject delivery group; other routes cannot bypass that boundary. See
+[Groups and shared context](./groups.md#one-context-several-decisions) for how
+these declarations fit together.
 
 ### Half 1 (`identityRoles`): identity → allowed groups
 
@@ -408,8 +413,7 @@ server, never by the browser.**
 
 ## Wiring the provider
 
-The identity your server resolved is carried by the client you build and the
-`userId` prop. In a Next.js app, resolve the user in a Server Component and pass
+The identity your server resolved is carried by the authenticated client session. In a Next.js app, resolve the user in a Server Component and pass
 it down. Build the client once (the schema, `teamIds`, and the `apiKey` resolver
 live here; entity narrowing rides the minted session's `groups`), then hand
 it to the provider:
@@ -450,7 +454,7 @@ export function Providers({
 }) {
   const ablo = useMemo(() => makeAblo(user), [user.id]);
   return (
-    <AbloProvider client={ablo} userId={user.id} fallback={<AppSkeleton />}>
+    <AbloProvider client={ablo} fallback={<AppSkeleton />}>
       {children}
     </AbloProvider>
   );
@@ -461,11 +465,11 @@ What carries identity — and just as importantly, what does *not* set the bound
 
 | Where        | Purpose                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------ |
-| `userId` prop | App-level participant id, used for app-owned fields and read by your `identityRole` `source`. **Not** the security boundary: the server enforces scope from the authenticated request. |
+| Application authentication context | Supplies identity for app-owned fields and UI. The provider has no `userId` prop; the server enforces scope from the authenticated session. |
 | `teamIds` (on the client) | Team ids expanded into team sync groups via your `identityRoles`.                   |
 | `groups` (at session mint) | Optional. **Narrows** a minted session's subscription to a subset of what auth already allows: it can never widen it. Passed to `sessions.create({ user \| agent, groups })`; build entries with `syncGroup(kind, id)`. Use it to scope an agent (or a focused page's session) to one entity, e.g. `[syncGroup('workspace', 'abc123')]`. |
 
-Because the server is the boundary, a client that changes `userId` to another
+Because the server is the boundary, a client that changes application identity state to another
 user's id does not gain their data — the server resolves and enforces the real
 identity on the connection. These are how your app *tells* Ablo who it
 already authenticated, not how it *proves* it.
@@ -644,9 +648,9 @@ The best practices Ablo inherits from that lineage:
    the line precisely: [token parameters are trusted and usable for access
    control; client parameters are not](https://docs.powersync.com/usage/sync-rules/advanced-topics/client-parameters).
    In Ablo terms, the identity your server vouches for — and the session's
-   `groups`, minted server-side — are the *trusted* claims that set scope; the
-   `userId` prop is *untrusted client input* — convenient for app-owned fields, but
-   never the boundary. This is why changing `userId` in the browser grants nothing.
+   `groups`, minted server-side — are the *trusted* claims that set scope; application
+   identity state is *untrusted client input* — convenient for app-owned fields, but
+   never the boundary. Changing that state in the browser grants nothing.
 
 3. **Scope by a hierarchical naming convention, declared once.** Ablo's `kind:id`
    group naming (`org:…` / `team:…` from `identityRoles`, `workspace:…` from a model's

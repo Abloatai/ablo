@@ -29,6 +29,12 @@ Every write goes through it, so authority, idempotency, conflicts, ordering,
 and confirmation are enforced in one place. Your Postgres remains the source of
 truth.
 
+Groups structure which shared state reaches each person or agent. Declare the
+data's scope and participant authority, then let authorized subscriptions keep
+reactive views current; HTTP agents explicitly read or observe changes. Start
+with [Groups and shared context](./docs/groups.md) to connect membership, access,
+loading and updates.
+
 ## Why Ablo
 
 Software used to have one writer: a human clicking through an application. AI

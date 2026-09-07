@@ -4,6 +4,12 @@ Ablo lets AI agents and humans safely edit the same typed data without clobberin
 
 Claims don't lock. If another writer holds the row, `claim` waits for them and re-reads the fresh row before handing it to you — so two writers serialize instead of clobbering.
 
+Groups structure which shared state reaches each person or agent. Declare the
+data's scope and participant authority, then let authorized subscriptions keep
+reactive views current; HTTP agents explicitly read or observe changes. Start
+with [Groups and shared context](./docs/groups.md) to connect membership, access,
+loading and updates.
+
 ## Start here — scaffold with `ablo init`
 
 Before choosing among identifier claims, row claims, captured reads, atomic

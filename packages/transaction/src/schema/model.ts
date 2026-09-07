@@ -165,14 +165,17 @@ export interface ModelOptions {
   plane?: ModelResidency;
 
   /**
-   * Sync-group routing — decides which delta channels a row fans out to. This is
-   * independent of {@link policy}, which governs read access. One object with three
-   * optional parts:
+   * Declares the data and membership edges of a shared context. These routing
+   * declarations connect rows to participant subscriptions; client bootstrap
+   * and group-change handling maintain the resulting local view. This is
+   * independent of {@link policy}, which governs read access. A declared subject
+   * is the exclusive delivery route; these groups cannot bypass it. Optional parts:
    *
    * - `root` — marks this model a scope root, so each of its records forms the group
    *   `<kind>:<id>`. The kind defaults to the lowercased typename (`Report` →
    *   `report:<id>`); pass a string to override it (`root: 'matter'`). Child models
-   *   inherit a root's group through their `belongsTo` relations.
+   *   inherit through `belongsTo` relations declared with `parent: true`; ordinary
+   *   references do not propagate group membership.
    * - `grants` — a membership edge that grants an identity access to a scope root.
    *   Both values name `belongsTo` relations on this model (`subject` names the
    *   identity, `scope` names the scope root). Use it only for sharing within an

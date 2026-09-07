@@ -107,7 +107,7 @@ const ablo = Ablo({
 });
 
 // The agent run is mounted on behalf of its triggering user.
-<AbloProvider client={ablo} userId={triggeringUser.id}>
+<AbloProvider client={ablo}>
   {children}
 </AbloProvider>
 ```

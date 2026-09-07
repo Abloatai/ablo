@@ -7,6 +7,9 @@ The maintained reference lives in
 Start at `src/index.ts`, then follow its owned `accounts`, `agent` and `workspace`
 boundaries. Its README contains the install, isolated-branch setup and test commands.
 
+For the full participant lifecycle and its current cache behavior, see
+[Groups and shared context](../groups.md).
+
 ## One account, one authorization rule
 
 “People in this account can see its chats” requires both a row rule and a

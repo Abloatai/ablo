@@ -113,25 +113,24 @@ import { ablo } from '@/lib/ablo';
 
 export function Providers({
   children,
-  user, // resolved server-side from YOUR auth
 }: {
   children: React.ReactNode;
-  user: { id: string };
 }) {
   return (
-    <AbloProvider client={ablo} userId={user.id} fallback={<AppSkeleton />}>
+    <AbloProvider client={ablo} fallback={<AppSkeleton />}>
       {children}
     </AbloProvider>
   );
 }
 ```
 
-`client` is the only required prop. The rest are situational:
+`client` is the only required prop. The removed `userId` prop is no longer accepted;
+read application identity from your authentication context. Ablo authority comes
+from the client session. The remaining props are situational:
 
 | Prop        | Default          | Purpose                                                                                                   |
 | ----------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
 | `client`    |: | **Required.** The `Ablo({ schema, apiKey })` instance. It carries the schema and connection config. |
-| `userId`    | resolved from auth | App participant id for app-owned fields and your `identityRoles`. Not the security boundary.            |
 | `fallback`  | neutral spinner  | Rendered during the *first* bootstrap only. Pass a branded skeleton, `null`, or `'passthrough'`.          |
 | `onError`   |: | Engine / WebSocket / bootstrap errors. Wire to Sentry / Datadog.                                          |
 
@@ -149,7 +148,7 @@ session owner calls `await ablo.dispose()` on logout or before replacing that
 client. Provider remounts can reuse it. Never share a browser singleton across
 server requests. When changing accounts, remove the old account UI and create a
 fresh client whose session endpoint grants the newly verified membership.
-A query filter and the provider's `userId` prop do not change authorization.
+Query filters and application identity state do not change authorization.
 
 For a component-owned client, create and dispose the instance in the same effect.
 React Strict Mode can replay setup and cleanup, so each setup creates a fresh

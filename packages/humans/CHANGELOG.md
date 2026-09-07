@@ -1,5 +1,10 @@
 # @abloatai/humans
 
+## 0.64.2
+
+This release aligns Humans with the 0.64.2 package family. Runtime behavior
+and the public API are unchanged.
+
 ## 0.64.1
 
 React now separates writable `useAbloClient()` access from snapshot-only `useAblo(...)` reads. Replace zero-argument `useAblo()` calls with `useAbloClient()`. Schema-bound hooks emit portable declarations across packages. Add scoped `excludeSelf` presence filtering, `useMutationFailure` lifecycle handling, and `getAbloStore` for custom framework adapters.

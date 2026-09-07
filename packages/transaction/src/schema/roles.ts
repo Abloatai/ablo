@@ -203,17 +203,19 @@ export const grantsRefSchema = z.object({
 });
 
 /**
+ * Declares how rows form shared contexts and membership edges for participants.
  * The authoring form of a model's sync-group routing — the `groups: { ... }`
- * option. One object collects the three independent routing controls. This is a
- * separate concern from `policy`, which governs tenant isolation: `policy`
- * decides who may read a row, while `groups` decides which change channels a row
- * fans into.
+ * option. Routing and membership are distinct from row policy and operation
+ * grants. A model's `subject` requires a matching credential group and is the
+ * exclusive delivery route; these declarations cannot bypass it.
  *
  * - `root`   — marks this model a scope root, so its records form the group
  *   `<kind>:<id>` (the kind defaults to the typename).
  * - `grants` — a membership edge granting an identity access to a scope root.
  * - `roles`  — record-to-group roles keyed on a plain field rather than a
  *   relation, such as inbox fan-out. Accepts a single role or an array.
+ * - `routingOnly` — acknowledge delivery narrower than an independently safe
+ *   read policy; this does not grant authority.
  */
 export const groupsInputSchema = z.object({
   root: scopeSchema.optional(),

@@ -379,18 +379,15 @@ export class BaseSyncedStore<
     this.syncWebSocket.sendCollaborationEvent(messageType, payload);
   }
 
-  // ── Area-of-interest (dynamic read subscription) ─────────────────
+  // ── Group interest and loading ──────────────────────────────────
   //
-  // `enterScope`/`leaveScope` move the connection's read interest as the
-  // user navigates (open or close a record); `pinScope`/`unpinScope`
-  // express prominence (an active claim keeps a group subscribed). All four
-  // resolve the scope to sync-group strings through the same resolver the
-  // claim path uses (`resolveParticipantSyncGroups`), so read interest and
-  // write claims always agree on the string for a given entity. Before the
-  // connection opens they record interest without a wire send, and they
-  // never reject when the transport is offline (see
-  // {@link SubscriptionManager.reconcile}); the on-connect `resync` pushes
-  // whatever interest accumulated.
+  // Authority comes from the server-issued session. Enter/leave track what
+  // this connection wants to receive; pin/unpin keep an active scope subscribed.
+  // All resolve selectors through scopeToGroups. Hydration separately loads
+  // a scoped baseline into the local pool. Leaving interest does not revoke
+  // authority or selectively evict cached records.
+  // Offline interest is recorded locally and reconciled when the connection
+  // opens; recording interest is not confirmation of a server subscription.
 
   private scopeToGroups(scope: GroupScope): string[] {
     return resolveScopeGroups(scope, this.schema);
@@ -399,10 +396,11 @@ export class BaseSyncedStore<
   /**
    * Bring a scope into view and subscribe to its sync groups. With
    * `{ hydrate: true }`, also backfill the groups' current state into the pool
-   * once the subscription is active. The order matters: subscribing first
-   * guarantees no live delta is missed in the gap before the snapshot lands.
-   * Hydration is best-effort — a failed backfill never rejects `enterScope`,
-   * and the live delta stream keeps flowing regardless.
+   * after subscription reconciliation. Offline reconciliation may only record
+   * interest locally; it is not proof that the server is delivering changes.
+   * Hydration is best-effort: failure leaves the groups unmarked for retry and
+   * does not reject `enterScope`. Snapshot application uses version guards so
+   * older baseline rows cannot overwrite newer deltas already in the pool.
    */
   enterScope(scope: GroupScope, opts?: { hydrate?: boolean }): Promise<void> {
     const groups = this.scopeToGroups(scope);

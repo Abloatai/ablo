@@ -175,7 +175,7 @@ export const ablo = Ablo({
 
 Browser apps should use the React provider or a scoped session token, not a
 server API key in the bundle. Build the client first, then hand it to the
-provider — `AbloProvider` takes `{ client, userId?, onError?, fallback? }`, and
+provider — `AbloProvider` takes `{ client, onError?, fallback? }`, and
 nothing else (`schema`, `teamIds`, and `apiKey` all live on the
 client now).
 

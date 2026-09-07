@@ -1,5 +1,10 @@
 # @abloatai/transaction
 
+## 0.64.2
+
+This release aligns Transaction with the 0.64.2 package family. Runtime
+behavior and the public API are unchanged.
+
 ## 0.64.1
 
 Public Ablo registration now reaches the shared schema and metadata resolvers. Model presence queries can exclude the current session. Generic event subscriptions preserve their declared tuples; attributed handlers use `subscribeCollaboration` on transports or `collaboration.subscribe` on sessions. The missing-provider error code is `ablo_context_missing_provider`.

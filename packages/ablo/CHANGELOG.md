@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.64.2
+
+### More complete upgrade guidance
+
+`ablo upgrade` now identifies removed `SyncProvider` imports and the removed
+`AbloProvider` `userId` prop, including aliased imports. Its guidance points to
+the current provider and authenticated client session. React examples and
+identity documentation now use the supported props consistently.
+
+### Registration examples match the scaffold
+
+The quickstart now includes the empty type import from `@abloatai/ablo` that
+`ablo init` already generates. It loads the SDK declaration before augmenting
+`Register`, so applications copying the example retain the existing module's
+types. The groups guide also explains how shared context relates to membership
+and subscription changes.
+
+This patch introduces no new API changes.
+
 ## 0.64.1
 
 ### A schema that survives the journey into a package

@@ -2,7 +2,10 @@ import type { ClaimTarget } from '@abloatai/transaction/types/streams';
 import type { Schema } from '@abloatai/transaction/schema/schema';
 import { scopeKindOf, type ModelDef } from '@abloatai/transaction/schema/model';
 
-/** A schema-shaped selector used to narrow connection groups and presence reads. */
+/**
+ * Selects group interest using model records or explicit group names. Resolving
+ * a selector names a requested scope; the server still checks authority.
+ */
 export type GroupScope =
   | ClaimTarget
   | readonly ClaimTarget[]
