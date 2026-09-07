@@ -33,7 +33,7 @@ describe('usePresence', () => {
     const leaveScope = jest.spyOn(client._store, 'leaveScope').mockResolvedValue(undefined);
 
     const { result, rerender, unmount } = renderHook(
-      ({ id }: { id: string }) => usePresence(client.chats, id),
+      ({ id }: { id: string }) => usePresence(client.chats, id, { excludeSelf: true }),
       { initialProps: { id: 'chat-1' } },
     );
 
@@ -65,6 +65,13 @@ describe('usePresence', () => {
       });
     });
 
+    act(() => {
+      client._ws.emit('presence_session', { presenceSessionId: 'session-peer' });
+    });
+    expect(result.current).toEqual([]);
+    act(() => {
+      client._ws.emit('presence_session', { presenceSessionId: 'own-session' });
+    });
     expect(result.current).toHaveLength(1);
     expect(result.current[0]?.participant.id).toBe('user-peer');
 

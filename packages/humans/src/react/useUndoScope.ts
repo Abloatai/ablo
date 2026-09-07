@@ -7,8 +7,8 @@ import {
   type UndoScope,
   type UndoScopeOptions,
 } from '../local/mutators/UndoManager.js';
-import type { ResolveSchema } from '@abloatai/transaction/types/global';
-import { useSyncContext } from './context.js';
+import type { ResolveSchema, RequireRegisteredSchema } from '@abloatai/transaction/types/global';
+import { useAbloStoreContext } from './context.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
 
 /**
@@ -30,7 +30,7 @@ import { AbloValidationError } from '@abloatai/transaction/errors';
  */
 
 // Module-level weak registry: `SyncStoreContract` → `UndoManager`.
-// A single app wiring through one SyncProvider shares one manager across
+// A single AbloProvider shares one manager across
 // every useUndoScope call, so scopes with the same name are identity-equal.
 // The hook implementation already operates on the runtime-wide `Schema` type;
 // its overloads restore the caller's precise schema type at the public boundary,
@@ -59,7 +59,7 @@ export function useUndoScope<S extends Schema>(
 
 /** Per-surface undo/redo via the `Register` module augmentation. */
 export function useUndoScope(
-  name: string,
+  name: RequireRegisteredSchema<string>,
   options?: UndoScopeOptions,
 ): useUndoScope.Result<ResolveSchema extends Schema ? ResolveSchema : Schema>;
 
@@ -68,7 +68,7 @@ export function useUndoScope(
   nameOrOptions?: string | UndoScopeOptions,
   maybeOptions?: UndoScopeOptions,
 ): useUndoScope.Result<Schema> {
-  const { store, organizationId, schema: ctxSchema } = useSyncContext();
+  const { store, organizationId, schema: ctxSchema } = useAbloStoreContext();
 
   const isExplicit = typeof schemaOrName !== 'string';
   const schema = isExplicit ? (schemaOrName) : ctxSchema;
@@ -85,7 +85,7 @@ export function useUndoScope(
   }
 
   const scope = useMemo(() => {
-    // Store is the identity for the manager — one per SyncProvider.
+    // Store is the identity for the manager — one per AbloProvider.
     const manager = getManager(store, () => new UndoManager(schema, store, organizationId));
     return manager.getScope(name, options);
     // eslint-disable-next-line react-hooks/exhaustive-deps

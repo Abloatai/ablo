@@ -3,6 +3,12 @@
 exports[`error-code wire contract snapshot the (category, surface, httpStatus, retryable) contract is frozen 1`] = `
 {
   "codes": {
+    "ablo_context_missing_provider": {
+      "category": "client",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
+    },
     "agent_perception_missing_context": {
       "category": "validation",
       "httpStatus": 422,
@@ -1636,12 +1642,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "client",
     },
     "sync_client_db_missing": {
-      "category": "client",
-      "httpStatus": null,
-      "retryable": false,
-      "surface": "client",
-    },
-    "sync_context_missing_provider": {
       "category": "client",
       "httpStatus": null,
       "retryable": false,

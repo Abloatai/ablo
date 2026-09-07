@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.64.1
+
+The React read and write boundaries are now explicit: `useAbloClient()` returns the writable client and `useAblo(selector)` returns render snapshots. The zero-argument `useAblo()` overload is removed. `ablo upgrade` reports migration hints; see [Upgrade Guide](./docs/migration.md).
+
+Public schema registration reaches Transaction and Humans across emitted package declarations. Ambient mutators without a registered schema now report a schema diagnostic; prefer explicit-schema overloads. Internal package dependencies are exact, and CLI/SDK compatibility is checked as one release family.
+
+`usePresence(..., { excludeSelf: true })` and `presence.forModel(model, id, { excludeSelf: true })` omit the current session. `useMutationFailure` owns React subscription cleanup. Custom framework adapters use `getAbloStore(client)` from `/client`. Generic collaboration subscriptions preserve their declared event tuples; attributed handlers use `collaboration.subscribe` (or transport `subscribeCollaboration`).
+
+`AbloProvider` is now the sole provider vocabulary. Advanced framework adapters use `useAbloStoreContext` and `AbloStoreContextValue`; the missing-provider error code is `ablo_context_missing_provider`.
+
 ## 0.64.0
 
 React reads the same core objects as ordinary Ablo code. Read connection state with `ablo.status` outside React and `useAblo(ablo => ablo.status)` inside React; its type is `Ablo.Status`. Presence reads through `useAblo(ablo => ablo.presence.others)` or `ablo.presence.forModel(model, id)` now react to activity changes. The unregistered-schema selector also preserves core properties and methods.

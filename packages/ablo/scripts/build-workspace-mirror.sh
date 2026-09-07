@@ -62,6 +62,8 @@ copy_tree() {
 for package_name in "${PACKAGES[@]}"; do
   copy_tree "packages/$package_name" "packages/$package_name"
 done
+mkdir -p "$OUTPUT_DIR/.changeset"
+cp "$MONOREPO_ROOT/.changeset/config.json" "$OUTPUT_DIR/.changeset/config.json"
 copy_tree "docs/ablo" "docs/ablo"
 copy_tree "examples/account-multiplayer" "examples/account-multiplayer"
 

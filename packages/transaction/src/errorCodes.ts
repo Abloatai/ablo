@@ -1384,7 +1384,7 @@ export const ERROR_CODES = {
   ),
   no_ablo_provider: client('client', 'An Ablo hook was used outside of an Ablo provider.'),
   no_sync_group_provider: client('client', 'A sync-group hook was used outside of its provider.'),
-  sync_context_missing_provider: client('client', 'Sync context was read outside of its provider.'),
+  ablo_context_missing_provider: client('client', 'Ablo context was read outside of its provider.'),
   db_not_opened: client('client', 'The local database was accessed before it was opened.'),
   db_secure_hash_unavailable: client(
     'client',

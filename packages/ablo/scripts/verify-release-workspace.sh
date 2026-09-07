@@ -29,6 +29,7 @@ npm pack --dry-run \
 npm run pack:check --workspace=@abloatai/transaction
 npm run pack:check --workspace=@abloatai/humans
 npm run pack:check --workspace=@abloatai/ablo
+npm run verify:package-contract --workspace=@abloatai/ablo
 
 echo ">>> verify 7/8: package metadata"
 npx publint --strict packages/transaction

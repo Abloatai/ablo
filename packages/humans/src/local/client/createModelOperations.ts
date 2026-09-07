@@ -143,7 +143,7 @@ import type {
   HttpModelClient,
 } from '@abloatai/transaction/transport/http';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
-import type { PresenceSession } from '@abloatai/transaction/presence';
+import type { PresenceSession, PresenceQueryOptions } from '@abloatai/transaction/presence';
 import type {
   CollaborationEventContext,
   ModelEventEnvelope,
@@ -165,7 +165,7 @@ export interface ModelClientMeta {
   readonly key: string;
   readonly typename: string;
   readonly presence?: {
-    get(recordId: string): readonly PresenceSession[];
+    get(recordId: string, options?: PresenceQueryOptions): readonly PresenceSession[];
     subscribe(listener: () => void): () => void;
     read(recordId: string): () => void;
   };
@@ -192,7 +192,7 @@ type EntityHalf = Pick<ModelTarget, 'model' | 'id'>;
 // while reading as though they differed.
 export interface ModelCollaboration {
   /** Session projections already held by this client's one presence store. */
-  presence(model: string, recordId?: string): readonly PresenceSession[];
+  presence(model: string, recordId?: string, options?: PresenceQueryOptions): readonly PresenceSession[];
   /** Subscribe once to the connection-owned presence projection. */
   onPresenceChange(listener: () => void): () => void;
   /** Start one session-owned read activity and return its cleanup. */
@@ -1784,7 +1784,7 @@ export function createModelOperations<T, C>(
     ...(collaboration
       ? {
           presence: {
-            get: (recordId: string) => collaboration.presence(registeredModelName, recordId),
+            get: (recordId, options) => collaboration.presence(registeredModelName, recordId, options),
             subscribe: (listener: () => void) => collaboration.onPresenceChange(listener),
             read: (recordId: string) => {
               const scope = { [schemaKey]: recordId };

@@ -1,0 +1,5 @@
+import { defineMutators } from '@abloatai/ablo/client';
+import { useMutators, useUndoScope } from '@abloatai/ablo/react';
+defineMutators({});
+useMutators({});
+useUndoScope('editor');

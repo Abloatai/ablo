@@ -4,6 +4,8 @@ export {
   AbloProvider,
   createAbloReact,
   useAblo,
+  useAbloClient,
+  useMutationFailure,
   usePresence,
   useMutators,
   useUndoScope,

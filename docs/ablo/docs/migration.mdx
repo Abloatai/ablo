@@ -6,7 +6,100 @@ sidebar:
 ---
 
 Ablo is pre-1.0, so a minor release may contain a breaking API change. Patch
-releases remain compatible within the same minor line.
+releases normally remain compatible within the same minor line. The 0.64.1
+release includes the explicit React and collaboration migrations below.
+
+## React and package boundaries after 0.64
+
+Run `npx ablo upgrade` for migration hints before editing. It previews changes;
+`--write` applies only mechanical rewrites. React changes requiring application
+judgment are reported with their replacements.
+
+| Previous API | Current API |
+| --- | --- |
+| `useSync()` or zero-argument `useAblo()` | `useAbloClient()` for actions; await `client.ready()` when initialization is required |
+| `useSyncStatus()` | `useAblo(client => client.status)` |
+| `usePeers()` | `useAblo(client => client.presence.others)` |
+| Scoped peers | `usePresence(client => client.records, id, { excludeSelf: true })` |
+| `useMutationFailureListener(listener)` | `useMutationFailure(listener)` |
+| `useErrorListener()` | `AbloProvider`'s `onError` prop for startup errors |
+| `useCurrentUserId()` | Your application's authentication context |
+| `useSDKSyncStore()` / `useSyncStore()` | Public client operations; `getAbloStore(client)` from `/client` for custom local-store adapters |
+| `ClientSideSuspense` / `DefaultFallback` | Application UI through the provider's `fallback` prop |
+| `GroupScope` for presence | Model and record arguments |
+
+`useAblo(selector)` returns detached snapshots for rendering. They have no model
+methods or relation accessors. `useAbloClient()` returns the writable client and
+does not subscribe to row changes. Do not perform writes inside a selector.
+
+### Presence, activities and claims
+
+`Activity` is replaced by `Ablo.PresenceActivity`, including for agents. A session
+is `Ablo.PresenceSession`: identify the execution with `presenceSessionId` and its
+actor with `participant.id` and `participant.kind`. A participant can have several
+sessions, so exclude self by session rather than user ID.
+
+`presence.active` contains this session's activities; `presence.others` contains
+other sessions, each with an `activities` array. `forModel(model, id)` includes
+self by default; pass `{ excludeSelf: true }` as its third argument to omit self.
+The same option on `usePresence` still announces the component's reading activity
+and cleans it up on unmount.
+
+An activity has `operation`, `target`, `source`, and ISO timestamp fields.
+Read the model and row from `activity.target.model` and `.id`; field-specific
+activity uses `.field` or `.fields` (never both, and always with a row ID).
+Activities describe visible work; they do not grant write authority.
+
+Claims are acquired through `await using claim = await client.records.claim({ id })`.
+The protected row is `claim.data`; pass `claim` to the write. Claim lookup uses
+`client.records.claim.state({ id })` and `.queue({ id })`. Claim metadata is on
+`claim.target.meta`, and a multi-field claim uses `fields` in the claim target.
+Do not reconstruct a claim handle from a presence activity. See [Claims](/claims).
+
+### Imports and schema ownership
+
+The root factory creates a headless client; `/client` creates the reactive client.
+Import the `Ablo` type namespace beside the factory you use. Both expose the
+shared schema, presence-activity and claim types. Reactive-only types such as
+`Ablo.Status`, `Ablo.Reads`, `Ablo.Store`, and `Ablo.Mutator` belong to `/client`
+(or `/react` for its re-exported reactive factory).
+
+Prefer explicit schema inference:
+
+```ts
+import { defineMutators } from '@abloatai/ablo/client';
+import { useMutators, useUndoScope } from '@abloatai/ablo/react';
+import { schema } from './schema';
+
+const definitions = defineMutators(schema, {
+  records: {
+    rename: async ({ tx, args }: {
+      tx: import('@abloatai/ablo/client').Ablo.Mutator.Transaction<typeof schema>;
+      args: { id: string; title: string };
+    }) => tx.mutations.records.update({ id: args.id, title: args.title }),
+  },
+});
+
+function useRecordActions() {
+  const { scope } = useUndoScope(schema, 'record-editor');
+  return useMutators(schema, definitions, { undoScope: scope });
+}
+```
+
+Ambient registration remains available for a single application. Its module must
+be included in that TypeScript program and import `@abloatai/ablo` before
+augmenting `Register`. The public registration now reaches the downstream
+Transaction and Humans resolvers through the emitted declarations. A package
+compiled independently cannot inherit a consuming app's ambient declaration.
+
+### Structural collaboration adapters
+
+Generic `subscribe(event, handler)` preserves exactly the argument tuples in your
+event map. Receive optional server attribution through the session's
+`collaboration.subscribe(event, (payload, context) => ...)`; low-level transport
+adapters use `subscribeCollaboration`. Model-scoped `client.records.events.on`
+continues to supply authenticated context as its second callback argument.
+Legacy servers may omit context on application events; handle `undefined` there.
 
 ## Upgrade safely
 
@@ -17,7 +110,7 @@ releases remain compatible within the same minor line.
 5. Run the three-state deployment plan, then push the exact reviewed plan.
 
 ```bash
-npm install @abloatai/ablo@0.48
+npm install --save-exact @abloatai/ablo@<version> @abloatai/cli@<version>
 npx ablo docs
 npx ablo docs api
 npx ablo plan

@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.64.0",
+  "version": "0.64.1",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -149,7 +149,8 @@
     "build:docs": "node scripts/build-blume-docs.mjs",
     "lint:docs-site": "node scripts/build-blume-docs.mjs --check",
     "lint:docs": "node scripts/check-doc-drift.mjs",
-    "lint:pkg": "publint"
+    "lint:pkg": "publint",
+    "verify:package-contract": "node scripts/package-contract/index.mjs"
   },
   "publishConfig": {
     "access": "public",
@@ -162,8 +163,8 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.64.0",
-    "@abloatai/transaction": "^0.64.0",
+    "@abloatai/humans": "0.64.1",
+    "@abloatai/transaction": "0.64.1",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

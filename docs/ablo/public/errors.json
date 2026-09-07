@@ -10,6 +10,14 @@
   ],
   "codes": [
     {
+      "code": "ablo_context_missing_provider",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Ablo context was read outside of its provider.",
+      "docUrl": "https://docs.abloatai.com/errors#ablo_context_missing_provider"
+    },
+    {
       "code": "agent_perception_missing_context",
       "category": "validation",
       "surface": "wire",
@@ -2401,14 +2409,6 @@
       "retryable": false,
       "message": "The sync client has no database handle.",
       "docUrl": "https://docs.abloatai.com/errors#sync_client_db_missing"
-    },
-    {
-      "code": "sync_context_missing_provider",
-      "category": "client",
-      "surface": "client",
-      "retryable": false,
-      "message": "Sync context was read outside of its provider.",
-      "docUrl": "https://docs.abloatai.com/errors#sync_context_missing_provider"
     },
     {
       "code": "sync_not_ready",

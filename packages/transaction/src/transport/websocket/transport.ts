@@ -269,17 +269,13 @@ export type DefaultCollaborationEvents = Record<string, never>;
  */
 export type EventMap<T> = { [K in keyof T]: unknown[] };
 
-type CollaborationEventMap<T extends EventMap<T>> = {
-  [K in keyof T]: [...T[K], context?: CollaborationEventContext];
-};
-
 /**
  * Full event map = core + collaboration events.
  * Pass your own TCollaboration to add app-specific events.
  */
 export type SyncWebSocketEventMap<
   TCollaboration extends EventMap<TCollaboration> = DefaultCollaborationEvents
-> = CoreSyncEventMap & CollaborationEventMap<TCollaboration>;
+> = CoreSyncEventMap & TCollaboration;
 
 // ---------------------------------------------------------------------------
 // Consumers pass their own event types as the TCollaboration generic parameter.
@@ -297,6 +293,15 @@ export class WsTransport<
   ): () => void {
     this.on(event as string, handler as (...args: unknown[]) => void);
     return () => this.off(event as string, handler as (...args: unknown[]) => void);
+  }
+
+  /** Subscribe to application events with optional authenticated attribution. */
+  subscribeCollaboration<K extends string & keyof TCollaboration>(
+    event: K,
+    handler: (...args: [...TCollaboration[K], context?: CollaborationEventContext]) => void,
+  ): () => void {
+    this.on(event, handler);
+    return () => { this.off(event, handler); };
   }
 
   /**

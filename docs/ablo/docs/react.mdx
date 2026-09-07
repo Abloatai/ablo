@@ -16,7 +16,7 @@ agents, start with [Integration Guide](/integration-guide).
 The React bindings ship with the main package — no extra install.
 
 ```ts
-import { useAblo } from '@abloatai/ablo/react';
+import { useAblo, useAbloClient } from '@abloatai/ablo/react';
 ```
 
 React uses the same objects and operations as core Ablo. Read `ablo.status`
@@ -24,11 +24,12 @@ with `useAblo(ablo => ablo.status)`, select `ablo.presence.others` for other
 sessions, and call ordinary model methods from event handlers. React owns the
 subscription or component lifetime; the client owns the behavior.
 
-For mutation failures, subscribe to the core event in an effect:
+For mutation failures, let the hook own the subscription:
 
 ```tsx
-const ablo = useAblo();
-useEffect(() => ablo?.onMutationFailure(reportFailure), [ablo, reportFailure]);
+import { useMutationFailure } from '@abloatai/ablo/react';
+
+useMutationFailure(reportFailure);
 ```
 
 `reportFailure` receives `Ablo.MutationFailure`. Read application identity from
@@ -88,12 +89,12 @@ export const ablo = Ablo({
 });
 
 // The typed binding: capture the schema once, and every component imports
-// born-typed hooks from this file — `useAblo()` takes no type arguments,
+// born-typed hooks from this file — `useAbloClient()` takes no type arguments,
 // and a selector's `ablo` parameter knows your models.
-export const { AbloProvider, useAblo, usePresence } = createAbloReact(schema);
+export const { AbloProvider, useAblo, useAbloClient, usePresence, useMutationFailure } = createAbloReact(schema);
 ```
 
-Import `AbloProvider`, `useAblo`, and `usePresence` from `lib/ablo` rather than from the
+Import `AbloProvider`, `useAbloClient`, `useAblo`, and `usePresence` from `lib/ablo` rather than from the
 package, and the schema generic never appears at a call site again — the
 same one-binding-file convention as tRPC's `createTRPCReact` or
 react-redux's typed hooks.
@@ -255,7 +256,7 @@ Use the zero-argument form only when you need the full client for callbacks,
 effects, or writes:
 
 ```tsx
-const abloClient = useAblo();
+const abloClient = useAbloClient();
 ```
 
 Prefer selector reads like `useAblo((ablo) => ablo.<model>.local.get(id))`. Older hooks
@@ -305,7 +306,7 @@ For client event handlers, get the application-owned client and call the same
 model client:
 
 ```tsx
-const ablo = useAblo();
+const ablo = useAbloClient();
 
 async function markReady() {
   if (!ablo) return;
@@ -379,7 +380,7 @@ signals. The model and record choose the authorized sync group; the payload
 does not need routing fields or caller-authored identity.
 
 ```tsx
-const ablo = useAblo();
+const ablo = useAbloClient();
 
 useEffect(() => {
   if (!ablo) return;
@@ -434,3 +435,46 @@ its returned cleanup function.
 
 The Next.js [App Router landing](/examples/nextjs) walks through Server Components
 + Server Actions + `useAblo` together.
+
+## Separate packages and monorepos
+
+Put the schema in an application-owned package, with a public export for its
+value and type. Put the React binding in a client module which imports that
+schema, and export its inferred declarations. Components import their hooks from
+that binding package. Build the schema package before its dependents and test the
+emitted declarations without workspace source aliases.
+
+```ts
+'use client';
+import { createAbloReact } from '@abloatai/ablo/react';
+import { schema } from '@app/schema';
+
+export const { AbloProvider, useAbloClient, useAblo, usePresence, useMutationFailure } =
+  createAbloReact(schema);
+```
+
+Use one binding per schema, and mount its hooks under a provider for that schema.
+The binding specializes types; it does not create an isolated runtime context or
+validate that a different binding's provider has the same schema. Keep React and
+the Ablo package family deduplicated across packages. Reusable libraries should
+accept a schema or typed binding rather than declare an application-global schema.
+An app's ambient registration cannot retroactively change a separately compiled
+library. Use `defineMutators(schema, definitions)`, `useMutators(schema, definitions)`
+and `useUndoScope(schema, name)` across those boundaries.
+
+## Mutation failures and scoped collaborators
+
+```tsx
+const peers = usePresence(client => client.records, id, { excludeSelf: true });
+useMutationFailure(({ error }) => showToast(error.message));
+```
+
+`useMutationFailure` uses the latest committed callback, moves its subscription
+when the provider client changes, and unsubscribes on unmount. For non-React
+callers, `client.onMutationFailure` returns the cleanup function.
+
+For a custom framework adapter, `getAbloStore(client)` from
+`@abloatai/ablo/client` returns the supported `Ablo.Store` contract: local pool
+access, mutation observation, and scope management. Ordinary writes, confirmation,
+reconnection and model events already have public client methods; they do not
+require a store adapter.

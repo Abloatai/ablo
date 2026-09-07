@@ -287,7 +287,7 @@ In React, selector `useAblo` is the public read API:
 ```tsx
 'use client';
 
-import { useAblo } from '@abloatai/ablo/react';
+import { useAblo, useAbloClient } from '@abloatai/ablo/react';
 
 export function ReportRow({
   report: serverReport,
@@ -301,10 +301,10 @@ export function ReportRow({
 }
 ```
 
-Use zero-argument `useAblo()` only in callbacks and effects:
+Call `useAbloClient()` during render, then use its client in callbacks and effects:
 
 ```tsx
-const ablo = useAblo();
+const ablo = useAbloClient();
 ```
 
 ## 4. Write State

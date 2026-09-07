@@ -72,6 +72,7 @@ export namespace Ablo {
   export type ClaimTarget = _Streams.ClaimTarget;
   export type PresenceTarget = _Streams.PresenceTarget;
   export type Duration = _Streams.Duration;
+  export type Presence = import('../presence/store.js').PresenceView;
   export type PresenceSession = import('../presence/contract.js').PresenceSession;
   export type PresenceActivity = import('../presence/contract.js').PresenceActivity;
 
@@ -105,6 +106,8 @@ export namespace Ablo {
    * `interface Register { ClaimMeta }` (falls back to a loose record when
    * unregistered). Every claim surface reads `target.meta` as this.
    */
+  export type RegisteredSchema = _Global.ResolveSchema extends _SchemaTypes.Schema
+    ? _Global.ResolveSchema : _SchemaTypes.Schema;
   export type ResolveClaimMeta = _Global.ResolveClaimMeta;
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Schema {

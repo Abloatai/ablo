@@ -267,6 +267,7 @@ export namespace Ablo {
   /** Payload delivered by the core client's onMutationFailure subscription. */
   export type MutationFailure = Parameters<Parameters<AbloClient<SchemaRecord>['onMutationFailure']>[0]>[0];
   /** Current client lifecycle, also selected through React's useAblo. */
+  export type Store = import('./local/storeContract.js').SyncStoreContract;
   export type Status = import('./local/client/status.js').ClientStatus;
 
   // ── Factory options ────────────────────────────────────────────────
@@ -320,6 +321,7 @@ export namespace Ablo {
    * different schemas.
    */
   export type ResolveSchema = _Global.ResolveSchema;
+  export type ResolveClaimMeta = _Global.ResolveClaimMeta;
   /**
    * `ResolveSchema` guaranteed to satisfy the `Schema` bound. `ResolveSchema`
    * falls back to a loose `{ models }` shape when nothing is registered, which

@@ -1,3 +1,4 @@
+import type { CollaborationEventContext } from '../../collaboration/contract.js';
 import type { CommitReceiptWire } from '../../commit/contract.js';
 import type { ReadDependency } from '../../coordination/schema.js';
 import type {
@@ -64,6 +65,10 @@ export interface WebSocketPresence {
 }
 
 export interface WebSocketCollaboration<TEvents extends EventMap<TEvents>> {
+  subscribe<K extends string & keyof TEvents>(
+    event: K,
+    listener: (...args: [...TEvents[K], context?: CollaborationEventContext]) => void,
+  ): () => void;
   send<K extends string & keyof TEvents>(
     event: K,
     payload: TEvents[K] extends [infer P]

@@ -1,47 +1,23 @@
 'use client';
 
-/**
- * Capture schema inference once while reusing module-level React functions.
- * This helper creates no components, hooks, contexts or client instances.
- *
- * Define the app binding at module scope:
- * `export const { AbloProvider, useAblo, usePresence } = createAbloReact(schema)`.
- */
-
 import type { ReactElement } from 'react';
+import { useAbloClient } from './useAbloClient.js';
+import { useMutationFailure } from './useMutationFailure.js';
 import { AbloProvider } from './AbloProvider.js';
-import {
-  useAblo,
-  type AbloSelector,
-  type ModelClientSelector,
-} from './useAblo.js';
+import { useAblo } from './useAblo.js';
 import type { AbloClient as Ablo } from '../client.js';
-import type { ModelOperations } from '../local/client/createModelOperations.js';
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
-import { usePresence, type PresenceModelSelector } from './usePresence.js';
-import type { PresenceSession } from '@abloatai/transaction/presence';
+import { usePresence } from './usePresence.js';
 
-/** What a binding returns: the provider and the hook, with `S` fixed. */
+/** Shared provider and hooks specialized to one schema. */
 export interface AbloReactBinding<S extends SchemaRecord> {
-  /** `AbloProvider` with its `client` prop typed `Ablo<S>` — same component,
-   *  no per-app generics. */
   AbloProvider: (props: AbloProvider.Props<S>) => ReactElement;
-  /** `useAblo` with the schema bound — the same overloads as the global
-   *  hook, minus the type arguments. */
-  useAblo: {
-    (): Ablo<S> | null;
-    <T>(select: AbloSelector<S, T>): T | undefined;
-    <T, C>(
-      modelClientOrSelect: ModelOperations<T, C> | ModelClientSelector<S, T, C>,
-      id: string,
-      options?: useAblo.Options<T>,
-    ): useAblo.Result<T>;
-  };
+  useAblo: useAblo.Bound<S>;
+  /** Writable client for actions; useAblo(selector) supplies render snapshots. */
+  useAbloClient: () => Ablo<S> | null;
+  useMutationFailure: typeof useMutationFailure;
   /** Declare and reactively read record presence with the same model clients. */
-  usePresence: <T, C>(
-    modelOrSelect: ModelOperations<T, C> | PresenceModelSelector<S, T, C>,
-    recordId: string,
-  ) => readonly PresenceSession[];
+  usePresence: usePresence.Bound<S>;
 }
 
 /** Bind the existing React functions to one schema's types. */
@@ -50,10 +26,6 @@ export function createAbloReact<S extends SchemaRecord>(
 ): AbloReactBinding<S> {
   void schema;
 
-  // TypeScript cannot partially specialize the generic overloads, so this
-  // assertion binds their schema parameter. Positive and negative consumer
-  // type tests verify the specialization; no runtime value changes.
-  // Specialize types only. Every binding uses the same module-level functions,
-  // so calling this helper again cannot change component identity or reset state.
-  return { AbloProvider, useAblo, usePresence } as AbloReactBinding<S>;
+  // Specialize the shared functions without creating new contexts or identities.
+  return { AbloProvider, useAblo, useAbloClient, useMutationFailure, usePresence } as AbloReactBinding<S>;
 }

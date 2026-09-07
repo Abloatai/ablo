@@ -1,32 +1,6 @@
-/**
- * `ablo upgrade` — a codemod that migrates a project's code to the current
- * (0.9.x) API, so an integration written against an older version is rewritten
- * rather than left broken.
- *
- * Safe by default: it previews the changes (a dry run). Pass `--write` to apply
- * them.
- *
- * Mechanical, high-confidence rewrites it applies automatically:
- *   - positional model verbs → a single options object:
- *       update(id, data, opts?) → update({ id, data, ...opts })
- *       create(data, opts?)     → create({ data, ...opts })
- *       delete(id, opts?)       → delete({ id, ...opts })
- *       retrieve(id, opts?)     → get({ id, ...opts })
- *   - load()  → get({ id }) (when filtering by id) / list({ where })
- *   - withSync(X) → observer(X)  (withSync was an alias of observer)
- *
- * Structural changes it flags for manual review instead of rewriting:
- *   - drizzleDataSource(db, tables) → (db, schema)
- *   - <AbloProvider schema|teamIds|authEndpoint=...>  → build a client, pass client={ablo}
- *   - ablo.claims.* → ablo.<model>.claim.*
- *   - callback claim(id, async (row) => …) → `await using claim = await …claim({ id })`
- *
- * Usage:
- *   npx ablo upgrade                 # preview (dry run), default globs
- *   npx ablo upgrade --write         # apply
- *   npx ablo upgrade "app/**" "src/**" # custom path(s) / globs
- */
+/** Preview migration edits and diagnostics; --write applies mechanical edits. */
 
+import { reactMigrationHints } from './react.js';
 import pc from 'picocolors';
 import { Project, Node, SyntaxKind } from 'ts-morph';
 import type { CallExpression, ObjectLiteralExpression, SourceFile } from 'ts-morph';
@@ -63,8 +37,7 @@ function clientRoots(sf: SourceFile): Set<string> {
     const init = decl.getInitializer();
     if (!init) continue;
     const text = init.getText();
-    // const x = Ablo({...})  |  const x = useAblo()  (zero-arg client, not a selector)
-    if (/^Ablo\s*\(/.test(text) || /^useAblo\s*\(\s*\)/.test(text)) {
+    if (/^Ablo\s*\(/.test(text) || /^useAbloClient\s*\(\s*\)/.test(text)) {
       roots.add(decl.getName());
     }
   }
@@ -164,6 +137,10 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
       // `split('\n')` always yields at least one element — `?? ''` only satisfies the checker.
       manual.push({ file, line: node.getStartLineNumber(), rule, snippet: (node.getText().split('\n')[0] ?? '').slice(0, 120), hint });
     };
+
+    for (const { node, hint } of reactMigrationHints(sf)) {
+      flag(node, 'react-api', hint);
+    }
 
     // ── withSync → observer ──────────────────────────────────────────────
     for (const imp of sf.getImportDeclarations()) {

@@ -11,7 +11,7 @@ import {
 } from 'react';
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
 import type { AbloClient as Ablo } from '../client.js';
-import { SyncContext, type SyncStoreContract } from './context.js';
+import { AbloStoreContext, type SyncStoreContract } from './context.js';
 import { AbloInternalContext, type AbloInternalContextValue } from './internalContext.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
 import { useAblo } from './useAblo.js';
@@ -100,7 +100,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   //      onSessionExpired. Credential cleanup lives in the CLIENT, so direct
   //      consumers and React consumers have the same security boundary.
   //   2. Drive `ready()` (idempotent) so bootstrap starts on mount, then read the
-  //      resolved org scope for SyncContext.
+  //      resolved org scope for the Ablo store context.
   // It does NOT dispose the client (consumer-owned) and does NOT touch auth.
   useEffect(() => {
     let stale = false;
@@ -158,12 +158,12 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
     return () => { window.removeEventListener('beforeunload', handler); };
   }, [engine, preventUnsavedChanges]);
 
-  // ── SyncContext value (for useQuery/useOne/useMutate hooks) ──────
+  // ── Store context value (for Ablo data hooks) ────────────────────
   //
   // The engine is always present (it's the `client` prop), but its org scope is
-  // unknown until `ready()` resolves identity — so `syncValue` is null until
+  // unknown until `ready()` resolves identity — so the store context is null until
   // then, which drives the initial fallback below.
-  const syncValue = useMemo(() => {
+  const storeContextValue = useMemo(() => {
     const currentAccountScope =
       (resolvedScope?.engine === engine ? resolvedScope.account : null) ??
       (engine._store as SyncStoreContract & { orgId?: string }).orgId;
@@ -189,15 +189,15 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
 
   return (
     <AbloInternalContext.Provider value={internalValue}>
-      <SyncContext.Provider value={syncValue}>
+      <AbloStoreContext.Provider value={storeContextValue}>
         {passthrough ? (
           children
-        ) : syncValue ? (
+        ) : storeContextValue ? (
           <BootstrapGate key={engineKey} fallback={fallback}>
             {children}
           </BootstrapGate>
         ) : fallback}
-      </SyncContext.Provider>
+      </AbloStoreContext.Provider>
     </AbloInternalContext.Provider>
   );
 }

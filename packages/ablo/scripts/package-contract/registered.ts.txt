@@ -1,0 +1,32 @@
+import type { Ablo as Headless } from '@abloatai/ablo';
+import type { Ablo as Reactive } from '@abloatai/ablo/client';
+import { defineMutators } from '@abloatai/ablo/client';
+import { useAblo, useAbloClient, useMutators } from '@abloatai/ablo/react';
+import type { ResolveSchema, ResolveClaimMeta, ResolveUserMeta } from '@abloatai/transaction/types/global';
+import { schema } from '@fixture/schema';
+
+declare module '@abloatai/ablo' {
+  interface Register {
+    Schema: typeof schema;
+    ClaimMeta: { section: string };
+    UserMeta: { id: string; email: string };
+  }
+}
+const row = useAblo(client => client.notes.local.get('note'));
+row?.title satisfies string | undefined;
+useAbloClient()?.notes.update({ id: 'note', data: { title: 'new' } });
+// @ts-expect-error Model names must not fall back to string.
+const invalid: keyof ResolveSchema['models'] = 'missing';
+declare const meta: ResolveClaimMeta;
+meta.section satisfies string;
+declare const user: ResolveUserMeta;
+user.email satisfies string;
+declare const headless: Headless.RegisteredSchema;
+const reactive: Reactive.RegisteredSchema = headless;
+const definitions = defineMutators({ notes: {
+  rename: async ({ tx, args }: { tx: Reactive.Mutator.Transaction<typeof schema>; args: string }) =>
+    tx.mutations.notes.update({ id: 'note', title: args }),
+} });
+useMutators(definitions).notes.rename('new');
+// @ts-expect-error Argument inference survives registration.
+useMutators(definitions).notes.rename(12);

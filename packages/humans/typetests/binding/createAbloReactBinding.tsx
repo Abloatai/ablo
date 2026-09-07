@@ -11,7 +11,7 @@ type Models = (typeof schema)['models'];
 type Row = Ablo.Schema.InferRow<typeof schema, 'items'>;
 
 export function TypeProbe() {
-  const client = binding.useAblo();
+  const client = binding.useAbloClient();
   client satisfies Ablo<Models> | null;
   // @ts-expect-error A bound client must not invent another model.
   client?.users.local.get('user-1');

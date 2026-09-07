@@ -1611,6 +1611,12 @@ Uploads are not configured on this deployment: the upload storage bucket and CDN
 
 Local SDK usage errors — never sent over the network. No HTTP status.
 
+### ablo_context_missing_provider
+
+`client-only` · not sent over the network
+
+Ablo context was read outside of its provider.
+
 ### db_cleanup_failed
 
 `client-only` · not sent over the network
@@ -1832,12 +1838,6 @@ Store.query named a model the store does not know.
 `client-only` · not sent over the network
 
 The sync client has no database handle.
-
-### sync_context_missing_provider
-
-`client-only` · not sent over the network
-
-Sync context was read outside of its provider.
 
 ### transaction_mutate_unknown_model
 

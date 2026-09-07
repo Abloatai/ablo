@@ -4,6 +4,7 @@ import {
   type PresenceProjection,
   type PresenceProjectionEvents,
   type PresenceView,
+  type PresenceQueryOptions,
 } from '@abloatai/transaction/presence';
 import type { PresenceTarget } from '@abloatai/transaction/presence';
 import {
@@ -16,7 +17,7 @@ type PresenceTransport = PresenceProjectionEvents & ReadActivityTransport;
 
 /** Reactive-client presence backed by the client's existing live connection. */
 export interface ReactivePresence extends PresenceView {
-  forModel(model: string, recordId?: string): ReturnType<PresenceProjection['forModel']>;
+  forModel(model: string, recordId?: string, options?: PresenceQueryOptions): ReturnType<PresenceProjection['forModel']>;
   onChange(listener: () => void): () => void;
 }
 
@@ -87,9 +88,9 @@ export function createPresence(
         lifetime.stop();
       };
     },
-    forModel(model, recordId) {
+    forModel(model, recordId, options) {
       version.get();
-      return projection?.forModel(model, recordId) ?? [];
+      return projection?.forModel(model, recordId, options) ?? [];
     },
     dispose() {
       for (const read of reads) read.dispose();

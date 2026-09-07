@@ -74,5 +74,6 @@ export {
 export type {
   PresenceProjection,
   PresenceProjectionEvents,
+  PresenceQueryOptions,
   PresenceView,
 } from './store.js';

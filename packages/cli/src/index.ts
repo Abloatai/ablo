@@ -30,7 +30,7 @@ import { check } from './check';
 import { claims } from './claims';
 import { docs } from './docs';
 import { feedback } from './feedback';
-import { upgrade } from './upgrade';
+import { upgrade } from './upgrade/index';
 import { pull } from './pull';
 import { prismaPull } from './prismaPull';
 import { drizzlePull } from './drizzlePull';

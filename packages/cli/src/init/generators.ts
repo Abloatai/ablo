@@ -63,7 +63,8 @@ export type Sync = typeof sync;
 }
 
 export function generateRegister(): string {
-  return `import type { schema } from './schema';
+  return `import type {} from '@abloatai/ablo';
+import type { schema } from './schema';
 
 declare module '@abloatai/ablo' {
   interface Register {
@@ -324,13 +325,13 @@ main().catch((err) => {
 export function generateComponent(): string {
   return `'use client';
 
-import { useAblo } from '@abloatai/ablo/react';
+import { useAblo, useAbloClient } from '@abloatai/ablo/react';
 import { useState } from 'react';
 
 // Browser component. It reads + writes through the Ablo client in context
 // (mounted by app/providers.tsx) — it never imports the server \`sk_\` client.
 export function RecordList() {
-  const ablo = useAblo(); // typed client for writes (null until the provider is ready)
+  const ablo = useAbloClient();
   const records = useAblo((a) => a.records.local.list({ where: { status: 'todo' }, orderBy: { priority: 'desc' } })) ?? [];
   const [title, setTitle] = useState('');
 

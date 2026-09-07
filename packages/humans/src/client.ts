@@ -256,7 +256,7 @@ interface AbloCore<S extends SchemaRecord> {
 
   /**
    * The internal store. It implements {@link SyncStoreContract} — pass it to
-   * `SyncContext.Provider` so the SDK's `useModel` / `useModels` / `useMutations`
+   * `AbloStoreContext.Provider` so the SDK's React data hooks
    * hooks can reach it.
    */
   readonly _store: SyncStoreContract;

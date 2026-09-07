@@ -1,5 +1,11 @@
 # @abloatai/humans
 
+## 0.64.1
+
+React now separates writable `useAbloClient()` access from snapshot-only `useAblo(...)` reads. Replace zero-argument `useAblo()` calls with `useAbloClient()`. Schema-bound hooks emit portable declarations across packages. Add scoped `excludeSelf` presence filtering, `useMutationFailure` lifecycle handling, and `getAbloStore` for custom framework adapters.
+
+Ambient mutators require a registered schema; prefer explicit-schema overloads. Advanced provider adapters use `useAbloStoreContext` and `AbloStoreContextValue`. See the upgrade guide bundled with `@abloatai/ablo`.
+
 ## 0.64.0
 
 ### Minor Changes

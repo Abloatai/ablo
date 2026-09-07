@@ -22,10 +22,15 @@ export interface PresenceView {
   readonly others: readonly PresenceSession[];
 }
 
+export interface PresenceQueryOptions {
+  /** Exclude the current session, retaining other sessions of the same participant. */
+  readonly excludeSelf?: boolean;
+}
+
 /** One connection-owned projection shared by session and model presence. */
 export interface PresenceProjection extends PresenceView {
   readonly sessions: readonly PresenceSession[];
-  forModel(model: string, recordId?: string): readonly PresenceSession[];
+  forModel(model: string, recordId?: string, options?: PresenceQueryOptions): readonly PresenceSession[];
   subscribe(listener: () => void): () => void;
   dispose(): void;
 }
@@ -109,10 +114,11 @@ export function createPresenceProjection(events: PresenceProjectionEvents): Pres
     get sessions() {
       return sessionSnapshot;
     },
-    forModel(model, recordId) {
+    forModel(model, recordId, options) {
+      const sessions = options?.excludeSelf ? othersSnapshot : sessionSnapshot;
       return recordId === undefined
-        ? presenceForModel(sessionSnapshot, model)
-        : presenceForRecord(sessionSnapshot, model, recordId);
+        ? presenceForModel(sessions, model)
+        : presenceForRecord(sessions, model, recordId);
     },
     subscribe(listener) {
       listeners.add(listener);

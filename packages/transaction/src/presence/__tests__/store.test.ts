@@ -48,6 +48,12 @@ describe('presence projection store', () => {
     expect(projection.active.map(({ id }) => id)).toEqual(['self-read']);
     expect(projection.others.map(({ presenceSessionId }) => presenceSessionId)).toEqual(['other-tab']);
     expect(projection.forModel('documents')).toHaveLength(2);
+    expect(projection.forModel('documents', 'doc-1', { excludeSelf: true }).map(session => session.presenceSessionId)).toEqual(['other-tab']);
+    expect(projection.forModel('documents', undefined, { excludeSelf: true })[0]?.activities).toHaveLength(1);
+    expect(projection.forModel('documents', 'another-record', { excludeSelf: true })).toEqual([]);
+    source.emit('presence_session', { presenceSessionId: 'other-tab' });
+    expect(projection.forModel('documents', 'doc-1', { excludeSelf: true }).map(session => session.presenceSessionId)).toEqual(['self-session']);
+
     expect(projection.forModel('documents', 'doc-1')[1]?.activities).toHaveLength(1);
   });
 

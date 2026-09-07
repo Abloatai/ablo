@@ -115,11 +115,11 @@ the agent can never reach a workspace its triggering user couldn't.
 
 ## 3. Write: it fans out to everyone on that workspace
 
-Inside any component under the provider, grab the scoped client with `useAblo()`
+Inside any component under the provider, grab the scoped client with `useAbloClient()`
 and write. The connection is already narrowed to `workspace:<workspaceId>` from Step 2.
 
 ```ts
-const ablo = useAblo();
+const ablo = useAbloClient();
 
 // Other participants subscribed to workspace:<workspaceId> — a reviewer agent, a
 // person watching in the UI — receive this delta in realtime. Participants on

@@ -9,8 +9,8 @@ import type {
 import { createTransaction } from '../local/mutators/Transaction.js';
 import { createRecordingMutation } from '../local/mutators/RecordingMutation.js';
 import type { UndoScope } from '../local/mutators/UndoManager.js';
-import type { ResolveSchema } from '@abloatai/transaction/types/global';
-import { useSyncContext } from './context.js';
+import type { ResolveSchema, RequireRegisteredSchema } from '@abloatai/transaction/types/global';
+import { useAbloStoreContext } from './context.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
 import { getContext } from '../local/context.js';
 
@@ -58,12 +58,12 @@ export function useMutators<S extends Schema, M extends MutatorDefs<S>>(
 ): useMutators.Result<M>;
 
 /** Mutator invokers via the `Register` module augmentation. Schema comes
- * from the `SyncProvider`'s context; the mutator tree is typed against
+ * from the `AbloProvider` store context; the mutator tree is typed against
  * `ResolveSchema` at the call site. */
 export function useMutators<
   M extends ResolveSchema extends Schema ? MutatorDefs<ResolveSchema> : MutatorDefs<Schema>,
 >(
-  mutators: M,
+  mutators: RequireRegisteredSchema<M>,
   options?: useMutators.Options<ResolveSchema extends Schema ? ResolveSchema : Schema>,
 ): useMutators.Result<M>;
 
@@ -72,7 +72,7 @@ export function useMutators(
   mutatorsOrOptions?: MutatorDefs<Schema> | useMutators.Options<Schema>,
   maybeOptions?: useMutators.Options<Schema>,
 ): useMutators.Result<MutatorDefs<Schema>> {
-  const { store, organizationId, schema: ctxSchema } = useSyncContext();
+  const { store, organizationId, schema: ctxSchema } = useAbloStoreContext();
 
   // Disambiguate: explicit-schema path has the schema object in first slot;
   // the global-resolved path has the mutator tree there. A schema object
@@ -92,7 +92,7 @@ export function useMutators(
     throw new AbloValidationError(
       'useMutators: no schema available. Pass the schema as the first arg, ' +
         'or build the <AbloProvider> above with `Ablo({ schema })` so the ' +
-        'zero-arg overload can read it from context.',
+        'schema-free overload can read it from context.',
       { code: 'mutators_schema_missing' },
     );
   }

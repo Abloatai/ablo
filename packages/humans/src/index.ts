@@ -39,3 +39,5 @@ export {
 export type {
   CommitLatencySample,
 } from './local/transactions/mutations/commitLatency.js';
+
+export { getAbloStore } from './local/storeAccess.js';

@@ -9,15 +9,9 @@ import {
 } from '../local/client/createModelOperations.js';
 import type { AbloClient as Ablo } from '../client.js';
 import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
-import type { ResolveSchema } from '@abloatai/transaction/types/global';
-import { useAbloClient } from './useAblo.js';
+import type { ResolveModels as DefaultModels } from '@abloatai/transaction/types/global';
+import { useAbloClient } from './useAbloClient.js';
 import { useReactive } from './useReactive.js';
-
-type DefaultModels = ResolveSchema extends { models: infer M }
-  ? M extends SchemaRecord
-    ? M
-    : SchemaRecord
-  : SchemaRecord;
 
 export type PresenceModelSelector<R extends SchemaRecord, T, C> =
   (ablo: Ablo<R>) => ModelOperations<T, C>;
@@ -30,6 +24,7 @@ export type PresenceModelSelector<R extends SchemaRecord, T, C> =
 export function usePresence<T, C>(
   modelClient: ModelOperations<T, C>,
   recordId: string,
+  options?: usePresence.Options,
 ): readonly PresenceSession[];
 export function usePresence<
   R extends SchemaRecord = DefaultModels,
@@ -38,6 +33,7 @@ export function usePresence<
 >(
   select: PresenceModelSelector<R, T, C>,
   recordId: string,
+  options?: usePresence.Options,
 ): readonly PresenceSession[];
 export function usePresence<
   R extends SchemaRecord = DefaultModels,
@@ -46,17 +42,9 @@ export function usePresence<
 >(
   modelOrSelect: ModelOperations<T, C> | PresenceModelSelector<R, T, C>,
   recordId: string,
+  options?: usePresence.Options,
 ): readonly PresenceSession[] {
   const engine = useAbloClient<R>();
-  return usePresenceImpl(engine, modelOrSelect, recordId);
-}
-
-/** @internal Shared by the global hook and schema-bound React factory. */
-export function usePresenceImpl<R extends SchemaRecord, T, C>(
-  engine: Ablo<R> | null,
-  modelOrSelect: ModelOperations<T, C> | PresenceModelSelector<R, T, C>,
-  recordId: string,
-): readonly PresenceSession[] {
   if (recordId.length === 0) {
     throw new AbloValidationError(
       'usePresence requires a non-empty record id.',
@@ -77,7 +65,19 @@ export function usePresenceImpl<R extends SchemaRecord, T, C>(
   }
 
   const subscribe = useCallback((notify: () => void) => presence?.subscribe(notify) ?? (() => undefined), [presence]);
-  const sessions = useReactive(() => presence?.get(recordId) ?? [], { subscribe });
+  const sessions = useReactive(() => presence?.get(recordId, options) ?? [], { subscribe });
   useEffect(() => presence?.read(recordId), [presence, recordId]);
   return sessions;
+}
+
+export namespace usePresence {
+  export interface Bound<S extends SchemaRecord> {
+    <T, C>(
+      model: ModelOperations<T, C> | PresenceModelSelector<S, T, C>,
+      recordId: string,
+      options?: Options,
+    ): readonly PresenceSession[];
+  }
+
+  export type Options = import('@abloatai/transaction/presence').PresenceQueryOptions;
 }

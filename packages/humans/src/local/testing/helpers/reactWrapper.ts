@@ -1,13 +1,13 @@
 /**
  * React testing helpers for this package. They wire the package's
- * `SyncProvider` into `@testing-library/react` so you can test components
+ * the internal Ablo store context into `@testing-library/react` so you can test components
  * and hooks built on `useModel`, `useModels`, and `useMutations` against a
  * mock store, with no live server.
  */
 
 import * as React from 'react';
 
-import { SyncProvider, type SyncStoreContract } from '../../../react/context.js';
+import { AbloStoreContext, type SyncStoreContract } from '../../../react/context.js';
 import { MockSyncStore, createMockSyncStore } from '../mocks/MockSyncStore.js';
 
 export interface TestWrapperOptions {
@@ -19,7 +19,7 @@ export interface TestWrapperOptions {
 
 /**
  * Builds a wrapper component for `@testing-library/react`'s `renderHook`
- * and `render`. It wraps the children in the package's `SyncProvider`,
+ * and `render`. It supplies the same store scope as `AbloProvider`,
  * backed by a mock store, so the hooks and components under test can read
  * from it. Pass your own store to seed specific data, or let one be created.
  *
@@ -42,14 +42,18 @@ export function createReactTestWrapper(
   const organizationId = options.organizationId ?? 'test-org-id';
 
   const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
-    React.createElement(SyncProvider, { store, organizationId }, children);
+    React.createElement(
+      AbloStoreContext.Provider,
+      { value: { store, organizationId } },
+      children,
+    );
 
   return Wrapper;
 }
 
 /**
  * A drop-in replacement for `@testing-library/react`'s `renderHook` that
- * wraps the hook in the package's `SyncProvider` and a mock store for you,
+ * supplies the package's Ablo store context and a mock store for you,
  * so you don't build the wrapper by hand.
  *
  * `@testing-library/react` is loaded lazily, so workspaces that don't use

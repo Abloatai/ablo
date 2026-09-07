@@ -1,0 +1,34 @@
+import { defineMutators, getAbloStore } from '@abloatai/ablo/client';
+import type { Ablo } from '@abloatai/ablo/client';
+import { useMutators, useUndoScope } from '@abloatai/ablo/react';
+import { useAblo, useAbloClient, usePresence } from '@fixture/binding';
+import { schema } from '@fixture/schema';
+
+const client = useAbloClient();
+client?.notes.update({ id: 'note', data: { title: 'new' } });
+if (client) getAbloStore(client) satisfies Ablo.Store;
+useAblo(client => client.notes.local.get('note'))?.title satisfies string | undefined;
+usePresence(client => client.notes, 'note', { excludeSelf: true });
+// @ts-expect-error Snapshot reads require a selector or model and id.
+useAblo();
+// @ts-expect-error Standalone binding declarations preserve schema keys.
+useAbloClient()?.missing;
+const definitions = defineMutators(schema, { notes: {
+  rename: async ({ tx, args }: { tx: Ablo.Mutator.Transaction<typeof schema>; args: string }) =>
+    tx.mutations.notes.update({ id: 'note', title: args }),
+} });
+const { scope } = useUndoScope(schema, 'editor');
+useMutators(schema, definitions, { undoScope: scope }).notes.rename('new');
+// @ts-expect-error Explicit schema preserves argument inference.
+useMutators(schema, definitions).notes.rename(12);
+
+import type { WsTransport } from '@abloatai/transaction/transport';
+type Events = { cursor: [payload: { x: number }] };
+declare const transport: WsTransport<Events>;
+const adapter: {
+  subscribe<K extends keyof Events>(event: K, listener: (...args: Events[K]) => void): () => void;
+} = transport;
+transport.subscribeCollaboration('cursor', (payload, context) => {
+  payload.x satisfies number;
+  context?.sender.participant.id satisfies string | undefined;
+});

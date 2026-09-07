@@ -2,6 +2,8 @@
 export { AbloProvider } from './react/AbloProvider.js';
 export { createAbloReact } from './react/createAbloReact.js';
 export { useAblo } from './react/useAblo.js';
+export { useAbloClient } from './react/useAbloClient.js';
+export { useMutationFailure } from './react/useMutationFailure.js';
 export { usePresence } from './react/usePresence.js';
 export { useMutators } from './react/useMutators.js';
 export { useUndoScope } from './react/useUndoScope.js';

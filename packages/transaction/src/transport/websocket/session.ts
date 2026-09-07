@@ -175,6 +175,7 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     };
     this.collaboration = {
       send: (event, payload) => this.socket.sendCollaborationEvent(event, payload),
+      subscribe: (event, listener) => this.socket.subscribeCollaboration(event, listener),
     } as WebSocketCollaboration<TEvents>;
     this.socket.subscribe('session_error', (error) => {
       this.handleSessionError(error);

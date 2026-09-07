@@ -576,7 +576,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       modelRegistry,
       hydration,
       {
-        presence: (model, recordId) => presenceStream.forModel(model, recordId),
+        presence: (model, recordId, options) => presenceStream.forModel(model, recordId, options),
         onPresenceChange: (listener) => presenceStream.onChange(listener),
         startReadPresence: (target) => presenceStream.startRead(target),
         modelEventTarget: (recordId) => {
@@ -857,11 +857,11 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 
     // ── Internal accessors for framework integration ─────────────────
     // These expose internal components for consumers that need direct
-    // access (e.g., SyncEngineProvider wiring SyncContext, collaboration
+    // access (e.g., AbloProvider wiring its store context, collaboration
     // events accessing the WebSocket handle, demand loaders accessing
     // the pool). Prefixed with _ to signal "internal but stable."
 
-    /** The BaseSyncedStore — implements SyncStoreContract for SyncContext.Provider. */
+    /** The BaseSyncedStore — implements SyncStoreContract for AbloStoreContext.Provider. */
     get _store() { return store; },
 
     /** The InstanceCache — for demand loaders that need pool.createFromData(). */
