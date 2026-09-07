@@ -2,13 +2,54 @@
 
 ## 0.64.1
 
-The React read and write boundaries are now explicit: `useAbloClient()` returns the writable client and `useAblo(selector)` returns render snapshots. The zero-argument `useAblo()` overload is removed. `ablo upgrade` reports migration hints; see [Upgrade Guide](./docs/migration.md).
+### A schema that survives the journey into a package
 
-Public schema registration reaches Transaction and Humans across emitted package declarations. Ambient mutators without a registered schema now report a schema diagnostic; prefer explicit-schema overloads. Internal package dependencies are exact, and CLI/SDK compatibility is checked as one release family.
+Sharing a schema through a compiled package could leave an application facing
+pages of empty-object and unknown-type errors. The schema was present, but its
+registration no longer reached the parts of Ablo that needed it. Registration
+now carries through the published declarations into Transaction and Humans.
+When it is missing, schema-free mutators report what the application needs to
+supply.
 
-`usePresence(..., { excludeSelf: true })` and `presence.forModel(model, id, { excludeSelf: true })` omit the current session. `useMutationFailure` owns React subscription cleanup. Custom framework adapters use `getAbloStore(client)` from `/client`. Generic collaboration subscriptions preserve their declared event tuples; attributed handlers use `collaboration.subscribe` (or transport `subscribeCollaboration`).
+Passing the schema explicitly is the recommended approach for mutators. The
+integration guide also explains how to share a schema and React bindings across
+packages, so a monorepo's source imports and its consumers' compiled imports
+agree about the same application.
 
-`AbloProvider` is now the sole provider vocabulary. Advanced framework adapters use `useAbloStoreContext` and `AbloStoreContextValue`; the missing-provider error code is `ablo_context_missing_provider`.
+### React makes the difference between reading and writing visible
+
+A component reading a snapshot and an event handler issuing a write now ask for
+different things. `useAblo(selector)` returns the render snapshot;
+`useAbloClient()` returns the client used for operations. The zero-argument
+`useAblo()` call is removed, making that choice visible at the call site.
+
+Mutation failures have a dedicated hook again. `useMutationFailure` manages the
+subscription and its cleanup, removing the effect each application otherwise
+had to maintain. Framework adapters can obtain the supported store contract
+through `getAbloStore(client)` from `@abloatai/ablo/client`.
+
+### Presence can leave the current session out
+
+A view of who else is working on a record can now request
+`{ excludeSelf: true }` through `usePresence` or `presence.forModel`. The filter
+removes the current session; another tab belonging to the same person remains
+visible. Applications no longer need to repeat that distinction themselves.
+
+Generic collaboration subscriptions also retain the event arguments declared
+by their adapters. Handlers that need authenticated sender context use
+`collaboration.subscribe` on the session or `subscribeCollaboration` on the
+transport.
+
+### One release, with an explicit upgrade path
+
+Ablo, Transaction, Humans and the CLI now declare exact compatibility
+requirements, keeping their versions together. Provider terminology is
+consistently `AbloProvider`, including the context used by framework adapters.
+
+Despite the patch number, 0.64.1 includes API removals. `ablo upgrade` reports
+migration hints, and the
+[upgrade guide](https://github.com/Abloatai/ablo/blob/v0.64.1/packages/ablo/docs/migration.md)
+covers the hook replacements, provider context, presence fields and claims.
 
 ## 0.64.0
 
