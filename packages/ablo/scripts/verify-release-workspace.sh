@@ -16,6 +16,7 @@ npm run typecheck:react --workspace=@abloatai/humans
 
 echo ">>> verify 4/8: tests"
 npm run test
+npm run test:browser-bundle --workspace=@abloatai/ablo
 
 echo ">>> verify 5/8: fresh-project quickstart"
 npm run test:quickstart --workspace=@abloatai/cli

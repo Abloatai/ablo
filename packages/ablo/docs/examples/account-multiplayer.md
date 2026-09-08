@@ -50,7 +50,8 @@ Your application authenticates the person and verifies membership on every
 mint. The subject rule authorizes rows; `groups` proves membership; `can`
 authorizes operations. Synchronization delivers the authorized data. A list
 filter helps select a view but does not establish any of these permissions.
-The provider's `userId` prop is informational, not an authentication mechanism.
+React reads application identity from your auth context; the provider accepts
+no `userId` prop.
 
 ## Browser reads and server writes share the scope
 

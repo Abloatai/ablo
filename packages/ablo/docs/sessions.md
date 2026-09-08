@@ -182,7 +182,7 @@ for the actor.
 |---|---|---|
 | `user` / `agent` | both | The actor. `id` becomes the token's `participantId`. Pass exactly one. |
 | `can` | both | Required non-empty per-model operation allowlist, typed off the schema. |
-| `organizationId` | user | Mint into a customer organization instead of the key's own. Requires `organization:act-as`. |
+| `organizationId` | user | Select another Ablo organization, not an application account. Requires `organization:act-as`; uses the target root branch. |
 | `schemaProject` | user | Override the schema project for a cross-org mint. Usually omitted because the owning key's project is the default. |
 | `groups` | both | Narrow the session below its default scope. Omit to inherit. |
 | `ttlSeconds` | both | Lifetime in seconds. Defaults to `900` (15m). |
@@ -273,34 +273,24 @@ Some apps need each customer to be its **own** tenant — a hard data boundary
 scoping. The law-firm shape (Legora): every firm is its own org, many users
 inside it.
 
-Choose the boundary before minting sessions:
+For customers sharing one application connection, declare a model `subject`
+rule and mint verified account `groups` with the ordinary application key. Keep
+its organization, project and branch. The [customer guide](./customer-organizations.md)
+owns the complete tenancy model, migration requirements and isolation checks.
 
-| Customer model | Isolation guarantee | Use when |
-|---|---|---|
-| One Ablo organization, customer scope roots | Every model's declared `policy` | Cross-customer access is intentional or every model explicitly partitions by the customer root |
-| One Ablo organization per customer | Structural organization filtering and RLS on every row | Customers must be isolated even when a model has no customer policy |
-
-Sync-group routing controls which changes are delivered; it does not grant or
-deny reads. Do not use scope roots as a tenant security boundary unless every
-model declares the matching policy. If that invariant is difficult to audit,
-use one organization per customer.
-
-For the complete key, backend-route, browser, lifecycle, and troubleshooting
-flow, see [Customer Organizations](./customer-organizations.md).
-
-The problem that creates: if each customer is a separate org, a naïve setup would
-make you re-push your schema into every new customer's org. You don't have to.
-Keep **one** project as the home of your schema. When its key mints into another
-organization, Ablo automatically resolves the session's *schema* from that key's
-project while its *data* stays in the customer's own org:
+Separate Ablo organizations are separate data planes. A cross-organization user
+session can reuse the issuer's schema artifact, but it uses the target
+organization's default project and root branch. It does not inherit the issuer's
+staging branch or database connection. Each target plane needs its own supported
+data-source setup.
 
 ```ts
-const ablo = Ablo({ schema, apiKey: process.env.ABLO_PLATFORM_KEY });
-const { token } = await sessions.create({
+const sessions = Sessions({ schema, apiKey: process.env.ABLO_PLATFORM_KEY! });
+const session = await sessions.create({
   user: { id: userId },
-  organizationId, // DATA → this customer's isolated org
+  organizationId, // A separate Ablo organization and data plane.
   can: { records: ['read', 'update'] },
-  ttlSeconds: 3600,
+  ttlSeconds: 300,
 });
 ```
 
@@ -322,10 +312,10 @@ your users in the key's own organization.
 
 ## Security
 
-The whole safety argument is the short TTL: a session token leaked from a
-browser (XSS) is valid for minutes, scoped to one actor's data, and can't mint
-anything or touch the control plane. Contrast `sk_`, which would be a full org
-compromise — which is exactly why it never leaves your server.
+Session authority combines the organization/project/branch boundary, model
+subject rules, verified groups, the `can` allowlist and expiry. A short TTL limits
+exposure; it does not create row isolation. Keep issuer secret keys on the
+server and verify membership whenever issuing or renewing customer sessions.
 
 ## User vs. agent sessions
 

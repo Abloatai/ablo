@@ -181,6 +181,12 @@ for the requested account on every mint; the URL itself grants no access.
 See the [account multiplayer walkthrough](./examples/account-multiplayer.md)
 for the complete ownership boundary and runnable component.
 
+Use `onError` to show a startup failure outside the bootstrap gate. After a
+transient failure, remount the provider with the same client to retry readiness;
+failed `ready()` attempts are retryable. After logout or an account change,
+create a fresh client instead. Strict Mode may create two client instances in
+development; each instance owns its own credential lifecycle.
+
 ## Render immediately with connection status
 
 `useAblo(ablo => ablo.status)` works during provider startup, in passthrough children and in

@@ -144,6 +144,7 @@ export const COMMANDS = [
       rows: [
         { run: 'migrate', does: 'Create the tables your schema needs in your own database' },
         { run: 'migrate --dry-run', does: 'Show the SQL without running it' },
+        { run: 'migrate --offline', does: 'Generate SQL without credentials or a database connection' },
       ],
     },
   },

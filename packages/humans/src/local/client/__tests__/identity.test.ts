@@ -12,6 +12,9 @@
  * while still exercising the dispatch logic.
  */
 
+import { Ablo } from '../../../Ablo.js';
+import { BaseSyncedStore } from '../../BaseSyncedStore.js';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { resolveParticipantIdentity } from '@abloatai/transaction/auth/identity';
 import { createAuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
 import type { BootstrapFetcher } from '../../sync/BootstrapFetcher.js';
@@ -433,5 +436,41 @@ describe('resolveParticipantIdentity — explicit self-hosted identity', () => {
 
     expect(result.userId).toBe('agent_42');
     expect(result.teamIds).toBeUndefined();
+  });
+});
+
+
+describe('reactive startup credential ownership', () => {
+  it('mints once across concurrent readiness calls, then refreshes through the original provider', async () => {
+    const provider = jest.fn().mockResolvedValueOnce('rk_cold').mockResolvedValue('rk_fresh');
+    mockResolveIdentity.mockResolvedValue({
+      participantKind: 'user', participantId: 'alice', accountScope: 'org_acme',
+      projectId: 'org_acme', branchId: 'br_test', branchRoot: false,
+      syncGroups: ['account:alpha'], userMeta: {},
+      authority: {
+        organizationId: 'org_acme', projectId: 'org_acme', branchId: 'br_test',
+        participantKind: 'user', participantId: 'alice', operations: [],
+        syncGroups: ['account:alpha'], deliveryPartition: null,
+      },
+    });
+    // Leave credential acquisition and identity real; stop at the transport boundary.
+    const initialize = jest.spyOn(BaseSyncedStore.prototype, 'initialize')
+      .mockImplementation(function* () { return { success: true }; });
+    const client = Ablo({ schema: defineSchema({}), persistence: 'memory',
+      apiKey: provider, baseURL: 'https://api.example.com', logger: noopLogger });
+    try {
+      await Promise.all([client.ready(), client.ready()]);
+      expect(provider).toHaveBeenCalledTimes(1);
+      expect(mockResolveIdentity).toHaveBeenCalledWith({
+        baseUrl: 'https://api.example.com/api', authToken: 'rk_cold',
+      });
+      expect(await client.getAuthToken()).toBe('rk_cold');
+      await client._store.performCredentialRefresh();
+      expect(provider).toHaveBeenCalledTimes(2);
+      expect(await client.getAuthToken()).toBe('rk_fresh');
+    } finally {
+      await client.dispose();
+      initialize.mockRestore();
+    }
   });
 });

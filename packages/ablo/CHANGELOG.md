@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.64.3
+
+### Existing connections make room for new tables
+
+`ablo connect apply --tables` now checks the requested tables even when an
+existing connection reports ready. It reconciles publication membership before
+returning, keeping existing credentials intact. If a snapshot needs recovery,
+the requested tables are reconciled before that recovery begins; a snapshot
+already in progress is left undisturbed.
+
+Generated PostgreSQL setup also includes the replica identity needed to retain
+old row values for updates and deletes. The companion sync-server changes track
+snapshot coverage against the active schema, so adding a model cannot inherit
+an older snapshot's readiness. Those server changes require a runtime rollout;
+upgrading the CLI alone does not deploy them.
+
+### One session mint at browser startup
+
+A cold reactive client now uses its first session credential to resolve identity,
+avoiding a second call to the application's session endpoint and its membership
+checks. Later refreshes still obtain a fresh credential. The React guide also
+clarifies application-owned disposal, account switching and startup retry.
+
+The browser packages now include their event emitter dependency. Applications
+can bundle the React entry with an ordinary browser bundler without supplying a
+Node `events` polyfill themselves.
+
+### A clearer boundary for customer accounts
+
+The customer-isolation guide now follows one application connection, explicit
+model subject rules and sessions minted from verified membership. It separates
+your application's account IDs from Ablo organization, project and branch scope,
+and explains what must change in writers, existing rows and database policies
+when adopting that model. Session and API-key guidance use the same distinction.
+
+### Prepare schema SQL without a connection
+
+`ablo migrate --offline` generates schema SQL without database credentials or an
+Ablo API key. It prints the SQL or writes it with `--output`, using the same
+planner as a connected migration. The output is explicitly unvalidated: applying
+a migration still requires the connected deployment checks, as do previews that
+omit `--offline`.
+
+This release introduces no breaking API changes. Ablo, Transaction, Humans and
+the CLI are published together at 0.64.3.
+
 ## 0.64.2
 
 ### More complete upgrade guidance

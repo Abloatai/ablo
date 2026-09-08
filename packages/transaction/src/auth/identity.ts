@@ -15,6 +15,7 @@
  * Each branch is a separate function below, so it can be read and tested on its own.
  */
 
+import { classifyCredentialKind } from './credentialKind.js';
 import { AbloAuthenticationError } from '../errors.js';
 import type { ParticipantKind } from '../types/participant.js';
 import { exchangeApiKey } from './runtime.js';
@@ -93,7 +94,11 @@ export async function resolveParticipantIdentity(
     logger,
   } = input;
 
-  const apiKeyValue = await resolveApiKeyValue(configuredApiKey);
+  // The reactive lifecycle may already have acquired the provider's credential
+  // before startup. Reuse it for identity; keep the provider for later refreshes.
+  const apiKeyValue = typeof configuredApiKey === 'function' && configuredAuthToken && classifyCredentialKind(configuredAuthToken)
+    ? configuredAuthToken
+    : await resolveApiKeyValue(configuredApiKey);
 
   // Resolve the http(s) base URL, coercing ws/wss to http/https even when
   // `bootstrapBaseUrl` is an explicit override (see auth.ts).

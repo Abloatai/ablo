@@ -1,5 +1,9 @@
-import { parseMigrateArgs, planFor } from '../migrate';
+import { migrate, parseMigrateArgs, planFor } from '../migrate';
 import { defineSchema, model, z } from '@abloatai/transaction/schema';
+import * as schemaLoader from '../push';
+import * as databaseConfig from '../dbRole';
+import * as credentialConfig from '../config';
+import * as deploymentPlan from '../plan/index';
 
 describe('parseMigrateArgs', () => {
   it('applies sensible defaults', () => {
@@ -79,5 +83,28 @@ describe('planFor — schema without an explicit tableName (the `ablo init` star
     const sql = plan.statements.join('\n');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS "public"."workspaces"');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS "public"."records"');
+  });
+});
+
+describe('offline migration SQL', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('prints the shared plan without reading credentials or connecting', async () => {
+    jest.spyOn(schemaLoader, 'loadSchema').mockResolvedValue(schema);
+    const database = jest.spyOn(databaseConfig, 'readProjectAdminDatabaseUrl');
+    const credentials = jest.spyOn(credentialConfig, 'resolveRuntimeApiKeyReadOnly');
+    const connectedPlan = jest.spyOn(deploymentPlan, 'createDeploymentPlan');
+    const output = jest.spyOn(console, 'log').mockImplementation(() => {});
+    await migrate(['--offline']);
+    expect(output).toHaveBeenCalledWith(expect.stringContaining(planFor(schema).statements.join('\n')));
+    expect(database).not.toHaveBeenCalled();
+    expect(credentials).not.toHaveBeenCalled();
+    expect(connectedPlan).not.toHaveBeenCalled();
+  });
+
+  it('keeps connected validation mandatory without --offline', async () => {
+    jest.spyOn(schemaLoader, 'loadSchema').mockResolvedValue(schema);
+    jest.spyOn(databaseConfig, 'readProjectAdminDatabaseUrl').mockReturnValue(null);
+    await expect(migrate([])).rejects.toMatchObject({ code: 'cli_database_url_missing' });
   });
 });

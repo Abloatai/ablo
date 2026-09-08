@@ -1,5 +1,17 @@
 # @abloatai/cli
 
+## 0.64.3
+
+`ablo connect apply --tables` reconciles newly requested tables on an existing
+connection before returning ready or recovering its snapshot. Existing
+credentials are preserved, and snapshots already in progress remain undisturbed.
+Generated PostgreSQL setup includes the replica identity needed for updates and
+deletes.
+
+`ablo migrate --offline` generates SQL without database or Ablo credentials.
+Applying a migration still requires connected validation. The CLI declares
+compatibility with the 0.64.3 package family.
+
 ## 0.64.2
 
 `ablo upgrade` now reports removed `SyncProvider` imports and `AbloProvider`

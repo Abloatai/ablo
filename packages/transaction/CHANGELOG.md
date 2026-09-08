@@ -1,5 +1,12 @@
 # @abloatai/transaction
 
+## 0.64.3
+
+Identity resolution now reuses a session credential already acquired during
+reactive startup, while retaining the original provider for later refreshes.
+The package declares its browser-compatible event emitter dependency, allowing
+ordinary browser bundlers to resolve the WebSocket transport.
+
 ## 0.64.2
 
 This release aligns Transaction with the 0.64.2 package family. Runtime

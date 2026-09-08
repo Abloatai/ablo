@@ -136,7 +136,7 @@ branch-bound runtime credential before starting application code.
 | `ablo branch list\|status\|check\|create\|ensure\|credential\|delete` | Manage and diagnose immutable branch planes and expiring credentials.                          | Run `ablo branch --help`; use `--json` for automation.                                                   |
 | `ablo logs`                        | Tail the resolved runtime credential's branch activity. Follows by default.                                                                          | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow` |
 | `ablo push`                        | **Hosted**: upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |
-| `ablo migrate`                     | **Direct Postgres**: provision just the synced models (plus the adapter's `ablo_outbox` / `ablo_idempotency`) in your own `DATABASE_URL`. Leaves your other tables alone.                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
+| `ablo migrate`                     | **Direct Postgres**: provision just the synced models (plus the adapter's `ablo_outbox` / `ablo_idempotency`) in your own `DATABASE_URL`. Leaves your other tables alone.                                                          | `--offline`, `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
 | `ablo pull`                        | **Direct Postgres**: generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`).                              | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force`                                     |
 | `ablo check`                       | **Direct Postgres**: verify your _existing_ tables fit the schema (read-only, no schema changes).                                                       | `--schema <path>`, `--export <name>`, `--app-schema <name>`                                            |
 | `ablo connect plan\|apply\|check\|rotate\|deregister` | **Direct Postgres**: register and maintain a database plane. Here `--schema` means the existing PostgreSQL namespace, never a TypeScript file. | `--url <postgres-url>`, `--schema <postgres-schema>`, `--env-file <path>`, `--yes` |
@@ -269,8 +269,15 @@ server applies the change and version-gates connecting clients.
 ```bash
 ablo migrate --dry-run            # preview the exact SQL
 ablo migrate                      # apply to DATABASE_URL
-ablo migrate --output schema.sql  # write SQL to a file
+ablo migrate --output schema.sql  # write SQL to a file after connected validation
+ablo migrate --offline --output schema.sql  # generate SQL without credentials
 ```
+
+`--offline` uses the same schema SQL generator without reading database or Ablo
+credentials. Omit `--output` to print SQL. This is schema generation, not a
+validated deployment plan: it cannot detect existing-data conflicts or drift.
+Run `ablo migrate` with credentials to validate and apply; `--dry-run` and
+`--output` without `--offline` retain connected validation.
 
 ### One database, two schemas
 

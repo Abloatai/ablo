@@ -201,6 +201,8 @@ export function connectSetupSql(input: {
     `ALTER SYSTEM SET wal_level = 'logical';`,
     // 2. Publish the tables Ablo should read.
     `CREATE PUBLICATION ${quoteIdent(publication)} ${publicationTarget};`,
+    // The consumer needs the old row for updates/deletes, including routing fields.
+    ...qualifiedTables.map((table) => `ALTER TABLE ${table} REPLICA IDENTITY FULL;`),
     // 3. A least-privilege role: it can stream replication and SELECT the
     // published tables, including the initial snapshot of RLS-protected tables.
     // Logical decoding already exposes every published row independently of

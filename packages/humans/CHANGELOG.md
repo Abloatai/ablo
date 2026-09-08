@@ -1,5 +1,12 @@
 # @abloatai/humans
 
+## 0.64.3
+
+Cold reactive clients mint one session before resolving identity; concurrent
+readiness calls share that startup, and later refreshes still obtain a fresh
+credential. The package includes its browser-compatible event emitter dependency
+and uses Transaction 0.64.3.
+
 ## 0.64.2
 
 This release aligns Humans with the 0.64.2 package family. Runtime behavior

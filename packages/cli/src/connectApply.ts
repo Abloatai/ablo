@@ -133,7 +133,9 @@ function emitReconcileStatus(status: ConnectReconcileStatus, json: boolean): voi
   }
   if (status.code === 'ready') {
     console.log(
-      `  ${pc.green('✓')} Already ready — database, credentials, and snapshot are unchanged.\n`
+      status.steps.database === 'changed'
+        ? `  ${pc.green('✓')} Database reconciled — credentials and snapshot are unchanged.\n`
+        : `  ${pc.green('✓')} Already ready — database, credentials, and snapshot are unchanged.\n`
     );
   } else if (status.code === 'loading') {
     console.log(
@@ -257,45 +259,66 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     planeState.kind === 'connected' &&
     planeState.connections.includes('direct');
   let existingNeedsSnapshot = false;
+  // Registered-schema readiness does not cover newly requested tables. Defer
+  // ready until their publication membership is checked; preserve loading below.
+  let readyStatus: ConnectReconcileStatus | null = null;
   if (existingRegistration) {
     const inspected = inspectRegisteredConnection(
       await requestRemoteValidation({ apiUrl, apiKey }),
     );
-    if (inspected.code === 'ready') {
-      emitReconcileStatus(inspected, args.json);
-      return;
-    }
     if (inspected.code === 'loading') {
+      // A snapshot is in progress. Never mutate a loading source — no
+      // publication change, no credential rotation, no snapshot restart.
+      // Return the current status regardless of --tables.
       emitReconcileStatus(inspected, args.json);
       return;
     }
-    if (!inspected.needsDatabaseReconcile && inspected.needsSnapshotRequest) {
-      const snapshot = await requestInitialSnapshot({ apiUrl, apiKey });
-      const resumed: ConnectReconcileStatus = {
-        ...inspected,
-        code:
-          snapshot.replication_slot?.released === false
-            ? 'operator_action_required'
-            : 'loading',
-        steps: {
-          ...inspected.steps,
-          snapshot: snapshot.replication_slot?.released === false ? 'action_required' : 'loading',
-          readiness: snapshot.replication_slot?.released === false ? 'action_required' : 'pending',
-        },
-        ...(snapshot.replication_slot?.released === false
-          ? { detail: snapshot.replication_slot.detail ?? 'replication_slot_active' }
-          : {}),
-      };
-      emitReconcileStatus(resumed, args.json);
-      return;
-    }
-    if (inspected.code === 'operator_action_required') {
+    if (inspected.code === 'ready') {
+      if (args.tables.length === 0) {
+        // No explicit table intent — original no-op. Return immediately
+        // without requiring an admin URL.
+        emitReconcileStatus(inspected, args.json);
+        return;
+      }
+      // Explicit --tables supplied: defer the return so pubReconcile can
+      // determine whether any tables are actually new. Requires adminUrl
+      // (checked below) to read the current publication state.
+      readyStatus = inspected;
+    } else if (!inspected.needsDatabaseReconcile && inspected.needsSnapshotRequest) {
+      if (args.tables.length === 0) {
+        // No explicit table intent — resume the interrupted snapshot as
+        // before, without requiring an admin URL.
+        const snapshot = await requestInitialSnapshot({ apiUrl, apiKey });
+        const resumed: ConnectReconcileStatus = {
+          ...inspected,
+          code:
+            snapshot.replication_slot?.released === false
+              ? 'operator_action_required'
+              : 'loading',
+          steps: {
+            ...inspected.steps,
+            snapshot: snapshot.replication_slot?.released === false ? 'action_required' : 'loading',
+            readiness: snapshot.replication_slot?.released === false ? 'action_required' : 'pending',
+          },
+          ...(snapshot.replication_slot?.released === false
+            ? { detail: snapshot.replication_slot.detail ?? 'replication_slot_active' }
+            : {}),
+        };
+        emitReconcileStatus(resumed, args.json);
+        return;
+      }
+      // Explicit --tables: reconcile the publication for newly requested
+      // tables first, then resume the snapshot at the end of the run via
+      // existingNeedsSnapshot. Requires adminUrl (checked below).
+      existingNeedsSnapshot = true;
+    } else if (inspected.code === 'operator_action_required') {
       throw new AbloConnectionError(
         `The registered source needs operator action before it can be reconciled (${inspected.detail ?? 'not ready'}).`,
         { code: 'cli_database_unreachable', details: { ...inspected } },
       );
+    } else {
+      existingNeedsSnapshot = inspected.needsSnapshotRequest;
     }
-    existingNeedsSnapshot = inspected.needsSnapshotRequest;
   }
 
   if (!adminUrl) {
@@ -583,6 +606,14 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     publication,
   });
 
+  // An unchanged publication preserves the healthy no-op. A changed table set
+  // continues through publication and grant reconciliation with existing credentials.
+  if (readyStatus !== null && pubReconcile.sql.length === 0) {
+    await admin.end({ timeout: 2 });
+    emitReconcileStatus(readyStatus, args.json);
+    return;
+  }
+
   // 1e. The last read before anything is written: are the scoped roles already
   // here? `apply` creates roles and keeps an existing one's password, so it has
   // no new password to give Ablo for a role it finds. See reapplyBlocker.
@@ -772,7 +803,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
       emitReconcileStatus(reconciled, args.json);
       return;
     }
-    emitReconcileStatus(after, args.json);
+    emitReconcileStatus({ ...after, steps: { ...after.steps, database: 'changed' } }, args.json);
     return;
   }
 

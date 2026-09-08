@@ -51,6 +51,7 @@ export const MIGRATE_USAGE = `  ablo migrate — create the tables your schema n
   Usage:
     npx ablo migrate                      Create the synced-model tables (with row-level security)
     npx ablo migrate --dry-run            Print the SQL without executing it
+    npx ablo migrate --offline            Generate SQL without credentials or connected validation
     npx ablo migrate --output schema.sql  Write the SQL to a file instead of applying
     npx ablo migrate --schema <path>      Use a schema file other than ablo/schema.ts
     npx ablo migrate --export <name>      Use a named export other than \`schema\``;
@@ -62,6 +63,7 @@ export interface MigrateArgs {
    *  the database, since the database itself is the tenant boundary. */
   targetSchema: string;
   dryRun: boolean;
+  offline: boolean;
   outputFile: string | null;
 }
 
@@ -75,6 +77,7 @@ export function parseMigrateArgs(argv: readonly string[]): MigrateArgs {
   let exportName = DEFAULT_EXPORT;
   let targetSchema = 'public';
   let dryRun = false;
+  let offline = false;
   let outputFile: string | null = null;
 
   for (let i = 0; i < argv.length; i++) {
@@ -82,6 +85,9 @@ export function parseMigrateArgs(argv: readonly string[]): MigrateArgs {
     switch (arg) {
       case '--dry-run':
         dryRun = true;
+        break;
+      case '--offline':
+        offline = true;
         break;
       case '--output':
         outputFile = argv[++i] ?? null;
@@ -99,7 +105,7 @@ export function parseMigrateArgs(argv: readonly string[]): MigrateArgs {
         throw new AbloValidationError(`unknown flag: ${arg}`, { code: 'cli_invalid_arguments' });
     }
   }
-  return { schemaPath, exportName, targetSchema, dryRun, outputFile };
+  return { schemaPath, exportName, targetSchema, dryRun, offline, outputFile };
 }
 
 /** Lowers a loaded schema to the SQL that creates its tables, using the same
@@ -265,6 +271,17 @@ export async function migrate(argv: readonly string[]): Promise<void> {
   const args = parseMigrateArgs(argv);
 
   const schema = await loadSchema(args.schemaPath, args.exportName);
+  const plan = planFor(schema, args.targetSchema);
+  const sql = [
+    ...plan.statements,
+    ...(plan.concurrent.length ? ['', '-- post-commit (run each OUTSIDE a transaction):', ...plan.concurrent] : []),
+  ].join('\n');
+  if (args.offline) {
+    const output = '-- Offline schema SQL; not validated against a database or active Ablo schema.\n' + sql + '\n';
+    if (args.outputFile) writeFileSync(args.outputFile, output);
+    else console.log(output);
+    return;
+  }
   const dbUrl = readProjectAdminDatabaseUrl();
   if (!dbUrl) {
     throw new AbloValidationError(
@@ -302,11 +319,6 @@ export async function migrate(argv: readonly string[]): Promise<void> {
       { code: 'incompatible_change' },
     );
   }
-  const plan = planFor(schema, args.targetSchema);
-  const sql = [
-    ...plan.statements,
-    ...(plan.concurrent.length ? ['', '-- post-commit (run each OUTSIDE a transaction):', ...plan.concurrent] : []),
-  ].join('\n');
   const totalStatements = plan.statements.length + plan.concurrent.length;
   console.log(
     `  ${pc.dim('Schema')} ${pc.bold(args.schemaPath)} → ${pc.dim(`${Object.keys(schema.models).length} models, ${totalStatements} statements`)}`,
