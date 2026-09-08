@@ -212,3 +212,24 @@ describe('BaseSyncedStore.forceFullRebootstrap — bootstrapMode guard', () => {
     expect(deps.database.markRequiresFullBootstrap).toHaveBeenCalledTimes(1);
   });
 });
+
+
+it('never restores persisted rows or pending writes after persistence validation fails', async () => {
+  const deps = makeDeps();
+  const store = makeStore(deps);
+  const error = new Error('Persistence authority mismatch');
+  deps.database.open.mockRejectedValue(error);
+  const gen = store.initialize({
+    userId: 'user', organizationId: 'org', branchId: 'branch',
+    syncGroups: ['account:b'], operations: ['items.read'],
+  });
+  const opening = gen.next();
+  await expect(opening.value).rejects.toBe(error);
+  expect(gen.throw(error)).toEqual({ done: true, value: { success: false, error } });
+  expect(deps.database.open).toHaveBeenCalledWith(expect.objectContaining({
+    syncGroups: ['account:b'], operations: ['items.read'],
+  }));
+  expect(deps.syncClient.initialize).not.toHaveBeenCalled();
+  expect(deps.syncClient.hydrateFromDatabase).not.toHaveBeenCalled();
+  expect(store.dataReady).toBe(false);
+});

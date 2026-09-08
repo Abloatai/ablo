@@ -1,8 +1,7 @@
 import { AbloConnectionError } from '@abloatai/transaction/errors';
 
 /**
- * The complete authenticated branch that owns one local replica. A branch id
- * is authoritative.
+ * The authenticated branch, groups and permissions that own one local replica.
  */
 export interface PersistenceIdentity {
   readonly participantId: string;
@@ -11,6 +10,8 @@ export interface PersistenceIdentity {
   readonly projectId: string | null;
   readonly branchId: string;
   readonly branchRoot: boolean;
+  readonly syncGroups?: readonly string[];
+  readonly operations?: readonly string[];
 }
 
 export interface PersistedIdentityMetadata {
@@ -21,9 +22,15 @@ export interface PersistedIdentityMetadata {
   readonly projectId?: string | null;
   readonly branchId?: string;
   readonly branchRoot?: boolean;
+  readonly syncGroups?: readonly string[];
+  readonly operations?: readonly string[];
 }
 
-export const PERSISTENCE_NAMESPACE_VERSION = 4;
+export const PERSISTENCE_NAMESPACE_VERSION = 5;
+
+function scopeKey(values: readonly string[] = []): string {
+  return JSON.stringify([...new Set(values)].sort());
+}
 
 function canonicalIdentity(
   identity: PersistenceIdentity,
@@ -36,6 +43,8 @@ function canonicalIdentity(
     identity.organizationId,
     identity.participantKind,
     identity.participantId,
+    scopeKey(identity.syncGroups),
+    scopeKey(identity.operations),
     userVersion,
   ]);
 }
@@ -76,6 +85,8 @@ export function persistenceIdentityMatches(
     info.participantKind === identity.participantKind &&
     (info.projectId ?? null) === identity.projectId &&
     info.branchId === identity.branchId &&
-    (info.branchRoot ?? false) === identity.branchRoot
+    (info.branchRoot ?? false) === identity.branchRoot &&
+    scopeKey(info.syncGroups) === scopeKey(identity.syncGroups) &&
+    scopeKey(info.operations) === scopeKey(identity.operations)
   );
 }

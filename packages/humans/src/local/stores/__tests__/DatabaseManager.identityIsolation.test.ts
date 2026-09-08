@@ -1,3 +1,8 @@
+import { Database } from '../../Database.js';
+import { Model } from '../../Model.js';
+import { ModelRegistry } from '../../ModelRegistry.js';
+import { BootstrapFetcher } from '../../sync/BootstrapFetcher.js';
+import { LoadStrategy } from '@abloatai/transaction/types';
 import {
   DatabaseManager,
   type DatabaseInfo,
@@ -32,8 +37,8 @@ describe('DatabaseManager authenticated-plane isolation', () => {
     const bb = await persistenceDatabaseName(identity('BB'));
 
     expect(aa).not.toBe(bb);
-    expect(aa).toMatch(/^ablo_v4_[0-9a-f]{64}$/);
-    expect(bb).toMatch(/^ablo_v4_[0-9a-f]{64}$/);
+    expect(aa).toMatch(/^ablo_v5_[0-9a-f]{64}$/);
+    expect(bb).toMatch(/^ablo_v5_[0-9a-f]{64}$/);
   });
 
   it('includes every authenticated branch axis in the namespace', async () => {
@@ -41,12 +46,24 @@ describe('DatabaseManager authenticated-plane isolation', () => {
     const names = await Promise.all([
       persistenceDatabaseName(base),
       persistenceDatabaseName({ ...base, participantKind: 'agent' }),
+      persistenceDatabaseName({ ...base, syncGroups: ['account:a'] }),
+      persistenceDatabaseName({ ...base, operations: ['records.read'] }),
       persistenceDatabaseName({ ...base, organizationId: 'other-org' }),
       persistenceDatabaseName({ ...base, projectId: 'other-project' }),
       persistenceDatabaseName({ ...base, branchId: 'br_feature', branchRoot: false }),
     ]);
 
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('canonicalizes group and operation sets without combining different authorities', async () => {
+    const base = identity('user', { syncGroups: ['a', 'b'], operations: ['read', 'write'] });
+    expect(await persistenceDatabaseName(base)).toBe(await persistenceDatabaseName({
+      ...base, syncGroups: ['b', 'a', 'a'], operations: ['write', 'read', 'read'],
+    }));
+    expect(await persistenceDatabaseName(base)).not.toBe(await persistenceDatabaseName({
+      ...base, operations: ['read'],
+    }));
   });
 
   it('refuses registry metadata owned by a different identity', async () => {
@@ -91,4 +108,46 @@ describe('DatabaseManager authenticated-plane isolation', () => {
     expect(await manager.getDatabaseInfo(second.name)).toEqual(second);
     await manager.close();
   });
+});
+
+class Item extends Model {
+  override getModelName() { return 'Item'; }
+}
+
+it('restores the same authority but never another account group or narrower permissions', async () => {
+  const registry = new ModelRegistry({ validateOnRegister: false });
+  registry.registerModel('Item', Item, { loadStrategy: LoadStrategy.instant });
+  const databases: Database[] = [];
+  const names = new Set<string>();
+  const open = async (scope: PersistenceIdentity) => {
+    const database = new Database(registry, new BootstrapFetcher({ baseUrl: 'https://api.example.com' }));
+    databases.push(database);
+    names.add(await persistenceDatabaseName(scope));
+    await database.open(scope);
+    return database;
+  };
+  const accountA = identity('user', { syncGroups: ['account:a'], operations: ['items.read', 'items.write'] });
+  try {
+    const first = await open(accountA);
+    await first.putRecord('Item', 'private', { id: 'private', title: 'Account A only' });
+    await first.close();
+    const warm = await open(accountA);
+    expect(await warm.hydrateModels('Item')).toEqual([{ id: 'private', title: 'Account A only' }]);
+    await warm.close();
+    for (const scope of [
+      { ...accountA, syncGroups: ['account:b'] },
+      { ...accountA, operations: ['items.read'] },
+    ]) {
+      const other = await open(scope);
+      expect(await other.hydrateModels('Item')).toEqual([]);
+      await other.close();
+    }
+    const widened = await open(accountA);
+    await widened.updateWorkspaceMetadata({ subscribedSyncGroups: ['account:a', 'account:b'] });
+    await widened.close();
+    await expect(open(accountA)).rejects.toMatchObject({ code: 'db_identity_mismatch' });
+  } finally {
+    await Promise.all(databases.map(database => database.close()));
+    await Promise.all([...names, 'ablo_databases'].map(name => deleteIDBWithTimeout(name)));
+  }
 });

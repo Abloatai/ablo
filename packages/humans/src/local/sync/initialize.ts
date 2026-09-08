@@ -42,6 +42,7 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
     if (host.initialized) return { success: true };
 
     host.userContext = context;
+    let persistenceReady = false;
 
     try {
       host.updateSyncStatus({ state: 'syncing', progress: 0 });
@@ -56,7 +57,11 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
         projectId: context.projectId ?? context.organizationId,
         branchId: context.branchId,
         branchRoot: context.branchRoot ?? false,
+        syncGroups: host.resolveSyncGroups(context),
+        operations: context.operations,
       });
+
+      persistenceReady = true;
 
       // Propagate identity only after storage is ready, then restore sealed
       // requests before accepting fresh mutations.
@@ -182,13 +187,13 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
       }
 
       // Fallback: show local data if available
-      if (host.objectPool.size === 0) {
+      if (persistenceReady && host.objectPool.size === 0) {
         try {
           yield host.syncClient.hydrateFromDatabase();
         } catch {}
       }
 
-      if (host.objectPool.size > 0) {
+      if (persistenceReady && host.objectPool.size > 0) {
         host.dataReady = true;
         host.initialized = true;
         host.updateSyncStatus(

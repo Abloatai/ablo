@@ -325,6 +325,7 @@ export function startStoreLifecycle<S extends SchemaRecord>(
           capabilityToken,
           syncGroups,
           deliveryPartition,
+          operations: resolved.authority.operations,
           bootstrapMode: resolvedBootstrapMode,
         });
         let current = gen.next();

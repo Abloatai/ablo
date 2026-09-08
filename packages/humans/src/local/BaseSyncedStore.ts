@@ -168,6 +168,8 @@ export interface UserContext {
    *  structure comes from schema-declared scopes and server-issued
    *  authorization. */
   syncGroups?: readonly string[];
+  /** Server-confirmed operation grants; also partition persisted replicas. */
+  operations?: readonly string[];
   /**
    * How aggressively this participant should pull baseline state at
    * startup.

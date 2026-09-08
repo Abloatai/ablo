@@ -100,19 +100,33 @@ verify_npm_versions() {
   local version="$1"
   local package_name
   local published
+  local download_dir
+  local downloaded
   for package_name in "${PUBLIC_PACKAGES[@]}"; do
     published=""
+    downloaded=false
+    download_dir="$(mktemp -d)"
     for attempt in 1 2 3 4 5 6; do
       published="$(npm view "$package_name@$version" version 2>/dev/null || true)"
-      [[ "$published" = "$version" ]] && break
-      echo "    $package_name=${published:-<missing>}, waiting for $version ($attempt/6)"
+      # Registry metadata can precede the tarball. A fresh cache forces the
+      # actual download; npm also checks the registry's integrity digest.
+      if [[ "$published" = "$version" ]] && npm pack "$package_name@$version" \
+        --ignore-scripts --prefer-online --cache "$download_dir/cache" \
+        --pack-destination "$download_dir" >"$download_dir/download.log" 2>&1; then
+        downloaded=true
+        break
+      fi
+      echo "    waiting for $package_name@$version metadata and tarball ($attempt/6)"
       sleep 5
     done
-    if [[ "$published" != "$version" ]]; then
-      echo "error: $package_name@$version was not visible on npm" >&2
+    if [[ "$downloaded" != true ]]; then
+      [[ ! -f "$download_dir/download.log" ]] || cat "$download_dir/download.log" >&2
+      rm -rf "$download_dir"
+      echo "error: $package_name@$version was not downloadable from npm" >&2
       exit 1
     fi
-    echo ">>> verified $package_name@$version"
+    rm -rf "$download_dir"
+    echo ">>> verified $package_name@$version metadata, tarball, and integrity"
   done
 }
 

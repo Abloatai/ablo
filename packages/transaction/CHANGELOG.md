@@ -1,5 +1,9 @@
 # @abloatai/transaction
 
+## 0.64.4
+
+This release aligns Transaction with the 0.64.4 package family.
+
 ## 0.64.3
 
 Identity resolution now reuses a session credential already acquired during

@@ -47,3 +47,4 @@ if grep -Eq 'NPM_TOKEN|NODE_AUTH_TOKEN' "$RELEASE_WORKFLOW"; then
 fi
 grep -q 'publishing/verify-trusted-publishers.sh' packages/ablo/scripts/release.sh
 bash packages/ablo/scripts/publishing/__tests__/verify-trusted-publishers.test.sh
+bash packages/ablo/scripts/publishing/__tests__/verify-downloads.test.sh

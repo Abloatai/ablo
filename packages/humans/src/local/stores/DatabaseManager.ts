@@ -33,6 +33,8 @@ export interface DatabaseInfo {
   projectId: string | null;
   branchId: string;
   branchRoot: boolean;
+  syncGroups?: readonly string[];
+  operations?: readonly string[];
   schemaHash: string;
   schemaVersion: number;
   userVersion?: number;
@@ -175,6 +177,8 @@ export class DatabaseManager {
       projectId: identity.projectId,
       branchId: identity.branchId,
       branchRoot: identity.branchRoot,
+      syncGroups: [...new Set(identity.syncGroups ?? [])].sort(),
+      operations: [...new Set(identity.operations ?? [])].sort(),
       schemaHash,
       schemaVersion,
       userVersion,

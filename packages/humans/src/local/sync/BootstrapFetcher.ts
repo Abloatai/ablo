@@ -406,8 +406,8 @@ export class BootstrapFetcher {
    * Update the offline-cache namespace once auth has resolved the server-side
    * account scope. This is intentionally not a public organizationId input.
    */
-  setCacheScope(cacheScope: string): void {
-    if (cacheScope.trim().length === 0) return;
+  setCacheScope(cacheScope: string | null): void {
+    if (cacheScope !== null && cacheScope.trim().length === 0) return;
     this.options.cacheScope = cacheScope;
   }
 
@@ -587,7 +587,7 @@ export class BootstrapFetcher {
       });
 
       // Persist for offline fallback
-      if (this.options.cacheScope) {
+      if (!syncGroupsOverride && this.options.cacheScope) {
         this.saveCachedBootstrap(this.options.cacheScope, data);
       }
       return data;
@@ -604,7 +604,7 @@ export class BootstrapFetcher {
       }
 
       // Transient failure after exhausting retries → cached fallback.
-      const cached = this.options.cacheScope
+      const cached = !syncGroupsOverride && this.options.cacheScope
         ? this.loadCachedBootstrap(this.options.cacheScope)
         : null;
       if (cached) {
@@ -1129,7 +1129,7 @@ export class BootstrapFetcher {
 
   // Cache helpers for offline bootstrap
   private getBootstrapCacheKey(orgId: string): string {
-    return `ablo:bootstrap:${orgId}`;
+    return `ablo:bootstrap:v5:${JSON.stringify([orgId, this.options.baseUrl, [...new Set(this.options.syncGroups)].sort()])}`;
   }
   private saveCachedBootstrap(orgId: string, data: BootstrapData): void {
     if (typeof window === 'undefined') return;

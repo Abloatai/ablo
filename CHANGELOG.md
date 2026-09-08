@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.64.4
+
+### Cached rows follow account authority
+
+The reactive client now separates IndexedDB replicas and offline bootstrap snapshots by authenticated groups and operation grants, alongside user, organization, project and branch. Disposing a client and opening another account in the same organization no longer restores the previous account's rows before reconciliation. Reloading the same authority retains its warm cache.
+
+Existing caches start cold because their older namespace cannot establish account ownership. Older IndexedDB files, including pending writes, are retained but are not automatically imported or replayed into the new namespace. A replica widened by live group additions is rejected when reopened under narrower authority, preserving its pending writes.
+
 ## 0.64.3
 
 ### Existing connections make room for new tables

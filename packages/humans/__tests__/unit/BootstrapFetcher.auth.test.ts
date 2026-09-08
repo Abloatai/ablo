@@ -63,4 +63,30 @@ describe('BootstrapFetcher — shared auth source', () => {
     const headers = lastInit?.headers as Record<string, string>;
     expect(headers.Authorization).toBe('Bearer token-etag');
   });
+  it('keeps offline snapshots within the authority and configured groups', async () => {
+    localStorage.clear();
+    const helper = new BootstrapFetcher({
+      baseUrl: 'https://api.example.com/api', syncGroups: ['account:a'], cacheScope: 'authority-a',
+    });
+    const snapshot = await helper.fetchBootstrap();
+    const scoped = { type: 'full', lastSyncId: 9, models: {} };
+    jest.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: true, status: 200, headers: { get: () => null },
+      json: () => Promise.resolve(scoped), text: () => Promise.resolve(JSON.stringify(scoped)),
+    } as Response);
+    await helper.fetchBootstrap(undefined, ['account:b']);
+    Object.defineProperty(navigator, 'onLine', { value: false });
+    try {
+      expect(await helper.fetchBootstrap()).toEqual(snapshot);
+      helper.setCacheScope('authority-b');
+      await expect(helper.fetchBootstrap()).rejects.toMatchObject({ code: 'bootstrap_offline_no_cache' });
+      helper.setCacheScope('authority-a');
+      helper.setSyncGroups(['account:b']);
+      await expect(helper.fetchBootstrap()).rejects.toMatchObject({ code: 'bootstrap_offline_no_cache' });
+    } finally {
+      Object.defineProperty(navigator, 'onLine', { value: true });
+      localStorage.clear();
+    }
+  });
+
 });

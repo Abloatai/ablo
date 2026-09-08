@@ -6,7 +6,7 @@
  * in-memory mirror of what this class persists.
  */
 import { DatabaseManager, type DatabaseInfo, type WorkspaceMetadata } from './stores/DatabaseManager.js';
-import type { PersistenceIdentity } from './stores/persistenceIdentity.js';
+import { persistenceIdentityMatches, type PersistenceIdentity } from './stores/persistenceIdentity.js';
 import { StoreManager } from './stores/StoreManager.js';
 import { ModelRegistry } from './ModelRegistry.js';
 import { LoadStrategy } from '@abloatai/transaction/types';
@@ -226,6 +226,9 @@ export class Database {
     this.isClosing = false;
 
     if (this.workspaceDb && this.currentDbInfo) {
+      if (!persistenceIdentityMatches(this.currentDbInfo, identity)) {
+        throw new AbloConnectionError('Dispose the client before changing persistence authority.', { code: 'db_identity_mismatch' });
+      }
       return;
     }
 
@@ -233,6 +236,7 @@ export class Database {
     // Creates InMemoryObjectStore instances for all registered models.
     // Bootstrap via HTTP still works; only local persistence is skipped.
     if (this.inMemory) {
+      this.bootstrapHelper.setCacheScope(null);
       this.runtime.logger.debug('Opening in-memory database (headless mode)');
       const allModels = this.modelRegistry.getRegisteredModelNames();
       for (const modelName of allModels) {
@@ -264,6 +268,9 @@ export class Database {
       version
     );
 
+    // Both persistence layers must share the complete authenticated authority.
+    this.bootstrapHelper.setCacheScope(this.currentDbInfo.name);
+
     // Register database
     await this.databaseManager.registerDatabase(this.currentDbInfo);
 
@@ -277,6 +284,21 @@ export class Database {
 
     // Initialize stores
     await this.storeManager.initializeStores(this.workspaceDb);
+
+    // A live group addition can have widened a previous client's replica after
+    // it opened this namespace. Check persisted coverage before restoring rows
+    // or pending writes, not after the first WebSocket reconnect.
+    const metadata = await this.getWorkspaceMetadata();
+    const allowed = new Set(identity.syncGroups ?? []);
+    if (metadata?.subscribedSyncGroups.some(group => !allowed.has(group))) {
+      // Preserve pending writes for their original authority; never replay them
+      // into a narrower replica or silently discard them.
+      await this.close();
+      throw new AbloConnectionError('Persisted sync groups exceed the current authority.', {
+        code: 'db_identity_mismatch',
+      });
+    }
+    await this.updateWorkspaceMetadata({ subscribedSyncGroups: [...allowed] });
 
     const readiness = await this.storeManager.checkReadinessOfStores();
     this.runtime.logger.info(
