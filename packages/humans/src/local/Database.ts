@@ -621,6 +621,9 @@ export class Database {
 
           // Use batch processing for better performance
           const batch = await this.processDeltaBatch(formattedDeltas);
+          if (batch.persistedSyncId < Math.max(...formattedDeltas.map(delta => delta.syncId))) {
+            throw new Error('Could not persist all bootstrap changes; local storage must recover before retrying.');
+          }
           deltaResults = batch.results;
           deltasApplied = formattedDeltas.length;
           onProgress?.(deltasApplied);
@@ -687,48 +690,16 @@ export class Database {
           );
           continue;
         }
-        let writeErrors = 0;
-        // Store all items to IndexedDB (compacted)
+        // Fail before marking the model or snapshot persisted. A dropped row
+        // must be retried, not hidden behind an advanced bootstrap cursor.
         for (const item of modelData) {
-          try {
-            const compacted = this.compactRecord(modelName, item as ModelData);
-            await store.put(compacted);
-            modelsStored++;
-            modelsLoaded++;
-
-            // Report progress every 10 items
-            if (modelsLoaded % 10 === 0) {
-              onProgress?.(modelsLoaded);
-            }
-          } catch (error) {
-            writeErrors++;
-            this.runtime.observability.breadcrumb(
-              `Failed to store ${modelName} item`,
-              'sync.database',
-              'error',
-              {
-                error: error instanceof Error ? error.message : String(error),
-              }
-            );
-          }
+          const compacted = this.compactRecord(modelName, item as ModelData);
+          await store.put(compacted);
+          modelsStored++;
+          modelsLoaded++;
+          if (modelsLoaded % 10 === 0) onProgress?.(modelsLoaded);
         }
-
-        // The model is marked persisted below whether or not every item landed,
-        // because a partial store is still what the next sync reconciles
-        // against. Counted and surfaced here so a partial does not read as a
-        // clean bootstrap.
-        if (writeErrors > 0) {
-          this.runtime.observability.breadcrumb(
-            `Stored ${modelName} with ${writeErrors} of ${modelData.length} items dropped`,
-            'sync.database',
-            'warning',
-          );
-        }
-
-        // Mark model as persisted after successful write
-        try {
-          await this.setModelPersisted(modelName, true);
-        } catch {}
+        await this.setModelPersisted(modelName, true);
       }
 
       // Update workspace metadata with bootstrap snapshot's lastSyncId
@@ -1490,6 +1461,7 @@ export class Database {
         // Wait for transaction to complete
         await new Promise<void>((resolve, reject) => {
           tx.oncomplete = () => { resolve(); };
+          tx.onabort = () => { reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError')); };
           tx.onerror = () => { reject(tx.error); };
         });
         // Only commit staged results to the global results if the transaction

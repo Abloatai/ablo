@@ -1,5 +1,11 @@
 # @abloatai/transaction
 
+## 0.64.5
+
+### Patch Changes
+
+- Preserve query freshness and local persistence failures, allow bounded bootstrap capacity recovery, and improve CLI connection diagnostics.
+
 ## 0.64.4
 
 This release aligns Transaction with the 0.64.4 package family.

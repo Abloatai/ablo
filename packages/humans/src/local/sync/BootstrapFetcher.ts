@@ -107,6 +107,7 @@ import { globalRuntime } from '../context.js';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import { AbloError, AbloSessionError, AbloConnectionError, translateHttpError, toAbloError, isRetryableCode } from '@abloatai/transaction/errors';
 import { withAuthHeaders, type AuthTokenGetter } from '@abloatai/transaction/auth/credentialSource';
+import { retryAfterSecondsFromHeader } from '@abloatai/transaction/wire/rateLimit';
 import {
   classifySchemaDrift,
   describeSchemaDrift,
@@ -244,12 +245,16 @@ export class BootstrapFetcher {
    * through its models {@link CHUNK_CONCURRENCY} at a time; each request may
    * spend `fetchTimeout` waiting for response headers and `stallTimeout`
    * waiting for the next body chunk, and may be retried `maxRetries` times.
+   * Capacity recovery has a separate `fetchTimeout` window.
    */
   get budgetMs(): number {
     const models = Math.max(this.options.instantModels?.length ?? 1, 1);
     const waves = Math.ceil(models / CHUNK_CONCURRENCY);
     return (
-      waves * (this.options.fetchTimeout + this.options.stallTimeout) * this.options.maxRetries
+      waves * (
+        (this.options.fetchTimeout + this.options.stallTimeout) * this.options.maxRetries +
+        this.options.fetchTimeout
+      )
     );
   }
 
@@ -625,7 +630,8 @@ export class BootstrapFetcher {
    */
   private async fetchWithRetries(url: string, lane: CancelLane): Promise<BootstrapData> {
     let lastError: Error | null = null;
-    for (let attempt = 0; attempt < this.options.maxRetries; attempt++) {
+    const capacityDeadline = Date.now() + this.options.fetchTimeout;
+    for (let attempt = 0; attempt < this.options.maxRetries;) {
       try {
         return await this.fetchOnce(url, lane);
       } catch (error) {
@@ -664,8 +670,19 @@ export class BootstrapFetcher {
           attempt: attempt + 1,
         });
 
-        if (attempt < this.options.maxRetries - 1) {
-          await this.delay(this.options.retryDelay * Math.pow(2, attempt));
+        const delayMs = Math.max(
+          this.options.retryDelay * Math.pow(2, attempt),
+          (ablo.retryAfterSeconds ?? 0) * 1_000,
+        );
+        const capacity = ablo.code === 'instance_at_capacity' && ablo.retryAfterSeconds !== undefined;
+        // Admission has not run the request yet. Allow its recovery window
+        // without spending the attempts reserved for actual fetch failures.
+        if (ablo.retryAfterSeconds !== undefined && Date.now() + delayMs >= capacityDeadline) {
+          throw ablo;
+        }
+        if (!capacity) attempt++;
+        if (capacity || attempt < this.options.maxRetries) {
+          await this.delay(delayMs, lane);
         }
       }
     }
@@ -827,6 +844,7 @@ export class BootstrapFetcher {
         res.status,
         parsed ?? `Bootstrap fetch failed: ${res.status} ${res.statusText}`,
         res.headers.get('x-request-id') ?? undefined,
+        { retryAfterSeconds: retryAfterSecondsFromHeader(res.headers.get('retry-after')) },
       );
       // Only a genuine session or JWT expiry — or a bare auth failure carrying
       // no structured code — should drive the sign-in redirect. A specific auth
@@ -1019,6 +1037,7 @@ export class BootstrapFetcher {
         response.status,
         parsed ?? `Bootstrap fetch failed: ${response.status} ${response.statusText}`,
         response.headers.get('x-request-id') ?? undefined,
+        { retryAfterSeconds: retryAfterSecondsFromHeader(response.headers.get('retry-after')) },
       );
       if (
         translated.code === 'session_expired' ||
@@ -1095,6 +1114,7 @@ export class BootstrapFetcher {
         response.status,
         parsed ?? `Entity fetch failed: ${response.status} ${response.statusText}`,
         response.headers.get('x-request-id') ?? undefined,
+        { retryAfterSeconds: retryAfterSecondsFromHeader(response.headers.get('retry-after')) },
       );
     }
 
@@ -1168,8 +1188,21 @@ export class BootstrapFetcher {
   /**
    * Helper to delay execution
    */
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private async delay(ms: number, lane: CancelLane): Promise<void> {
+    const controller = new AbortController();
+    this.activeControllers.set(controller, lane);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        timer = setTimeout(resolve, ms);
+        controller.signal.addEventListener('abort', () => {
+          reject(classifyRequestFailure(undefined, controller, 'Bootstrap retry aborted'));
+        }, { once: true });
+      });
+    } finally {
+      clearTimeout(timer);
+      this.activeControllers.delete(controller);
+    }
   }
 
   /**

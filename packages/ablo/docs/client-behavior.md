@@ -70,6 +70,61 @@ to read.
 lifecycle filter defaults to `'live'`; pass `'archived'` or `'all'` when you
 intentionally want non-live rows.
 
+## Browser read freshness and persistence
+
+These modes apply after `await ablo.ready()` on the reactive browser client.
+Reads before initialization provide no persistence guarantee. A headless HTTP client has no
+local graph or IndexedDB replica; its reads go to the server.
+
+| Read | Can return cached data? | Network | Reactive graph | Offline / missing | Persistence when resolved |
+| --- | --- | --- | --- | --- | --- |
+| `local.get`, `local.list`, `local.count` | Yes; memory only | None | Read only | Available offline; `undefined`, `[]`, or `0` means absent locally | No write or durability barrier |
+| `list` with omitted `type` or `type: 'unknown'` | Yes; memory, then IndexedDB | Cold queries block; warm queries confirm in the background once per connection | Hydrates accepted rows | Warm data can be stale; cold network failure rejects; a successful empty network answer returns `[]` | A local hit does not wait for background writes; a network result waits for its accepted rows' storage transactions |
+| `list({ type: 'complete' })` | Never substitutes cached rows for an empty server answer; newer resident versions can supersede returned snapshots | Always awaits a query, including when local data exists | Hydrates accepted rows | Network failure rejects without stale fallback; missing matches return `[]` | Waits for accepted primary and expanded rows' storage transactions; storage failure rejects |
+| `get({ id, type? })`, `read({ id, type? })` | The query hydration stage follows the `list` policy | Also performs an authoritative point read after hydration | The query stage updates the graph; the additional point response does not | Point-read failure rejects even with warm data; missing row returns `undefined` | Query-stage writes finish first; the separate point response is not itself persisted |
+
+An unhydrated query with `expand` waits for the network even when its parent is
+cached: a parent alone cannot establish that its children are loaded. Omitted
+`type` is local-first for every model load strategy. Reconnecting clears the
+query hydration ledger. `complete` describes freshness, not an unlimited result
+set; keep queries bounded and inspect the collection's `hasMore`.
+
+Query responses meet resident rows by server log position, not `updatedAt`. A
+snapshot known to precede an accepted subscription version cannot replace that
+resident row or overwrite its persisted data. Pending local edits remain visible.
+An empty query result does not delete cached rows: filtered or limited query
+absence is not a deletion event. Synchronized deletes remove rows from the graph;
+a local selector then observes their absence.
+
+For a reload-sensitive external publication, explicitly hydrate the desired rows:
+
+```ts
+await ablo.ready();
+// The application server has already confirmed its publication.
+await ablo.sourceSnapshots.list({ where: { id: snapshotId }, type: 'complete' });
+await ablo.sourceHeads.list({ where: { id: headId }, type: 'complete' });
+// Accepted query rows have reached the configured local storage.
+```
+
+Configure `persistence: 'indexeddb'` on the browser client for reload persistence.
+Memory persistence cannot survive a reload. IndexedDB completion here means a
+completed browser transaction, using relaxed durability; it is not a guarantee
+against power loss, browser eviction, or a later authorized update or deletion.
+The barrier covers these queries' accepted writes, not every pending subscription
+or mutation. `waitForFlush()` waits for server mutation confirmation and is not a
+local persistence barrier. If a storage write fails, the graph may already show
+the result; retry the complete read before relying on reload persistence.
+
+Use `read` when a later write needs exact captured read evidence. Use a complete
+`list` query when the purpose is to populate and persist the reactive working
+set. A `get`/`read` result and the local graph are distinct snapshots and can differ
+if the row changes between the query and point requests.
+
+Account changes require disposing the old client and constructing a new scoped
+client, as shown in [React](./react.md). Do not reuse an old request's result as
+initial data for the new account. The same user, project and branch do not make
+two accounts the same persistence authority.
+
 ## Multiplayer Behavior
 
 Two writers both try to mark `report_stockholm` ready at the same time. To stop

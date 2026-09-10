@@ -85,9 +85,8 @@ export interface FetchOptions<T> {
   readonly orderBy?: { [K in keyof T]?: 'asc' | 'desc' };
   readonly limit?: number;
   /**
-   * Freshness mode. When omitted, the default is derived from the model's
-   * load strategy: `lazy` models default to `'unknown'` (local-first), while
-   * `instant`/`partial` models default to `'complete'`.
+   * Freshness mode. Omitted and `'unknown'` use local-first reads for every
+   * load strategy. A previously hydrated query relies on the live stream.
    *
    * `'complete'`: wait for the network round-trip even if local data exists,
    * so the caller observes server-confirmed state (read-after-write).
@@ -240,19 +239,20 @@ export class OnDemandLoader {
     const clauses = normalizeWhere(options?.where);
     const queryKey = stableKey(modelName, clauses, options?.orderBy, options?.limit, options?.expand);
 
-    // Single-flight: an identical hydration is already in flight.
-    const inFlight = this.inFlight.get(queryKey);
+    // A local-first read cannot satisfy an authoritative caller.
+    const flightKey = `${options?.type === 'complete' ? 'complete' : 'unknown'}:${queryKey}`;
+    const inFlight = this.inFlight.get(flightKey);
     if (inFlight) return inFlight;
 
     const work = this.runFetch(modelName, typename, ModelClass, clauses, options, queryKey);
-    this.inFlight.set(queryKey, work);
+    this.inFlight.set(flightKey, work);
     // The rejection (if any) reaches callers via the returned `work`; this
     // side-chain only clears the single-flight slot. Without the trailing
     // catch, `.finally()` mirrors the rejection into a second, unhandled
     // promise even when every caller handles theirs.
     void work
       .finally(() => {
-        this.inFlight.delete(queryKey);
+        this.inFlight.delete(flightKey);
       })
       .catch(() => undefined);
     return work;
@@ -313,14 +313,8 @@ export class OnDemandLoader {
     // network, then mark this query hydrated so future reads serve local.
     const networkModels = await this.fetchFromNetwork(modelName, typename, clauses, options);
     this.hydratedKeys.add(queryKey);
-    if (networkModels.length > 0) return applyLimit(networkModels, options?.limit);
-
-    // Network returned nothing — fall back to whatever's local (e.g. a
-    // complete read whose server result was empty but IDB still holds rows).
-    return applyLimit(
-      await this.readLocal(modelName, typename, ModelClass, clauses, hasExpand, expand),
-      options?.limit,
-    );
+    // An empty authoritative answer is absence, not permission to serve stale rows.
+    return applyLimit(networkModels, options?.limit);
   }
 
   /**
@@ -379,6 +373,7 @@ export class OnDemandLoader {
     const network = await this.queryNetwork(modelName, clauses, options);
     const networkRows = network.rows;
     const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
+    const acceptedRows: unknown[] = [];
     const networkModels = networkRows
       // Strict: a row the server returned whose type name this client never
       // registered is a genuine schema collision (the pushed schema differs
@@ -389,7 +384,7 @@ export class OnDemandLoader {
           raw,
           { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
           typename,
-          { strict: true },
+          { strict: true, acceptedRows },
         ),
       )
       .filter((m): m is Model => m !== null);
@@ -405,9 +400,8 @@ export class OnDemandLoader {
 
     if (networkModels.length > 0) {
       this.opts.objectPool.addBatch(networkModels, ModelScope.live);
-      // Background IDB write — don't block the caller. Expanded children are
-      // persisted to their own stores inside `queryNetwork`/`hydrateExpanded`.
-      void this.persistToIdb(modelName, networkRows);
+      // Persist only accepted snapshots: a stale response must not roll disk back.
+      await this.persistToIdb(modelName, acceptedRows);
     }
 
     return networkModels;
@@ -538,7 +532,7 @@ export class OnDemandLoader {
     raw: unknown,
     origin: HydrationOrigin,
     typename?: string,
-    opts?: { strict?: boolean },
+    opts?: { strict?: boolean; acceptedRows?: unknown[] },
   ): Model | null {
     if (!raw || typeof raw !== 'object') return null;
     const obj = raw as Record<string, unknown>;
@@ -559,6 +553,7 @@ export class OnDemandLoader {
         if (this.opts.objectPool.watermarks.isAheadOf(existing, origin.position)) return existing;
 
         const stamped = this.stampTypename(obj, typename) as Record<string, unknown>;
+        opts?.acceptedRows?.push(stamped);
         // Retain pending local fields while accepting the server's others —
         // the same local-first merge contract SyncClient's delta resolver uses.
         const localChanges = existing.getChanges();
@@ -581,7 +576,12 @@ export class OnDemandLoader {
     // re-populate it). The typename comes from the schema relation
     // (`'Block'`, `'Section'`, etc.) so no guessing involved.
     const stamped = this.stampTypename(obj, typename) as Record<string, unknown>;
-    return this.opts.objectPool.createFromData(stamped, undefined, opts);
+    const model = this.opts.objectPool.createFromData(stamped, undefined, opts);
+    if (model && origin.kind === 'network') {
+      this.opts.objectPool.watermarks.advance(model, origin.position);
+      opts?.acceptedRows?.push(stamped);
+    }
+    return model;
   }
 
   /**
@@ -672,7 +672,7 @@ export class OnDemandLoader {
     // own typed pool, then leave the nested arrays in place on the
     // primary row.
     if (options?.expand && options.expand.length > 0) {
-      this.hydrateExpanded(modelName, normalized, options.expand, position);
+      await this.hydrateExpanded(modelName, normalized, options.expand, position);
     }
     return { rows: normalized, evidence, position };
   }
@@ -684,12 +684,13 @@ export class OnDemandLoader {
    * `__typename` field gets mangled by `postgres.camel` (`__typename`
    * → `_Typename`), so the SDK can't trust whatever string lands.
    */
-  private hydrateExpanded(
+  private async hydrateExpanded(
     parentModelName: string,
     rows: unknown[],
     relationNames: readonly string[],
     position: number,
-  ): void {
+  ): Promise<void> {
+    const writes: Promise<void>[] = [];
     const parentDef = this.getModelDef(parentModelName);
     // Nested rows carry no evidence of their own; the read floor at issue
     // time is what they provably reflect. A floor of zero says nothing.
@@ -710,8 +711,7 @@ export class OnDemandLoader {
         const stampedItems: unknown[] = [];
         for (const item of items) {
           const stamped = this.stampTypename(item, targetTypename);
-          stampedItems.push(stamped);
-          const m = this.hydrateOne(stamped, origin);
+          const m = this.hydrateOne(stamped, origin, targetTypename, { acceptedRows: stampedItems });
           if (m) models.push(m);
         }
         if (models.length > 0) {
@@ -722,23 +722,21 @@ export class OnDemandLoader {
         // this, expand-fetched relations live only inside the parent's row
         // and are lost to a lazy child query after a cold start.
         if (stampedItems.length > 0 && targetKey) {
-          void this.persistToIdb(targetKey, stampedItems);
+          writes.push(this.persistToIdb(targetKey, stampedItems));
         }
       }
     }
+    await Promise.all(writes);
   }
 
   private async persistToIdb(modelName: string, rows: unknown[]): Promise<void> {
+    if (rows.length === 0) return;
     const store = this.opts.database.getStore(this.resolveTypename(modelName));
+    // Before ready(), callers may have a graph but no initialized storage.
     if (!store) return;
-    for (const row of rows) {
-      try {
-        await store.put(row as Record<string, unknown>);
-      } catch {
-        // IDB writes are best-effort — a transient quota/transaction
-        // failure shouldn't break the hydration's primary purpose.
-      }
-    }
+    // Enqueue together, before yielding: a later delta must not be followed by
+    // an older row from the tail of this query's sequential write loop.
+    await Promise.all(rows.map((row) => store.put(row as Record<string, unknown>)));
   }
 
   private resolveTypename(modelName: string): string {

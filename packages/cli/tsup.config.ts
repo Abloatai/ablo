@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 const embeddedDsn = process.env.ABLO_CLI_SENTRY_DSN ?? '';
 const embeddedRelease =
-  process.env.ABLO_CLI_RELEASE ?? `@abloatai/cli@${process.env.npm_package_version ?? 'development'}`;
+  process.env.ABLO_CLI_RELEASE ?? `ablo-cli-${process.env.npm_package_version ?? 'development'}`;
 const embeddedVersion = process.env.npm_package_version ?? 'development';
 
 /**

@@ -61,9 +61,7 @@ function init(): boolean {
       release,
       sendDefaultPii: false,
       enableLogs: true,
-      beforeSend(event) {
-        return sanitizeObservationValue(event) as typeof event;
-      },
+      beforeSend: sanitizeCliEvent,
       beforeBreadcrumb(breadcrumb) {
         return sanitizeObservationValue(breadcrumb) as typeof breadcrumb;
       },
@@ -71,6 +69,23 @@ function init(): boolean {
     initialized = true;
   }
   return true;
+}
+
+/** Keep Sentry's typed protocol fields outside the diagnostic depth budget. */
+export function sanitizeCliEvent(event: Sentry.ErrorEvent): Sentry.ErrorEvent {
+  const sanitized = sanitizeObservationValue({
+    ...event,
+    // Older builds and runtime overrides used a scoped package name. Its slash
+    // is invalid in a Sentry release; its version also resembles an email.
+    release: event.release?.replace(/^@abloatai\/cli@/, 'ablo-cli-'),
+  }) as Sentry.ErrorEvent;
+  if (event.exception?.values) {
+    sanitized.exception = {
+      ...sanitized.exception,
+      values: event.exception.values.map((value) => sanitizeObservationValue(value) as typeof value),
+    };
+  }
+  return sanitized;
 }
 
 function commandOperation(): string {

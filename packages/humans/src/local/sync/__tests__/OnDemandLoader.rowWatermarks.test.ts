@@ -23,6 +23,9 @@ import { LoadStrategy, ModelScope } from '@abloatai/transaction/types';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import { OnDemandLoader } from '../OnDemandLoader.js';
+import { ObjectStore } from '../../stores/ObjectStore.js';
+import { InMemoryObjectStore } from '../../adapters/inMemoryStorage.js';
+import type { Database } from '../../Database.js';
 import * as queryClient from '../../query/client.js';
 
 jest.mock('../../query/client.js', () => ({
@@ -44,14 +47,14 @@ class ItemModel extends Model {
   }
 }
 
-function setup(readFloor: () => number) {
+function setup(
+  readFloor: () => number,
+  database: Pick<Database, 'getStore'> = { getStore: () => new InMemoryObjectStore('Item', 'Item') },
+) {
   const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
   registry.registerModel('Item', ItemModel, { loadStrategy: LoadStrategy.lazy });
   setActiveRegistry(registry);
   const pool = new InstanceCache({ maxSize: 100 }, registry);
-  // The loader's local tier asks the database for a store; none means the
-  // local tier is empty and every read goes to the (mocked) network.
-  const database = { getStore: () => undefined };
   const loader = new OnDemandLoader({
     objectPool: pool,
     database,
@@ -148,4 +151,86 @@ describe('OnDemandLoader — network rows meet the pool by log position', () => 
     expect(row).toBeDefined();
     expect(row && pool.watermarks.of(row)).toBe(12);
   });
+
+  it('does not let a simultaneous local-first read satisfy a complete read', async () => {
+    const { pool, loader } = setup(() => 0);
+    seedFromDelta(pool, 'r1', 'cached');
+    postQueryMock.mockResolvedValue({ results: [[{ id: 'r1', title: 'fresh' }]] });
+    const cached = loader.fetch('items', { where: { id: 'r1' } });
+    const complete = loader.fetch('items', { where: { id: 'r1' }, type: 'complete' });
+    await Promise.all([cached, complete]);
+    // One background confirm and one authoritative request; neither may
+    // borrow the other's local-first promise.
+    expect(postQueryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns an empty authoritative result instead of falling back to cached rows', async () => {
+    const { pool, loader } = setup(() => 0);
+    seedFromDelta(pool, 'r1', 'cached');
+    postQueryMock.mockResolvedValueOnce({ results: [[]] });
+    expect(await loader.fetch('items', { type: 'complete' })).toEqual([]);
+  });
+
+  it('does not persist a snapshot rejected by the pool watermark', async () => {
+    const store = new InMemoryObjectStore('Item', 'Item');
+    await store.put({ id: 'r1', title: 'newer' });
+    const { pool, loader } = setup(() => 5, { getStore: () => store });
+    const resident = seedFromDelta(pool, 'r1', 'newer');
+    pool.watermarks.advance(resident, 10);
+    serverAnswers({ id: 'r1', title: 'older' }, 5);
+    await loader.fetch('items', { type: 'complete' });
+    expect((await store.get('r1'))?.title).toBe('newer');
+  });
+
+  it('waits for storage completion and propagates storage failure', async () => {
+    const store = new InMemoryObjectStore('Item', 'Item');
+    const { loader } = setup(() => 0, { getStore: () => store });
+    let finish!: () => void;
+    const writing = new Promise<void>((resolve) => { finish = resolve; });
+    let started!: () => void;
+    const startedWriting = new Promise<void>((resolve) => { started = resolve; });
+    jest.spyOn(store, 'put').mockImplementationOnce(() => {
+      started();
+      return writing;
+    });
+    serverAnswers({ id: 'r1', title: 'fresh' }, 1);
+    let settled = false;
+    const read = loader.fetch('items', { type: 'complete' }).then(() => { settled = true; });
+    await startedWriting;
+    expect(settled).toBe(false);
+    finish();
+    await read;
+    expect(settled).toBe(true);
+
+    jest.spyOn(store, 'put').mockRejectedValueOnce(new Error('storage full'));
+    serverAnswers({ id: 'r1', title: 'next' }, 2);
+    await expect(loader.fetch('items', { type: 'complete' })).rejects.toThrow('storage full');
+  });
+
+
+  it('restores a completed network read from IndexedDB with a new pool and no replacement rows', async () => {
+    const open = () => new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('on-demand-read-contract', 1);
+      request.onupgradeneeded = () => { request.result.createObjectStore('Item', { keyPath: 'id' }); };
+      request.onsuccess = () => { resolve(request.result); };
+      request.onerror = () => { reject(request.error); };
+    });
+    let db = await open();
+    try {
+      const database = () => ({ getStore: () => new ObjectStore(db, 'Item', 'Item', { loadStrategy: LoadStrategy.lazy }) });
+      const first = setup(() => 0, database());
+      serverAnswers({ id: 'r1', title: 'survives reload' }, 1);
+      await first.loader.fetch('items', { type: 'complete' });
+      db.close();
+      db = await open();
+      const reloaded = setup(() => 0, database());
+      postQueryMock.mockImplementation(() => new Promise(() => undefined));
+      const rows = await reloaded.loader.fetch('items', { where: { id: 'r1' } });
+      expect((rows[0] as ItemModel).title).toBe('survives reload');
+    } finally {
+      db.close();
+      indexedDB.deleteDatabase('on-demand-read-contract');
+    }
+  });
+
 });

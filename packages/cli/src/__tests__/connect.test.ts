@@ -1,4 +1,7 @@
-import { parseConnectArgs, auditTenantSyncInfra } from '../connect';
+import { connect, parseConnectArgs, auditTenantSyncInfra } from '../connect';
+import * as config from '../config';
+import * as remote from '../remoteValidation';
+import { installCliExitObservationBoundary, restoreCliExitObservationBoundary } from '../observeCliError';
 import {
   connectSetupSql as buildConnectSetupSql,
   reconcilePublicationPlan as buildPublicationPlan,
@@ -14,6 +17,29 @@ import {
   ABLO_OUTBOX_TABLE,
 } from '@abloatai/transaction/footprint';
 import * as dbRole from '../dbRole';
+
+describe('connect check polling', () => {
+  it.each(['loading', 'retrying'] as const)('returns non-ready for %s without throwing a CLI failure', async (status) => {
+    const priorExitCode = process.exitCode;
+    jest.spyOn(config, 'resolveRuntimeApiKey').mockReturnValue({ key: 'sk_fixture', source: null });
+    jest.spyOn(remote, 'requestRemoteValidation').mockResolvedValue({
+      ok: true, reachable: true, ready: false, failures: [], initialSnapshot: { status },
+    });
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    installCliExitObservationBoundary();
+    try {
+      await expect(connect(['check'])).resolves.toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Not ready yet'));
+      jest.mocked(remote.requestRemoteValidation).mockRejectedValue(new Error('check unavailable'));
+      await expect(connect(['check'])).rejects.toThrow('check unavailable');
+    } finally {
+      restoreCliExitObservationBoundary();
+      process.exitCode = priorExitCode;
+      jest.restoreAllMocks();
+    }
+  });
+});
 
 const connectSetupSql = (
   input: Omit<Parameters<typeof buildConnectSetupSql>[0], 'publication'> & {

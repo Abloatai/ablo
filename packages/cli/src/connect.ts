@@ -884,7 +884,9 @@ async function runCheck(): Promise<void> {
     console.log(
       `  ${pc.yellow('—')} Not ready yet ${pc.dim(`— Ablo is loading existing rows. Re-run ${pc.bold('ablo connect check')} shortly.`)}\n`
     );
-    process.exit(1);
+    // A non-ready snapshot is an expected poll result, not a CLI exception.
+    process.exitCode = 1;
+    return;
   }
   const count = result.failures.length;
   console.log(

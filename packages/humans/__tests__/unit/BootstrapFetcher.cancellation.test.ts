@@ -228,6 +228,6 @@ describe('BootstrapFetcher — sharing and cancellation', () => {
 
     // Four models at a concurrency of three is two waves; each request may spend
     // fetchTimeout on headers and stallTimeout on the body, and may be retried.
-    expect(helper.budgetMs).toBe(2 * (1_000 + 500) * 2);
+    expect(helper.budgetMs).toBe(2 * ((1_000 + 500) * 2 + 1_000));
   });
 });

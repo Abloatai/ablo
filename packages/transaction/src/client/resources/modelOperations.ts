@@ -189,8 +189,11 @@ export interface ServerReadOptions<T> {
    */
   cursor?: string;
   /**
-   * `complete` waits for the server. `unknown` returns whatever is local
-   * immediately and refreshes in the background.
+   * Reactive query hydration: `complete` forces a network query and awaits
+   * accepted rows' local storage writes. Omitted/`unknown` is local-first,
+   * confirming a warm query once per connection; cold queries await network.
+   * Point reads also request exact server evidence after query hydration.
+   * HTTP clients always read remotely.
    */
   type?: 'complete' | 'unknown';
   /**

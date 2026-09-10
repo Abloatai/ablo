@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.64.5
+
+### Authoritative queries preserve freshness through reload
+
+Complete browser queries now keep their freshness requirement when a local-first
+read is already running. Empty server results remain empty, and snapshots
+rejected as older than resident data no longer overwrite the local cache.
+Network query results wait for accepted rows, including expanded relations, to
+finish their storage writes. Storage failures now reject the read instead of
+silently reporting success. The client behavior guide distinguishes query
+hydration, exact point reads and the limits of IndexedDB durability.
+
+### Storage failures leave bootstrap unfinished
+
+IndexedDB transactions that abort now reject their pending writes, allowing
+browser startup to report a storage failure instead of waiting indefinitely.
+Bootstrap no longer marks incomplete rows as persisted or advances its checkpoint
+past changes that could not be stored. Applications can retry after local storage
+recovers without treating a partial snapshot as complete.
+
+### Bootstrap allows time for capacity to recover
+
+The browser client now honours the server's retry interval when bootstrap is
+temporarily refused for capacity. These responses use a bounded recovery window
+without consuming the attempts reserved for fetch failures. Cancelling bootstrap
+also cancels its retry wait. Companion replication-lease and admission changes
+require a separate sync-server rollout; installing this release does not deploy
+them.
+
+### Clearer connection checks and diagnostics
+
+`ablo connect check` still exits with a nonzero status while existing rows are
+loading, but treats that state as an expected polling result. CLI error reports
+retain their stack frames and use valid release identifiers while continuing to
+sanitize diagnostic data.
+
 ## 0.64.4
 
 ### Cached rows follow account authority

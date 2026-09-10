@@ -54,6 +54,7 @@ export class ObjectStore implements ObjectStoreContract {
         const request = store.add(data);
 
         tx.oncomplete = () => { resolve(); };
+        tx.onabort = () => { reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError')); };
         tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB transaction error')); };
         request.onerror = () => { reject(request.error ?? new Error('IndexedDB request error')); };
       } catch (error) {
@@ -110,6 +111,7 @@ export class ObjectStore implements ObjectStoreContract {
         const request = store.put(data);
 
         tx.oncomplete = () => { resolve(); };
+        tx.onabort = () => { reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError')); };
         tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB transaction error')); };
         request.onerror = () => { reject(request.error ?? new Error('IndexedDB request error')); };
       } catch (error) {
@@ -223,6 +225,7 @@ export class ObjectStore implements ObjectStoreContract {
         const request = store.delete(id);
 
         tx.oncomplete = () => { resolve(); };
+        tx.onabort = () => { reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError')); };
         tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB transaction error')); };
         request.onerror = () => { reject(request.error ?? new Error('IndexedDB request error')); };
       } catch (error) {
@@ -261,6 +264,7 @@ export class ObjectStore implements ObjectStoreContract {
         const request = store.clear();
 
         tx.oncomplete = () => { resolve(); };
+        tx.onabort = () => { reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError')); };
         tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB transaction error')); };
         request.onerror = () => { reject(request.error ?? new Error('IndexedDB request error')); };
       } catch (error) {

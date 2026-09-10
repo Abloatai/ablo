@@ -208,6 +208,7 @@ export class DatabaseManager {
         resolve();
       };
 
+      tx.onabort = () => { reject(indexedDbError(tx.error, 'registry transaction')); };
       tx.onerror = () => { reject(indexedDbError(tx.error, 'registry transaction')); };
       request.onerror = () => { reject(indexedDbError(request.error, 'registry write')); };
     });
@@ -347,6 +348,7 @@ export class DatabaseManager {
       const request = store.put(metadata, 'metadata');
 
       tx.oncomplete = () => { resolve(); };
+      tx.onabort = () => { reject(indexedDbError(tx.error, 'workspace metadata transaction')); };
       tx.onerror = () => { reject(indexedDbError(tx.error, 'workspace metadata transaction')); };
       request.onerror = () => { reject(indexedDbError(request.error, 'workspace metadata write')); };
     });
@@ -388,6 +390,7 @@ export class DatabaseManager {
       const request = store.put(persistenceData, modelName);
 
       tx.oncomplete = () => { resolve(); };
+      tx.onabort = () => { reject(indexedDbError(tx.error, 'model persistence transaction')); };
       tx.onerror = () => { reject(indexedDbError(tx.error, 'model persistence transaction')); };
       request.onerror = () => { reject(indexedDbError(request.error, 'model persistence write')); };
     });
