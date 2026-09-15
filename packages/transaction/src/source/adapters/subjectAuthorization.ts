@@ -1,4 +1,8 @@
-import { AbloPermissionError, AbloValidationError } from '../../errors.js';
+import {
+  AbloPermissionError,
+  AbloStaleContextError,
+  AbloValidationError,
+} from '../../errors.js';
 import {
   composeEntitySyncGroups,
   syncGroupsForRow,
@@ -19,11 +23,24 @@ function sourceModelEntry<S extends SchemaRecord>(schema: Schema<S>, model: stri
   );
 }
 
-function deny(): never {
+function deny(model: string, action: string): never {
   throw new AbloPermissionError('The resolved scope does not cover the requested row.', {
     code: 'capability_scope_denied',
     httpStatus: 403,
+    details: {
+      model,
+      action: action.toLowerCase(),
+      origin: 'row_subject',
+      enforcementOrigin: 'row_subject',
+    },
   });
+}
+
+function entityAlreadyExists(operation: Operation): never {
+  throw new AbloValidationError(
+    `A row already exists for ${operation.model}/${operation.id ?? ''}.`,
+    { code: 'entity_already_exists', httpStatus: 409 },
+  );
 }
 
 export function sourceSubjectRule<S extends SchemaRecord>(
@@ -151,12 +168,16 @@ export function authorizeSourceRead<S extends SchemaRecord>(
   if (!rule) return rows;
   const groups = req.scope?.syncGroups;
   const authorized = rows.filter((row) => subjectAuthorized(rule, row, groups));
-  if (req.kind === 'load' && rows.length > 0 && authorized.length === 0) deny();
   return authorized;
 }
 
-function authorizePayload(rule: SubjectRule, row: Row, groups: readonly string[] | undefined): void {
-  if (!subjectAuthorized(rule, row, groups)) deny();
+function authorizePayload(
+  rule: SubjectRule,
+  row: Row,
+  groups: readonly string[] | undefined,
+  operation: Operation,
+): void {
+  if (!subjectAuthorized(rule, row, groups)) deny(operation.model, operation.type);
 }
 
 export async function authorizeSourceChange<S extends SchemaRecord>(
@@ -168,15 +189,22 @@ export async function authorizeSourceChange<S extends SchemaRecord>(
     const rule = sourceSubjectRule(schema, operation.model);
     if (!rule) continue;
     const current = operation.id ? await load(operation) : null;
-    if (current) authorizePayload(rule, current, change.scope?.syncGroups);
+    if (current) authorizePayload(rule, current, change.scope?.syncGroups, operation);
+    if (operation.type === 'CREATE' && current) entityAlreadyExists(operation);
     if (operation.type === 'CREATE') {
-      authorizePayload(rule, operation.input ?? {}, change.scope?.syncGroups);
+      authorizePayload(rule, operation.input ?? {}, change.scope?.syncGroups, operation);
     } else if (!current) {
-      deny();
+      if (operation.readAt != null) {
+        throw new AbloStaleContextError(
+          `Write rejected: ${operation.model}/${operation.id ?? ''} changed since read. Re-read and retry.`,
+          { code: 'stale_context', httpStatus: 409 },
+        );
+      }
+      deny(operation.model, operation.type);
     }
     if (current && operation.input && Object.hasOwn(operation.input, rule.field) &&
         !Object.is(current[rule.field], operation.input[rule.field])) {
-      deny();
+      deny(operation.model, operation.type);
     }
   }
 }

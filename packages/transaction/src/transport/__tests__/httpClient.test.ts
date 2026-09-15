@@ -17,7 +17,7 @@
  */
 import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, selectModels, z } from '../../schema/index.js';
-import { AbloError, AbloNotFoundError } from '../../errors.js';
+import { AbloError, AbloNotFoundError, CapabilityError } from '../../errors.js';
 import { CLAIM_CONTINUATION_HEADER } from '../../claims/httpContinuation.js';
 import {
   claimAcquiredResponse,
@@ -255,6 +255,30 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     });
   });
 
+  it('exposes safe capability enforcement metadata from the wire', async () => {
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_scope',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: () => Promise.resolve(jsonResponse({
+        code: 'capability_scope_denied',
+        message: 'The capability does not allow this operation.',
+        model: 'items',
+        action: 'read',
+        enforcementOrigin: 'capability_allowlist',
+      }, 403)),
+    });
+
+    const error = await c.items.get({ id: 'item-1' }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(CapabilityError);
+    expect(error).toMatchObject({
+      model: 'items',
+      action: 'read',
+      enforcementOrigin: 'capability_allowlist',
+    });
+  });
+
   it('replays the exact HTTP request after transient admission pressure', async () => {
     jest.useFakeTimers();
     try {
@@ -297,6 +321,43 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       jest.useRealTimers();
     }
   });
+
+  it.each(['recovered', 'deadline', 'conflict', 'no-hint', 'no-deadline', 'persistent', 'unkeyed'] as const)(
+    'coordination recovery preserves the exact idempotent commit: %s', async mode => {
+      jest.useFakeTimers();
+      try {
+        const requests: Array<{ body: BodyInit | null | undefined; key: string | null }> = [];
+        const c = Ablo({
+          schema, apiKey: 'sk_test_coordination_recovery', baseURL: 'https://api.example.test', transport: 'http',
+          timeoutMs: mode === 'deadline' ? 500 : mode === 'no-deadline' ? 0 : mode === 'persistent' ? 2_500 : 5_000,
+          fetch: (_input, init) => {
+            requests.push({ body: init?.body, key: new Headers(init?.headers).get('Idempotency-Key') });
+            if (requests.length === 1 || mode === 'persistent') return Promise.resolve(new Response(JSON.stringify({
+              code: mode === 'conflict' ? 'claim_conflict' : 'claim_lease_unavailable', message: 'Coordination rejected',
+            }), { status: mode === 'conflict' ? 409 : 503,
+              headers: mode === 'no-hint' ? {} : { 'Retry-After': '1' } }));
+            return Promise.resolve(jsonResponse(confirmedCommitReceiptResponse({ clientTxId: 'recover-exact', lastSyncId: 7 })));
+          },
+        });
+        const operation = mode === 'unkeyed' ? c.items.get({ id: 'item-recovery' }) : c.commits.create({
+          operations: [{ action: 'create', model: 'items', id: 'item-recovery', data: { title: 'Retained', status: 'todo' } }],
+          idempotencyKey: 'recover-exact',
+        });
+        const result = operation.then(receipt => ({ receipt }), (error: unknown) => ({ error }));
+        await jest.advanceTimersByTimeAsync(3_000);
+        const outcome = await result;
+        if (mode === 'recovered') {
+          expect(outcome).toMatchObject({ receipt: { status: 'confirmed', lastSyncId: 7 } });
+          expect(requests).toHaveLength(2);
+          expect(requests[1]).toEqual(requests[0]);
+          expect(requests[0]?.key).toBe('recover-exact');
+        } else {
+          expect(outcome).toMatchObject({ error: { code: mode === 'conflict' ? 'claim_conflict' : 'claim_lease_unavailable' } });
+          expect(requests).toHaveLength(mode === 'persistent' ? 3 : 1);
+        }
+      } finally { jest.useRealTimers(); }
+    },
+  );
 
   it('returns the stateless HTTP facade (typed model proxies + protocol members)', () => {
     const c = makeViaAblo();
@@ -358,7 +419,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     });
   });
 
-  it('guards an update with the exact returned row passed through reads', async () => {
+  it('derives guarded update and delete watermarks from the exact returned row', async () => {
     const mutationBodies: Record<string, unknown>[] = [];
     let reads = 0;
     const c = Ablo({
@@ -393,6 +454,19 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
             ops: 1,
           }));
         }
+        if (method === 'DELETE' && path === '/api/v1/models/items/item-1') {
+          mutationBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt',
+            clientTxId: 'guarded-delete',
+            serverTxId: 'server-guarded-delete',
+            success: true,
+            authority: TEST_AUTHORITY,
+            status: 'confirmed',
+            ...COMMIT_TIMES, lastSyncId: 19,
+            ops: 1,
+          }));
+        }
         return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
       },
     });
@@ -404,14 +478,29 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       id: 'item-1',
       data: { status: 'done' },
       idempotencyKey: 'guarded-update',
-      reads: [item!],
+      ifUnchanged: item!,
+    });
+    const updated = await c.items.read({ id: 'item-1' });
+    await c.items.delete({
+      id: 'item-1',
+      idempotencyKey: 'guarded-delete',
+      ifUnchanged: updated!,
     });
 
     expect(mutationBodies).toEqual([
       expect.objectContaining({
-        reads: [{ model: 'items', id: 'item-1', readAt: 17 }],
+        readAt: 17,
+      }),
+      expect.objectContaining({
+        readAt: 18,
       }),
     ]);
+
+    await expect(c.items.update({
+      id: 'item-1',
+      data: { status: 'invalid' },
+      ifUnchanged: { ...item! },
+    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'ifUnchanged' });
   });
 
   it('keeps get observational and read guardable', async () => {

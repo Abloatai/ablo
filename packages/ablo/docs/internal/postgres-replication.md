@@ -62,3 +62,6 @@ Unit tests live beside the implementation in `replication/postgres/__tests__`. R
 ## Operations
 
 Registration is the enable signal. `startPostgresReplication` starts the fleet after the server begins listening; `postgresReplicationReady` is drained during graceful shutdown. Use `docs/runbooks/connect-customer-database-postgres-replication.md` for source setup and live verification.
+
+Connection reuse, revision refresh and teardown are documented in
+[replication reconciliation](../../../../docs/ops/postgres-replication-reconciliation.md).

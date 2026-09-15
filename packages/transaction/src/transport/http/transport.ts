@@ -567,13 +567,19 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           return await performRequest(path, init, skipReady, retryDeadline ?? undefined);
         } catch (error) {
           const capacity = error instanceof AbloError && error.code === 'instance_at_capacity';
-          const retryAfterSeconds = capacity ? error.retryAfterSeconds : undefined;
+          const coordination = error instanceof AbloError && error.code === 'claim_lease_unavailable'
+            && retryDeadline !== null && Boolean(init.idempotencyKey)
+            && (path === '/v1/commits' || path.startsWith('/v1/models/'));
+          const retryAfterSeconds = capacity || coordination ? error.retryAfterSeconds : undefined;
           if (retryAfterSeconds === undefined) throw error;
 
           // Admission rejects before the route runs, so replaying this exact
           // request is safe even for POST. Keep the retry below the public
           // operation: a held-claim write must not unwind, release its lease,
           // re-read different data, and then reuse the old idempotency key.
+          // Coordination recovery additionally requires an idempotent commit
+          // and a finite deadline. Never retry ambiguous failures or conflicts
+          // here, and never widen a claim or rebuild the sealed request.
           const delayMs = retryAfterSeconds * 1_000;
           if (retryDeadline !== null && Date.now() + delayMs >= retryDeadline) throw error;
           await waitForHttpRetry(delayMs, init.signal ?? undefined);

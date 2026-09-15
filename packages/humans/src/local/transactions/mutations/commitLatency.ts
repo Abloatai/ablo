@@ -36,7 +36,7 @@ export interface CommitEventSource {
 
 /** One completed commit, broken into its local and remote halves. */
 export interface CommitLatencySample {
-  /** The commit's `clientTxId`, identical to its transaction id. */
+  /** Local transaction id; for atomic commits this is also the wire clientTxId. */
   clientTxId: string;
   /** Milliseconds sealing the durable envelope locally. */
   sealMs: number;
@@ -98,6 +98,8 @@ export function observeCommitLatency(
   const handleStaging = (payload: unknown): void => {
     const id = readClientTxId(payload);
     if (id === null) return;
+    // Retain the first seal attempt across retries rather than hiding its wait.
+    if (pending.has(id)) return;
     // Map preserves insertion order, so the first key is the stalest entry.
     if (pending.size >= MAX_PENDING_COMMITS) {
       const oldest = pending.keys().next();
@@ -111,7 +113,7 @@ export function observeCommitLatency(
     if (id === null) return;
     const timing = pending.get(id);
     if (timing === undefined) return;
-    timing.sealedAt = nowMs();
+    timing.sealedAt ??= nowMs();
   };
 
   const handleCompleted = (payload: unknown): void => {
@@ -149,6 +151,10 @@ export function observeCommitLatency(
 
   source.on('commit:staging', handleStaging);
   source.on('commit:created', handleCreated);
+  // Model batches share an envelope, but confirmation belongs to each local
+  // transaction. Restored envelopes have no observed seal and emit no sample.
+  source.on('model:sealing', handleStaging);
+  source.on('model:sealed', handleCreated);
   source.on('commit:seal_failed', handleSealFailed);
   source.on('transaction:completed', handleCompleted);
   source.on('transaction:failed', handleFailed);
@@ -156,6 +162,8 @@ export function observeCommitLatency(
   return () => {
     source.off('commit:staging', handleStaging);
     source.off('commit:created', handleCreated);
+    source.off('model:sealing', handleStaging);
+    source.off('model:sealed', handleCreated);
     source.off('commit:seal_failed', handleSealFailed);
     source.off('transaction:completed', handleCompleted);
     source.off('transaction:failed', handleFailed);

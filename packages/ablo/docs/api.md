@@ -14,9 +14,10 @@ each other.
 
 Three things to know before the method list. **`get` observes; `read` declares.**
 Both fetch one current row, but only the exact object returned by `read({ id })`
-can be carried in a mutation's `reads` array. If it changed, that mutation does
-not land. `get({ id })` and `list({ where })` are ordinary queries with no stale
-guard. **Local reads do not fetch.** Put `local.` in front of a query and
+can be passed as `ifUnchanged` or carried in a mutation's `reads` array. If it
+changed, that mutation does not land. A scoped `read` returns `undefined` for
+both missing and hidden ids. `get({ id })` and `list({ where })` are ordinary
+queries with no stale guard. **Local reads do not fetch.** Put `local.` in front of a query and
 you get the same read restricted to what is already here, which is why it can
 return a value rather than a promise: `local.get(id)`, `local.list({ where })`,
 `local.count({ where })`. Use those in render, after data has synced.
@@ -46,7 +47,7 @@ if (!report) throw new Error('Row not found');
 await ablo.weatherReports.update({
   id: 'report_stockholm',
   data: { status: 'ready' },
-  reads: [report],
+  ifUnchanged: report,
 });
 ```
 
@@ -257,8 +258,8 @@ empty value to move to.
 
 ## Guarded Writes
 
-Use `read` when a write depends on the row's current state, then pass that exact
-row in `reads`:
+Use `read` when an update or delete depends on the row's current state, then
+pass that exact row as `ifUnchanged`:
 
 ```ts
 const report = await ablo.weatherReports.read({ id: 'report_stockholm' });
@@ -267,7 +268,7 @@ if (!report) throw new Error('report not found');
 await ablo.weatherReports.update({
   id: report.id,
   data: { status: 'ready' },
-  reads: [report],
+  ifUnchanged: report,
 });
 ```
 
@@ -276,13 +277,15 @@ write waits for authoritative confirmation.
 
 If the row changed after `read`, the write rejects with
 `AbloStaleContextError`. Ablo retains only model, id, and the read watermark as
-evidence; it does not record the row contents. A write without `reads` is an
-intentional unconditional assignment.
+evidence; it does not record the row contents. A write without `ifUnchanged` or
+`reads` is an intentional unconditional assignment. Use `reads` for additional
+rows that also influenced the write.
 
 Write options:
 
 | Option | Purpose |
 |---|---|
+| `ifUnchanged` | Exact target row returned by `read`; guards an update or delete. |
 | `reads` | Exact rows returned by `read` that the mutation depends on. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
 | `timeout` | Maximum time to wait for the write call. |

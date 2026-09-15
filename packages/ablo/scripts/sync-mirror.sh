@@ -15,6 +15,12 @@
 #
 set -euo pipefail
 
+[[ "${RELEASE_LINEAR_URL:-}" =~ ^https://linear\.app/abloatai/issue/(ABL-[0-9]+)/[a-z0-9-]+$ ]] || {
+  echo 'error: RELEASE_LINEAR_URL must name the actual release issue' >&2
+  exit 1
+}
+RELEASE_ISSUE="${BASH_REMATCH[1]}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MONOREPO_ROOT="$(cd "$PKG_DIR/../.." && pwd)"
@@ -59,7 +65,7 @@ if git -C "$MIRROR_DIR" diff --cached --quiet; then
   echo "Mirror already matches @abloatai/ablo@$VERSION — nothing to sync."
   exit 0
 fi
-git -C "$MIRROR_DIR" commit -m "release: @abloatai/ablo@$VERSION" --quiet
+git -C "$MIRROR_DIR" commit -m "$RELEASE_ISSUE: release: @abloatai/ablo@$VERSION" -m "Linear: $RELEASE_LINEAR_URL" --quiet
 
 echo "Synced @abloatai/ablo@$VERSION into $MIRROR_DIR"
 echo "To publish:  (cd \"$MIRROR_DIR\" && git push origin main)"

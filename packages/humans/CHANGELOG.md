@@ -1,5 +1,13 @@
 # @abloatai/humans
 
+## 0.65.0
+
+### Minor Changes
+
+- Add first-class guarded update and delete options, make subject-scoped point
+  reads optional without revealing hidden rows, and report write races with
+  stable conflict errors and safe capability metadata.
+
 ## 0.64.5
 
 ### Patch Changes

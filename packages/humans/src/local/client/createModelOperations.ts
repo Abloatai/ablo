@@ -14,6 +14,7 @@
 import { autorun } from 'mobx';
 import {
   AbloClaimedError,
+  AbloStaleContextError,
   AbloValidationError,
   toAbloError,
 } from '@abloatai/transaction/errors';
@@ -49,7 +50,10 @@ import type {
   CommitCreateOptions,
   CommitReceipt,
 } from '@abloatai/transaction/client/resources/httpResources';
-import type { HttpModelMutationParams } from '@abloatai/transaction/transport/http';
+import type {
+  HttpGuardedMutationParams,
+  HttpModelMutationParams,
+} from '@abloatai/transaction/transport/http';
 import {
   collectModelList,
   modelList,
@@ -154,6 +158,7 @@ import { modelEventInputSchema } from '@abloatai/transaction/collaboration';
 import {
   capturePointRead,
   prepareReadSet,
+  targetGuardForRow,
   type ReadSetContext,
 } from '@abloatai/transaction/internal/read-set';
 
@@ -684,19 +689,22 @@ export function createModelOperations<T, C>(
     typeof (value as { release?: unknown }).release === 'function';
 
   const preparedMutation = (
-    params:
-      | ModelCreateParams<T, C>
-      | ModelUpdateParams<T, C>
-      | ModelDeleteParams<T, C>,
+    params: {
+      readonly idempotencyKey?: string | null;
+      readonly label?: string;
+      readonly readAt?: number;
+      readonly reads?: readonly unknown[] | null;
+    },
   ): MutationOptions => {
     const prepared = prepareReadSet(
       readSetContext,
       readSetClientIdentity,
-      undefined,
+      params.readAt,
       params.idempotencyKey,
       params.reads,
     );
     const rest: MutationOptions = {
+      ...(prepared.readAt !== undefined ? { readAt: prepared.readAt } : {}),
       ...(prepared.idempotencyKey !== undefined
         ? { idempotencyKey: prepared.idempotencyKey }
         : params.idempotencyKey !== undefined
@@ -705,15 +713,29 @@ export function createModelOperations<T, C>(
       ...(params.label !== undefined ? { label: params.label } : {}),
       ...(prepared.reads !== undefined
         ? { reads: prepared.reads === null ? null : [...prepared.reads] }
-        : params.reads !== undefined
-          ? { reads: params.reads }
-          : {}),
+        : {}),
     };
     // The write-options schema — the runtime twin of the compile-time params.
     // Catches plain-JavaScript callers at the call site with a typed error
     // instead of a silent no-op or a server 400.
     assertWriteOptions(rest, `${schemaKey} write`);
     return rest;
+  };
+
+  const guardedMutation = <P extends { readonly ifUnchanged?: unknown }>(
+    params: P,
+  ): Omit<P, 'ifUnchanged'> & { readonly readAt?: number } => {
+    if (params.ifUnchanged === undefined) return params;
+    const { ifUnchanged, ...rest } = params;
+    return {
+      ...rest,
+      ...targetGuardForRow(
+        readSetContext,
+        readSetClientIdentity,
+        wireModel,
+        ifUnchanged,
+      ),
+    };
   };
 
   const releaseClaim = async (claimId: string): Promise<void> => {
@@ -1547,7 +1569,9 @@ export function createModelOperations<T, C>(
     update: ((): ModelOperations<T, C>['update'] => {
       const updateImpl = guardWrite(
         async (
-          arg: ModelUpdateParams<T, C> | string,
+          arg:
+            | HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>
+            | string,
           updater?: ModelUpdater<T>,
           contention?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
         ): Promise<T | undefined> => {
@@ -1634,7 +1658,7 @@ export function createModelOperations<T, C>(
             },
           });
         }
-        const params = arg;
+        const params = guardedMutation(arg);
         // Named before anything reads it. Without this the row lookup below
         // reports `Entity not found: Model/undefined`, which sends the reader
         // looking for a missing row rather than at the unaddressed write.
@@ -1659,6 +1683,12 @@ export function createModelOperations<T, C>(
         }
         const { id } = params;
         const model = ownRowOrThrow(id);
+        if (!model && params.readAt !== undefined) {
+          throw new AbloStaleContextError(
+            `Update rejected: ${registeredModelName}/${id} changed since read. Re-read and retry.`,
+            { code: 'stale_context', httpStatus: 409 },
+          );
+        }
         if (!model)
           throw new AbloValidationError(
             `Entity not found: ${registeredModelName}/${id}`,
@@ -1696,14 +1726,18 @@ export function createModelOperations<T, C>(
         return updated;
         },
       );
-      function update(params: ModelUpdateParams<T, C>): Promise<T>;
+      function update(
+        params: HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>,
+      ): Promise<T>;
       function update(
         id: string,
         updater: ModelUpdater<T>,
         options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
       ): Promise<T | undefined>;
       function update(
-        arg: ModelUpdateParams<T, C> | string,
+        arg:
+          | HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>
+          | string,
         updater?: ModelUpdater<T>,
         contention?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
       ): Promise<T | undefined> {
@@ -1712,7 +1746,10 @@ export function createModelOperations<T, C>(
       return update;
     })(),
 
-    delete: guardWrite(async (params: ModelDeleteParams<T, C>): Promise<void> => {
+    delete: guardWrite(async (
+      input: HttpGuardedMutationParams<ModelDeleteParams<T, C>, T>,
+    ): Promise<void> => {
+      const params = guardedMutation(input);
       // Before the idempotent "ensure absent" below can read this as a row that
       // is simply not here. An unaddressed delete is a mistake, not an absence.
       assertWriteTarget('delete', registeredModelName, params.id);
@@ -1745,6 +1782,12 @@ export function createModelOperations<T, C>(
       // HTTP client and makes delete safe to retry or race (two actors deleting
       // the same row).
       if (!model) {
+        if (params.readAt !== undefined) {
+          throw new AbloStaleContextError(
+            `Delete rejected: ${registeredModelName}/${id} changed since read. Re-read and retry.`,
+            { code: 'stale_context', httpStatus: 409 },
+          );
+        }
         const handle = isClaimHandle(params.claim) ? params.claim : undefined;
         await settleClaimsAfterWrite(id, handle);
         return;

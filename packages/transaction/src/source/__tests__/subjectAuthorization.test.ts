@@ -33,24 +33,24 @@ function change(operations: readonly Operation[]): ChangeSet {
 }
 
 describe('source adapter subject authorization', () => {
-  it('filters lists, but returns a typed denial for a known foreign point load', () => {
+  it('makes missing and foreign point loads indistinguishable', () => {
     const rows: Row[] = [
       { id: 'own', workspaceId: 'a', title: 'own' },
       { id: 'foreign', workspaceId: 'b', title: 'foreign' },
     ];
     expect(authorizeSourceRead(schema, request('list'), rows)).toEqual([rows[0]]);
-    expect(() => authorizeSourceRead(schema, request('load'), [rows[1]!]))
-      .toThrow(expect.objectContaining({ code: 'capability_scope_denied', httpStatus: 403 }));
+    expect(authorizeSourceRead(schema, request('load'), [rows[1]!])).toEqual([]);
+    expect(authorizeSourceRead(schema, request('load'), [])).toEqual([]);
   });
 
-  it('allows same-subject reads and fails closed without trusted groups', () => {
+  it('allows same-subject reads and hides rows without trusted groups', () => {
     const own = { id: 'own', workspaceId: 'a', title: 'own' };
     expect(authorizeSourceRead(schema, request('load'), [own])).toEqual([own]);
-    expect(() => authorizeSourceRead(
+    expect(authorizeSourceRead(
       schema,
       { kind: 'load', model: 'docs', id: 'own' },
       [own],
-    )).toThrow(expect.objectContaining({ code: 'capability_scope_denied' }));
+    )).toEqual([]);
   });
 
   it('preflights every operation before the adapter transaction mutates anything', async () => {
@@ -102,5 +102,27 @@ describe('source adapter subject authorization', () => {
       { code },
       { type: 'CREATE', model: 'docs', id: 'same', input: { workspaceId: 'a' } },
     )).toThrow(expect.objectContaining({ code: 'entity_already_exists', httpStatus: 409 }));
+  });
+
+  it('hides foreign CREATE collisions and reports authorized collisions', async () => {
+    await expect(authorizeSourceChange(schema, change([{
+      type: 'CREATE', model: 'docs', id: 'foreign',
+      input: { workspaceId: 'a', title: 'collision' },
+    }]), async () => ({ id: 'foreign', workspaceId: 'b', title: 'hidden' })))
+      .rejects.toMatchObject({ code: 'capability_scope_denied', httpStatus: 403 });
+
+    await expect(authorizeSourceChange(schema, change([{
+      type: 'CREATE', model: 'docs', id: 'own',
+      input: { workspaceId: 'a', title: 'collision' },
+    }]), async () => ({ id: 'own', workspaceId: 'a', title: 'own' })))
+      .rejects.toMatchObject({ code: 'entity_already_exists', httpStatus: 409 });
+  });
+
+  it('reports removed guarded targets as stale', async () => {
+    await expect(authorizeSourceChange(schema, change([{
+      type: 'UPDATE', model: 'docs', id: 'gone', readAt: 41,
+      input: { title: 'late' },
+    }]), async () => null))
+      .rejects.toMatchObject({ code: 'stale_context', httpStatus: 409 });
   });
 });

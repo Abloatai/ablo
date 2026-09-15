@@ -37,6 +37,24 @@ describe('observeCommitLatency', () => {
     stop();
   });
 
+  it('keeps model seal retries in one timing and emits only on confirmation', () => {
+    const { source, samples, stop } = setup();
+    const clock = jest.spyOn(performance, 'now').mockReturnValue(10);
+    try {
+      source.emit('model:sealing', { clientTxId: 'model-tx' });
+      clock.mockReturnValue(20);
+      source.emit('model:sealing', { clientTxId: 'model-tx' });
+      source.emit('model:sealed', { clientTxId: 'model-tx' });
+      expect(samples).toHaveLength(0);
+      clock.mockReturnValue(30);
+      source.emit('transaction:completed', { id: 'model-tx' });
+      source.emit('transaction:completed', { id: 'model-tx' });
+      expect(samples).toEqual([{ clientTxId: 'model-tx', sealMs: 10, ackMs: 10, totalMs: 20 }]);
+    } finally { clock.mockRestore(); stop(); }
+    expect(source.listenerCount('model:sealing')).toBe(0);
+    expect(source.listenerCount('model:sealed')).toBe(0);
+  });
+
   it('splits the span so seal and ack sum to the total', () => {
     const { source, samples, stop } = setup();
 

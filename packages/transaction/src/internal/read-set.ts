@@ -10,6 +10,7 @@ export {
   prepareReadSet,
   publishCommitRecord,
   readEvidenceBinding,
+  targetGuardForRow,
 } from '../commit/readSetContext.js';
 export { recordWebSocketCommitReceipt } from '../commit/recordRuntime.js';
 export type {

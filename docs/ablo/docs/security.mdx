@@ -29,6 +29,13 @@ participant credentials when independently operating agents must contend.
 The credential also determines project, branch, organization, and allowed
 operations. Callers cannot broaden that authority by adding ids to a request.
 
+A subject-scoped point read returns the same empty result for a missing row and
+a row outside the caller's subject scope. Strict create is the narrow exception:
+if the caller supplies an id that already exists, Ablo returns
+`entity_already_exists` even when that row is outside its subject scope. This
+discloses only the identifier collision required by strict-create semantics;
+the existing row and its subject data remain hidden.
+
 ## Treat claims as coordination, not authorization
 
 A claim says who currently owns a piece of work. It does not grant permission to

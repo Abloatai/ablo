@@ -60,6 +60,7 @@ import {
   createReadSetContext,
   kReadEvidence,
   prepareReadSet,
+  targetGuardForRow,
   type ReadSetContext,
 } from '../../commit/readSetContext.js';
 import {
@@ -110,6 +111,11 @@ export type CapturedRow<T = unknown> = T & {
 /** Exact returned rows or low-level canonical dependencies accepted by `reads`. */
 export type HttpModelMutationParams<P> = Omit<P, 'reads'> & {
   readonly reads?: readonly (ReadDependency | CapturedRow)[] | null;
+};
+
+/** A target-row write that can derive its compare-and-swap watermark from `read`. */
+export type HttpGuardedMutationParams<P, T> = HttpModelMutationParams<P> & {
+  readonly ifUnchanged?: CapturedRow<T>;
 };
 
 /**
@@ -175,7 +181,8 @@ export interface HttpModelClient<T, C = T> {
    * they were given. One rejected row declines the batch.
    */
   create(params: HttpModelMutationParams<ModelCreateManyParams<C>>): Promise<T[]>;
-  update(params: HttpModelMutationParams<ModelUpdateParams<T, C>>): Promise<T>;
+  /** Pass `ifUnchanged: row` to reject if the exact row returned by `read` moved. */
+  update(params: HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>): Promise<T>;
   /**
    * Updates a row with a function of its latest value — `update(id, current =>
    * next)`, the data-layer equivalent of a `setState(prev => next)` reducer. The
@@ -190,7 +197,8 @@ export interface HttpModelClient<T, C = T> {
     updater: ModelUpdater<T>,
     options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
   ): Promise<T | undefined>;
-  delete(params: HttpModelMutationParams<ModelDeleteParams<T, C>>): Promise<void>;
+  /** Pass `ifUnchanged: row` to reject if the exact row returned by `read` moved. */
+  delete(params: HttpGuardedMutationParams<ModelDeleteParams<T, C>, T>): Promise<void>;
   claim: HttpClaimApi<T, C>;
 }
 
@@ -347,14 +355,30 @@ function createHttpModelClient<T, C = T>(
     };
   }
 
-  function update(params: HttpModelMutationParams<ModelUpdateParams<T, C>>): Promise<T>;
+  function guardedMutation<P extends { readonly ifUnchanged?: unknown }>(params: P) {
+    if (params.ifUnchanged === undefined) return params;
+    const { ifUnchanged, ...rest } = params;
+    return {
+      ...rest,
+      ...targetGuardForRow(
+        readSetContext,
+        clientIdentity,
+        modelName,
+        ifUnchanged,
+      ),
+    };
+  }
+
+  function update(params: HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>): Promise<T>;
   function update(
     id: string,
     updater: ModelUpdater<T>,
     options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
   ): Promise<T | undefined>;
   async function update(
-    arg: HttpModelMutationParams<ModelUpdateParams<T, C>> | string,
+    arg:
+      | HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>
+      | string,
     updater?: ModelUpdater<T>,
     options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
   ): Promise<T | undefined> {
@@ -403,12 +427,13 @@ function createHttpModelClient<T, C = T>(
       return receipt === undefined ? undefined : requireUpdatedRow(arg);
     }
 
+    const params = guardedMutation(arg);
     await protocol.update({
-      ...preparedMutation(arg),
-      id: arg.id,
-      data: arg.data,
+      ...preparedMutation(params),
+      id: params.id,
+      data: params.data,
     });
-    return requireUpdatedRow(arg.id);
+    return requireUpdatedRow(params.id);
   }
 
   const get = async (
@@ -521,7 +546,8 @@ function createHttpModelClient<T, C = T>(
     create: createModel,
     update,
     async delete(params): Promise<void> {
-      await protocol.delete({ ...preparedMutation(params), id: params.id });
+      const resolved = guardedMutation(params);
+      await protocol.delete({ ...preparedMutation(resolved), id: resolved.id });
     },
     claim,
   };

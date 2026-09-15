@@ -144,7 +144,7 @@ async function signedPost(
 }
 
 describe('dataSource', () => {
-  it('preauthorizes hand-written endpoint commits before invoking the custom handler', async () => {
+  it('rejects foreign strict-create collisions before invoking the custom endpoint handler', async () => {
     const subjectSchema = defineSchema({
       docs: model(
         { workspaceId: z.string().min(1), title: z.string() },

@@ -599,6 +599,10 @@ export interface RequiredCapability {
  */
 export class CapabilityError extends AbloPermissionError {
   readonly requiredCapability?: RequiredCapability;
+  /** Safe operation context supplied by the enforcing boundary. */
+  readonly model?: string;
+  readonly action?: string;
+  readonly enforcementOrigin?: string;
 
   constructor(
     code: 'capability_scope_denied' | 'capability_invalid',
@@ -618,6 +622,11 @@ export class CapabilityError extends AbloPermissionError {
     this.name = 'CapabilityError';
     if (requiredCapability !== undefined) {
       this.requiredCapability = requiredCapability;
+    }
+    if (typeof options?.details?.model === 'string') this.model = options.details.model;
+    if (typeof options?.details?.action === 'string') this.action = options.details.action;
+    if (typeof options?.details?.enforcementOrigin === 'string') {
+      this.enforcementOrigin = options.details.enforcementOrigin;
     }
   }
 }

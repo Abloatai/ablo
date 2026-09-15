@@ -31,6 +31,13 @@ async function capturedRowsGuideReads(): Promise<void> {
     reads: [captured],
   });
 
+  await client.items.update({
+    id: 'item-1',
+    data: { status: 'done' },
+    ifUnchanged: captured,
+  });
+  await client.items.delete({ id: 'item-1', ifUnchanged: captured });
+
   await client.items.update(
     'item-2',
     (current) => ({ status: current.status === 'todo' ? 'doing' : 'done' }),

@@ -15,16 +15,34 @@ Ablo does not put a configurable stale mode between your code and a
 commit. The public choice is visible at the call site:
 
 - `get` and `list` observe state. They do not create a write premise.
-- `read` returns a row that can be passed to a mutation in `reads`.
-- a mutation with `reads` rejects with `AbloStaleContextError` if any declared
-  premise changed;
-- a mutation without `reads` is an unconditional, last-write-wins assignment
-  when no active claim applies.
+- `read` returns a row that can guard its own update or delete with
+  `ifUnchanged`, or another mutation through `reads`.
+- a mutation with `ifUnchanged` or `reads` rejects with
+  `AbloStaleContextError` if any declared premise changed;
+- a mutation without either option is an unconditional, last-write-wins
+  assignment when no active claim applies.
 
 ## Guarded writes
 
-Use `read` for every row that materially influenced a decision, then pass the
-exact returned objects to the mutation:
+Use `read` for the target row, then pass the exact returned object as
+`ifUnchanged`:
+
+```ts
+const record = await ablo.records.read({ id });
+if (!record) return;
+
+await ablo.records.update({
+  id: record.id,
+  data: decide(record),
+  ifUnchanged: record,
+});
+```
+
+`read` returns `undefined` when the id is absent or outside the caller's
+subject scope. Those cases deliberately look identical, so the lookup cannot
+be used as an existence oracle.
+
+When other rows also influenced the decision, pass them in `reads`:
 
 ```ts
 const record = await ablo.records.read({ id });
@@ -34,14 +52,15 @@ if (!record || !rules) throw new Error('required input is missing');
 await ablo.records.update({
   id: record.id,
   data: decide(record, rules),
-  reads: [record, rules],
+  ifUnchanged: record,
+  reads: [rules],
 });
 ```
 
 Ablo records only the evidence needed for the check: model, id, and the
 watermark at which the row was read. It does not retain the row's contents.
-The exact object identity matters, so clones, fabricated rows, and rows from a
-different client are rejected locally.
+The exact object identity matters for `ifUnchanged` and `reads`, so clones,
+fabricated rows, and rows from a different client are rejected locally.
 
 The server validates every declared premise inside the write transaction. If
 one is stale, the entire mutation rejects before any write applies. Re-read,
@@ -65,8 +84,8 @@ try {
 
 ## Unguarded writes
 
-Use `get` or `list` when you only need to observe, and omit `reads` when the
-new value should win regardless of what was previously observed:
+Use `get` or `list` when you only need to observe, and omit `ifUnchanged` and
+`reads` when the new value should win regardless of what was previously observed:
 
 ```ts
 const visible = await ablo.records.get({ id });
@@ -105,6 +124,7 @@ Claims and stale reads answer different questions:
 
 | Mechanism | Lifetime | Question |
 |---|---|---|
+| `ifUnchanged` | One mutation | Is the target row still current? |
 | `reads` | One mutation | Is every input to this decision still current? |
 | claim | Slow work interval | Who may write this target while work is underway? |
 | database transaction | One apply | Can this physical change commit atomically? |
@@ -128,12 +148,12 @@ the same fixed result: stale rejects, fresh applies.
 Model `onChange` is not a stale-write disposition. It streams committed changes
 to a stateful WebSocket client. `context().onChange` has the narrower job of
 calling once when one of that context's exact reads changes; HTTP delivers it
-through a response held open for that listener. Neither replaces passing those
-same `reads` to create, update, or delete.
+through a response held open for that listener. Neither replaces passing target
+evidence through `ifUnchanged` or other premises through `reads`.
 
 ## Boundaries
 
 Concurrency control does not replace authorization, database constraints,
 transactions, or idempotency. The rule at the SDK boundary is intentionally
-small: `read` declares a dependency, `reads` enforces it, and omission means an
-unconditional write.
+small: `read` captures evidence, `ifUnchanged` or `reads` enforces it, and
+omission means an unconditional write.

@@ -51,6 +51,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "apikey_rotation_expired": {
+      "category": "auth",
+      "httpStatus": 401,
+      "retryable": false,
+      "surface": "wire",
+    },
     "auth_no_credentials": {
       "category": "auth",
       "httpStatus": 401,
@@ -1786,6 +1792,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "client",
     },
   },
-  "version": "2026-08-30",
+  "version": "2026-09-12",
 }
 `;

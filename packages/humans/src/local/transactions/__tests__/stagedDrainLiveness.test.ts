@@ -308,6 +308,8 @@ describe('staged-batch drain liveness', () => {
 
   it('an explicit drain takes staging ownership and seals a journal row once', async () => {
     const queue = syncClient.getMutationQueue();
+    const latencies: import('../mutations/commitLatency.js').CommitLatencySample[] = [];
+    const stopLatency = syncClient.onCommitLatency((sample) => latencies.push(sample));
     const queueAccess = mutationQueueTestAccess(queue);
     const scheduleCommit = queueAccess.scheduleCommit.bind(queueAccess);
     queueAccess.scheduleCommit = () => undefined;
@@ -338,6 +340,10 @@ describe('staged-batch drain liveness', () => {
     await confirmation;
     expect(calls).toHaveLength(1);
     expect(transaction?.status).toBe('completed');
+    expect(latencies).toHaveLength(1);
+    expect(latencies[0]?.clientTxId).toBe(transaction?.id);
+    expect(latencies[0]?.ackMs).toBeGreaterThanOrEqual(0);
+    stopLatency();
   });
 
   it('an executing transaction cannot be re-enqueued for a second seal', async () => {

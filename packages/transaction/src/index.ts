@@ -33,6 +33,7 @@ export type {
   AbloHttpClientOptions,
   AbloWebSocketClient,
   CapturedRow,
+  HttpGuardedMutationParams,
   HttpModelClient,
   HttpModelMutationParams,
 } from './transport/http/client.js';

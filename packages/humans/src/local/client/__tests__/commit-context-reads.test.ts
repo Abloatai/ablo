@@ -161,6 +161,13 @@ describe('reactive/WebSocket atomic commit context reads', () => {
         wait: 'queued',
       });
 
+      await client.notes.update({
+        id: 'note-2',
+        data: { status: 'reviewed' },
+        ifUnchanged: premise,
+        idempotencyKey: 'ws-target-guard',
+      });
+
       const frames: unknown[] = sockets.flatMap((socket) =>
         socket.sent.map((raw) => JSON.parse(raw) as unknown),
       );
@@ -175,6 +182,16 @@ describe('reactive/WebSocket atomic commit context reads', () => {
       expect(commit?.payload).toMatchObject({
         clientTxId: 'ws-atomic-context-reads',
         reads: [{ model: 'notes', id: 'note-2', readAt: 61 }],
+      });
+      const guardedCommit = frames.find((frame): frame is { payload: unknown } => {
+        if (typeof frame !== 'object' || frame === null || !('payload' in frame)) return false;
+        const payload = frame.payload;
+        return typeof payload === 'object' && payload !== null &&
+          'clientTxId' in payload && payload.clientTxId === 'ws-target-guard';
+      });
+      expect(guardedCommit?.payload).toMatchObject({
+        clientTxId: 'ws-target-guard',
+        operations: [{ model: 'notes', id: 'note-2', readAt: 61 }],
       });
       await client.waitForFlush(1_000);
     } finally {

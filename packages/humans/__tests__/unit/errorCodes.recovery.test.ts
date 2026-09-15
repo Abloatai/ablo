@@ -21,6 +21,10 @@ describe('classifyRecovery — the recovery taxonomy', () => {
     expect(classifyRecovery('apikey_expired')).toBe('access_credential_expiry');
   });
 
+  it('stops when a rotated key reaches the end of its grace period', () => {
+    expect(classifyRecovery('apikey_rotation_expired')).toBe('auth_blocked');
+  });
+
   it('classifies a genuine login expiry as terminal session expiry', () => {
     expect(classifyRecovery('session_expired')).toBe('session_expiry');
   });

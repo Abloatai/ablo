@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-08-30';
+export const ERROR_CONTRACT_VERSION = '2026-09-12';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -239,6 +239,12 @@ export const ERROR_CODES = {
     false,
     'This ephemeral API key has expired. Mint a fresh key from your still-valid session and retry the request.',
     'access_credential_expiry'
+  ),
+  apikey_rotation_expired: wire(
+    'auth',
+    401,
+    false,
+    'This API key\'s rotation grace period has ended. Deploy its replacement key, then restart any runtime that reads the key from its environment.'
   ),
   apikey_missing: wire(
     'auth',

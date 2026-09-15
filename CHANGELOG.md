@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.65.0
+
+### Guarded writes make their premise explicit
+
+Update and delete operations now accept explicit guards tied to a prior read.
+Subject-scoped point reads can return no row without revealing hidden records,
+while write races report stable conflict errors and safe capability metadata.
+The concurrency guide explains the guards and their use in coordinated writes.
+
+### Brief coordination outages allow bounded HTTP recovery
+
+Idempotent HTTP writes now honour a server retry hint when claim coordination
+is temporarily unavailable. Retries retain the sealed request, idempotency key
+and original finite deadline; conflicts and unhinted rejections still return to
+the caller. Server admission checks are unchanged. The retry hint requires the
+companion sync-server rollout, and this package release does not certify
+dependency failover or deploy that server change to production.
+
+### Rotated credentials report their expiry
+
+Expired rotated API keys have a distinct error code, allowing callers to
+distinguish credential rotation from session recovery.
+
 ## 0.64.5
 
 ### Authoritative queries preserve freshness through reload

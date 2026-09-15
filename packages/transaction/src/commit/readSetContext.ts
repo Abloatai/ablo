@@ -66,6 +66,30 @@ export function evidenceForRow(
   return evidence?.client === binding.client ? evidence : undefined;
 }
 
+/** @internal Resolves one exact captured row into a same-model write target. */
+export function targetGuardForRow(
+  context: ReadSetContext | undefined,
+  client: ClientIdentity,
+  model: string,
+  row: unknown,
+): { readonly id: string; readonly readAt: number } {
+  const captured =
+    context && typeof row === 'object' && row !== null
+      ? context.getStore().byRow.get(row)
+      : undefined;
+  if (
+    captured?.client !== client ||
+    'group' in captured.entry ||
+    captured.entry.model !== model
+  ) {
+    throw new AbloValidationError(
+      '`ifUnchanged` must be the exact row returned by this model\'s `read` call.',
+      { code: 'write_options_invalid', param: 'ifUnchanged' },
+    );
+  }
+  return { id: captured.entry.id, readAt: captured.entry.readAt };
+}
+
 export interface PreparedReadSet {
   readonly readAt?: number;
   readonly reads?: readonly ReadDependency[] | null;

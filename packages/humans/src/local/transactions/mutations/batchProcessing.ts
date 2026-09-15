@@ -144,6 +144,9 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                   throw new Error('Cannot replay a model batch with inconsistent durable envelopes');
                 }
               } else {
+                for (const tx of batch) {
+                  ctx.emitCommitLifecycle('model:sealing', { clientTxId: tx.id });
+                }
                 durableEnvelope = await ctx.sealDurableCommit({
                   idempotencyKey: commitIdempotencyKey,
                   origin: 'model_batch',
@@ -156,6 +159,7 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                 });
                 for (const transaction of batch) {
                   transaction.durableEnvelope = durableEnvelope;
+                  ctx.emitCommitLifecycle('model:sealed', { clientTxId: transaction.id });
                 }
               }
               const operations = durableEnvelope.operations;

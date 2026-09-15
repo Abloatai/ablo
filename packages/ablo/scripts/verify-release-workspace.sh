@@ -48,3 +48,4 @@ fi
 grep -q 'publishing/verify-trusted-publishers.sh' packages/ablo/scripts/release.sh
 bash packages/ablo/scripts/publishing/__tests__/verify-trusted-publishers.test.sh
 bash packages/ablo/scripts/publishing/__tests__/verify-downloads.test.sh
+node --test packages/ablo/scripts/publishing/__tests__/release-issue.check.mjs

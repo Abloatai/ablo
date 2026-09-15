@@ -5,7 +5,7 @@ sidebar:
   icon: circle-alert
 ---
 
-Error contract version: `2026-08-30` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-09-12` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -58,6 +58,12 @@ The request arrived without an API key. Send one as `Authorization: Bearer <key>
 `HTTP 401` · not retryable
 
 This API key has been revoked and can no longer be used. Mint a new key from the dashboard.
+
+### apikey_rotation_expired
+
+`HTTP 401` · not retryable
+
+This API key's rotation grace period has ended. Deploy its replacement key, then restart any runtime that reads the key from its environment.
 
 ### auth_no_credentials
 

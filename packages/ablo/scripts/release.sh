@@ -27,6 +27,7 @@ PUBLIC_PACKAGES=(
 usage() {
   cat <<'EOF'
 Usage:
+  export RELEASE_LINEAR_URL=https://linear.app/abloatai/issue/ABL-N/task-slug
   bash packages/ablo/scripts/release.sh prepare
   bash packages/ablo/scripts/release.sh publish
   bash packages/ablo/scripts/release.sh publish-manual
@@ -51,6 +52,11 @@ EOF
 }
 
 require_clean_main() {
+  [[ "${RELEASE_LINEAR_URL:-}" =~ ^https://linear\.app/abloatai/issue/(ABL-[0-9]+)/[a-z0-9-]+$ ]] || {
+    echo 'error: RELEASE_LINEAR_URL must name the actual release issue' >&2
+    exit 1
+  }
+  RELEASE_ISSUE="${BASH_REMATCH[1]}"
   if [[ -n "$(git status --porcelain)" ]]; then
     echo "error: release requires a clean monorepo worktree" >&2
     git status --short >&2
@@ -184,7 +190,7 @@ prepare_release() {
   git add packages/ablo packages/transaction packages/humans \
     packages/cli docs/ablo .changeset .public-ablo package-lock.json \
     scripts/typesafety/public-surface-baseline.json
-  git commit -q -m "release(ablo): $new_version"
+  git commit -q -m "$RELEASE_ISSUE: release(ablo): $new_version" -m "Linear: $RELEASE_LINEAR_URL"
 
   # This is where the release date is stamped, and it is the ONLY place. Step 2
   # wrote the changelog page undated: the `release(ablo): x.y.z` commit did not
@@ -254,7 +260,7 @@ publish_release() {
     echo "error: monorepo version $version and mirror version $mirror_version differ" >&2
     exit 1
   fi
-  if [[ "$(git log -1 --format=%s)" != "release(ablo): $version" ]]; then
+  if [[ "$(git log -1 --format=%s)" != "$RELEASE_ISSUE: release(ablo): $version" ]]; then
     echo "error: HEAD is not the prepared release commit for $version" >&2
     exit 1
   fi
