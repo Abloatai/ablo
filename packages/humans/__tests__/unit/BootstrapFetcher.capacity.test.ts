@@ -23,6 +23,7 @@ describe('bootstrap capacity recovery', () => {
     await expect(result).resolves.toMatchObject({ lastSyncId: 340947 });
     expect(fetch).toHaveBeenCalledTimes(10);
     expect(new Set(fetch.mock.calls.map(([url]) => url)).size).toBe(1);
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: 'GET' });
   });
 
   it('waits for Retry-After and cancels without issuing another request', async () => {
@@ -62,5 +63,43 @@ describe('bootstrap capacity recovery', () => {
     const helper = new BootstrapFetcher({});
     await expect(helper.fetchBootstrapWithETag()).rejects.toMatchObject({ retryAfterSeconds: 10 });
     await expect(helper.fetchEntity('tasks', '1')).rejects.toMatchObject({ retryAfterSeconds: 10 });
+  });
+
+  it('sends large scopes in the body for paged and conditional bootstraps', async () => {
+    const groups = Array.from({ length: 100 }, (_, i) => `repository:${i}:${'x'.repeat(90)}`);
+    const fetch = jest.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(ready()));
+    const helper = new BootstrapFetcher({ baseUrl: 'https://example.com/api', syncGroups: groups, instantModels: ['tasks'] });
+
+    await helper.fetchBootstrap();
+    await helper.fetchBootstrapWithETag();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [url, init] of fetch.mock.calls) {
+      const requestUrl = url as string;
+      expect(requestUrl.length).toBeLessThan(8_000);
+      expect(requestUrl).toContain('models=tasks');
+      expect(requestUrl).not.toContain('syncGroups=');
+      expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ syncGroups: groups }) });
+    }
+  });
+
+  it('keeps per-model page URLs short with a large scope', async () => {
+    const groups = Array.from({ length: 100 }, (_, i) => `repository:${i}:${'x'.repeat(90)}`);
+    const fetch = jest.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      type: 'full', lastSyncId: 1, models: {}, timestamp: 1,
+    }))));
+    const helper = new BootstrapFetcher({
+      baseUrl: 'https://example.com/api', syncGroups: groups, instantModels: ['tasks', 'sourceHeads'],
+    });
+
+    await helper.fetchBootstrap();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [url, init] of fetch.mock.calls) {
+      const requestUrl = url as string;
+      expect(requestUrl.length).toBeLessThan(8_000);
+      expect(requestUrl).toContain('limit=5000');
+      expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ syncGroups: groups }) });
+    }
   });
 });

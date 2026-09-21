@@ -27,7 +27,7 @@ export interface SocketEventHost<TCollaboration extends EventMap<TCollaboration>
   onConnectionEvent?: (event: string) => void;
   updateSyncStatus(updates: Partial<SyncStatus>): void;
   processDeltaWithBatching(delta: SyncDelta): void;
-  applyDeltaFrame(deltas: SyncDelta[]): void;
+  applyDeltaFrame(deltas: SyncDelta[]): Promise<void>;
   handleBootstrapRequired(hint: BootstrapHint): void;
   handleBootstrapData(data: BootstrapDataEvent): void;
   performCredentialRefresh(): Promise<'refreshed' | 'session_error' | 'network_error'>;
@@ -77,7 +77,28 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
       // A catch-up/reconnect frame is already complete — apply it as ONE
       // atomic flush so the gallery re-renders once, not once per 50-delta
       // chunk. See `applyDeltaFrame`.
-      deps.applyDeltaFrame(deltas);
+      void deps.applyDeltaFrame(deltas).catch((error: unknown) => {
+        deps.updateSyncStatus({ state: 'error', error: error instanceof Error ? error : new Error(String(error)) });
+      });
+    });
+
+    let catchUpLane = Promise.resolve();
+    const onCatchUpChunk = deps.syncWebSocket.subscribe('catchup_chunk', (chunk) => {
+      catchUpLane = catchUpLane.then(async () => {
+        await deps.applyDeltaFrame(chunk.deltas);
+        // The raw position covers filtered rows too. Advance only after this
+        // chunk's visible rows are durable; replay is therefore idempotent.
+        deps.syncWebSocket.acknowledge(chunk.position);
+      });
+      void catchUpLane.catch((error: unknown) => {
+        deps.updateSyncStatus({ state: 'error', error: error instanceof Error ? error : new Error(String(error)) });
+      });
+    });
+    const onCatchUpEnd = deps.syncWebSocket.subscribe('catchup_end', (end) => {
+      void catchUpLane.then(() => {
+        deps.syncWebSocket.acknowledge(end.currentSyncId);
+        deps.syncWebSocket.completeCatchUp(end);
+      }).catch(() => undefined);
     });
 
     // Bootstrap events
@@ -181,7 +202,7 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
 
     deps.disposers.push(
       onConnected, onDisconnected, onReconnecting,
-      onDelta, onDeltaBatch, onBootstrapRequired,
+      onDelta, onDeltaBatch, onCatchUpChunk, onCatchUpEnd, onBootstrapRequired,
       onBootstrapData,
       onError, onSessionError, onHandshakeFailed, onReconnectFailed,
       () => { deps.areaOfInterest.dispose(); },

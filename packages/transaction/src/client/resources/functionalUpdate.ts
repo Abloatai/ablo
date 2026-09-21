@@ -81,10 +81,12 @@ function backoffMs(attempt: number): number {
  * and retry" rather than a genuine failure to surface. These are the
  * optimistic-concurrency signals the functional update reconciles against:
  *   - `stale_context` — the `readAt` watermark was overtaken by a concurrent write
+ *   - `decision_contended` — another transaction is evaluating the same decision row
  *   - `claim_lost`    — the write's holder lost its lease
  *   - `claim_queued`  — a holder is actively editing the row right now
  */
 export function isReconcilableConflict(err: unknown): boolean {
+  if (err instanceof AbloError && err.code === 'decision_contended') return true;
   if (err instanceof AbloStaleContextError) return true;
   if (err instanceof AbloClaimedError) {
     return err.code === 'claim_lost' || err.code === 'claim_queued';
@@ -104,7 +106,7 @@ export interface ReconcileTransport<T, R> {
   readFresh: () => Promise<{ readonly data: T | null | undefined; readonly stamp: number }>;
   /**
    * Write the computed patch as a compare-and-swap against `readAt`. It must
-   * throw a reconcilable conflict (`stale_context` or `claim_*`) when the
+   * throw a reconcilable conflict (`stale_context`, `decision_contended`, or `claim_*`) when the
    * watermark was overtaken — that rejection is what drives the next reconcile
    * round.
    */

@@ -132,6 +132,8 @@ describe('SyncWebSocket wire delta validation (T1.2)', () => {
     spy: SpyObservability;
     deltas: SyncDelta[];
     batches: SyncDelta[][];
+    chunks: { position: number; deltas: SyncDelta[] }[];
+    completions: number[];
   } {
     const spy = new SpyObservability();
     installContext(spy);
@@ -146,10 +148,27 @@ describe('SyncWebSocket wire delta validation (T1.2)', () => {
     const fakeHolder = ws as unknown as { ws: FakeWebSocket };
     const deltas: SyncDelta[] = [];
     const batches: SyncDelta[][] = [];
+    const chunks: { position: number; deltas: SyncDelta[] }[] = [];
+    const completions: number[] = [];
     ws.subscribe('delta', (d) => deltas.push(d));
     ws.subscribe('delta_batch', (b) => batches.push(b));
-    return { ws, fake: fakeHolder.ws, spy, deltas, batches };
+    ws.subscribe('catchup_chunk', (chunk) => chunks.push(chunk));
+    ws.subscribe('catchup_end', (end) => completions.push(end.currentSyncId));
+    return { ws, fake: fakeHolder.ws, spy, deltas, batches, chunks, completions };
   }
+
+  it('accepts one ordered catch-up exchange and ignores replayed or foreign chunks', () => {
+    const { fake, chunks, completions } = connectFake();
+    deliver(fake, frame('catchup_begin', { exchangeId: 'x', fromSyncId: 4, currentSyncId: 9 }));
+    deliver(fake, frame('catchup_chunk', { exchangeId: 'other', sequence: 0, position: 5, deltas: [] }));
+    deliver(fake, frame('catchup_chunk', { exchangeId: 'x', sequence: 0, position: 7, deltas: [serverShapedDelta({ id: 7 })] }));
+    deliver(fake, frame('catchup_chunk', { exchangeId: 'x', sequence: 0, position: 7, deltas: [serverShapedDelta({ id: 7 })] }));
+    deliver(fake, frame('catchup_end', { exchangeId: 'x', currentSyncId: 9, chunks: 1 }));
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ position: 7, deltas: [{ id: 7 }] });
+    expect(completions).toEqual([9]);
+  });
 
   it('emits a server-shaped delta (null transactionId, nested createdBy tolerated)', () => {
     const { fake, deltas, spy } = connectFake();

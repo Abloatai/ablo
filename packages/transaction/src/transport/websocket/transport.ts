@@ -196,6 +196,10 @@ export interface CoreSyncEventMap {
   reconnecting: [{ attempt: number; delay: number }];
   delta: [ClientSyncDelta];
   delta_batch: [ClientSyncDelta[]];
+  catchup_begin: [{ exchangeId: string; fromSyncId: number; currentSyncId: number }];
+  catchup_chunk: [{ exchangeId: string; sequence: number; position: number; deltas: ClientSyncDelta[] }];
+  catchup_end: [{ exchangeId: string; currentSyncId: number; chunks: number }];
+  catchup_complete: [{ exchangeId: string; currentSyncId: number; chunks: number }];
   bootstrap_required: [BootstrapHint];
   bootstrap_data: [BootstrapDataEvent];
   presence_snapshot: [PresenceSnapshot];
@@ -496,6 +500,9 @@ export class WsTransport<
       collaborationEventTypes: this.collaborationEventTypes,
       handleDelta: (delta) => { this.handleDelta(delta); },
       handleSyncResponse: (payload) => { this.handleSyncResponse(payload); },
+      handleCatchUpBegin: (payload) => { this.handleCatchUpBegin(payload); },
+      handleCatchUpChunk: (payload) => { this.handleCatchUpChunk(payload); },
+      handleCatchUpEnd: (payload) => { this.handleCatchUpEnd(payload); },
       handleBootstrapResponse: (payload) => { this.handleBootstrapResponse(payload); },
       establishPresenceSession: (value) => {
         this.options.presenceSession?.establish(value);
@@ -526,6 +533,21 @@ export class WsTransport<
   /** A `sync_response` frame. Meaningless without a resume cursor to advance,
    *  so the transport default does nothing. */
   protected handleSyncResponse(_payload: unknown): void {}
+
+  protected handleCatchUpBegin(payload: unknown): void {
+    this.emit('catchup_begin', payload);
+  }
+
+  protected handleCatchUpChunk(payload: unknown): void {
+    if (typeof payload !== 'object' || payload === null) return;
+    const deltas = (payload as { deltas?: unknown }).deltas;
+    if (Array.isArray(deltas)) for (const delta of deltas) this.handleDelta(delta);
+    this.emit('catchup_chunk', payload);
+  }
+
+  protected handleCatchUpEnd(payload: unknown): void {
+    this.emit('catchup_end', payload);
+  }
 
   /** A `bootstrap_response` frame. Bootstrap is materialisation, so the
    *  transport default does nothing. */

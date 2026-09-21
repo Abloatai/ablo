@@ -911,6 +911,11 @@ export function errorFromWire(
   if (code === 'stale_context') {
     return new AbloStaleContextError(message, baseOpts);
   }
+  // A busy decision lock says nothing changed yet. Keep it distinct from both
+  // stale premises and idempotency conflicts; the unchanged request may retry.
+  if (code === 'decision_contended') {
+    return new AbloError(message, baseOpts);
+  }
   // The database connected to the caller's environment could not be reached.
   // It rides a 503, but the generic 5xx rule below would rebuild it as an
   // `AbloServerError` — telling the reader Ablo is broken and to wait, when the

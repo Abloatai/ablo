@@ -1247,7 +1247,7 @@ export class BaseSyncedStore<
       getAllPoolIds: () => this.objectPool.getAllIds(),
       get bootstrapDeltaQueue() { return store.bootstrapDeltaQueue; },
       set bootstrapDeltaQueue(queue) { store.bootstrapDeltaQueue = queue; },
-      applyDeltaFrame: (deltas) => { this.applyDeltaFrame(deltas); },
+      applyDeltaFrame: (deltas) => { void this.applyDeltaFrame(deltas); },
     };
   }
 
@@ -1495,7 +1495,7 @@ export class BaseSyncedStore<
       onConnectionEvent: this.onConnectionEvent,
       updateSyncStatus: (updates) => { this.updateSyncStatus(updates); },
       processDeltaWithBatching: (delta) => { this.processDeltaWithBatching(delta); },
-      applyDeltaFrame: (deltas) => { this.applyDeltaFrame(deltas); },
+      applyDeltaFrame: (deltas) => this.applyDeltaFrame(deltas),
       handleBootstrapRequired: (hint) => { this.handleBootstrapRequired(hint); },
       handleBootstrapData: (data) => { this.handleBootstrapData(data); },
       performCredentialRefresh: () => this.performCredentialRefresh(),
@@ -1636,8 +1636,8 @@ export class BaseSyncedStore<
    * with {@link Database.processDeltaBatch} — the lower-level local write this
    * eventually drives through `flushPendingDeltas`.
    */
-  protected applyDeltaFrame(deltas: SyncDelta[]): void {
-    deltaPipeline.applyDeltaFrame(this.deltaPipelineContext, deltas);
+  protected applyDeltaFrame(deltas: SyncDelta[]): Promise<void> {
+    return deltaPipeline.persistDeltaFrame(this.deltaPipelineContext, deltas);
   }
   /**
    * Per-delta bookkeeping + enqueue. Returns `true` when the delta was

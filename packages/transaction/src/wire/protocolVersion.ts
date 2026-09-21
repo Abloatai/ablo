@@ -30,8 +30,11 @@
  *      error and list envelopes. A client that predates this field sends no
  *      `protocolVersion` and is treated as v1, since introducing the field
  *      changed no behavior.
+ *   v2 (2026-09-20) — catch-up is a bounded begin/chunk/end exchange. Each
+ *      chunk carries the raw durable position it covers, so clients persist
+ *      and acknowledge chunks idempotently before publishing completion.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /**
  * The oldest client protocol version this build still serves. Raising it cuts
@@ -50,7 +53,7 @@ export const DEFAULT_PROTOCOL_VERSION = 1;
  * codec registries use {@link SupportedProtocolVersion} as their key type, so
  * adding a version here makes a missing decoder a compile error.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS = [1] as const;
+export const SUPPORTED_PROTOCOL_VERSIONS = [1, 2] as const;
 
 export type SupportedProtocolVersion =
   (typeof SUPPORTED_PROTOCOL_VERSIONS)[number];

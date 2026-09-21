@@ -102,6 +102,18 @@ export const WS_INBOUND_FRAMES = {
     // the exact thing the seam exists to keep out.
     where: 'the reactive engine validates it while advancing its resume cursor',
   },
+  catchup_begin: {
+    validation: 'handler',
+    where: 'the reactive engine validates the exchange boundary before materialisation',
+  },
+  catchup_chunk: {
+    validation: 'handler',
+    where: 'the reactive engine validates each delta and durable chunk position',
+  },
+  catchup_end: {
+    validation: 'handler',
+    where: 'the reactive engine validates completion against the active exchange',
+  },
   bootstrap_response: {
     validation: 'handler',
     // No `checkedBy`, for the same reason as `sync_response` above.

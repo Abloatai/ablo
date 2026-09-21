@@ -134,6 +134,19 @@ const MAX_PAGES_PER_MODEL = 200;
 /** How many model chunks a cold start fetches at once. */
 const CHUNK_CONCURRENCY = 3;
 
+/** Keep bootstrap URLs below common proxy limits when the subscribed group set grows. */
+function bootstrapRequest(baseUrl: string, params: URLSearchParams): { url: string; method: 'GET' | 'POST'; body?: string } {
+  const url = `${baseUrl}/sync/bootstrap?${params.toString()}`;
+  if (url.length <= 8_000) return { url, method: 'GET' };
+  const syncGroups = params.getAll('syncGroups');
+  params.delete('syncGroups');
+  return {
+    url: `${baseUrl}/sync/bootstrap?${params.toString()}`,
+    method: 'POST',
+    body: JSON.stringify({ syncGroups }),
+  };
+}
+
 /**
  * Which cancellation lane a request belongs to. Cancellation targets one lane
  * at a time, so superseding a cold-start bootstrap cannot take down a scoped
@@ -526,7 +539,7 @@ export class BootstrapFetcher {
       params.append('models', this.options.instantModels.join(','));
     }
 
-    const url = `${this.options.baseUrl}/sync/bootstrap?${params.toString()}`;
+    const request = bootstrapRequest(this.options.baseUrl, params);
 
     // If offline, try the cached bootstrap. Skipped for a scoped override: the
     // cache holds the full snapshot, which is not a valid answer to a subset
@@ -554,7 +567,7 @@ export class BootstrapFetcher {
       });
     }
 
-    this.runtime.logger.info('Fetching fresh bootstrap data', { url });
+    this.runtime.logger.info('Fetching fresh bootstrap data', { url: request.url });
 
     const lane: CancelLane = syncGroupsOverride ? 'scoped' : 'bootstrap';
 
@@ -575,7 +588,7 @@ export class BootstrapFetcher {
     try {
       const data = chunked
         ? await this.fetchChunkedBootstrap(instantModels, this.options.syncGroups)
-        : await this.fetchWithRetries(url, lane);
+        : await this.fetchWithRetries(request, lane);
 
       this.runtime.logger.info('Bootstrap data fetched', {
         type: data.type,
@@ -628,12 +641,12 @@ export class BootstrapFetcher {
    * (5xx, 429, timeouts, network blips) consume attempts. A cancellation is
    * deliberate and therefore non-retryable — it leaves through the same gate.
    */
-  private async fetchWithRetries(url: string, lane: CancelLane): Promise<BootstrapData> {
+  private async fetchWithRetries(request: ReturnType<typeof bootstrapRequest>, lane: CancelLane): Promise<BootstrapData> {
     let lastError: Error | null = null;
     const capacityDeadline = Date.now() + this.options.fetchTimeout;
     for (let attempt = 0; attempt < this.options.maxRetries;) {
       try {
-        return await this.fetchOnce(url, lane);
+        return await this.fetchOnce(request, lane);
       } catch (error) {
         // SessionError should NOT be retried - the session is invalid and needs re-authentication
         if (AbloSessionError.isSessionError(error)) {
@@ -740,8 +753,8 @@ export class BootstrapFetcher {
             params.append('models', model);
             params.append('limit', String(PAGE_LIMIT));
             if (cursor !== undefined) params.append('cursor', cursor);
-            const url = `${this.options.baseUrl}/sync/bootstrap?${params.toString()}`;
-            const data = await this.fetchWithRetries(url, 'bootstrap');
+            const request = bootstrapRequest(this.options.baseUrl, params);
+            const data = await this.fetchWithRetries(request, 'bootstrap');
             chunks.push(data);
             if (data.nextCursor === undefined) break;
             cursor = data.nextCursor;
@@ -781,7 +794,7 @@ export class BootstrapFetcher {
     if (this.options.instantModels && this.options.instantModels.length > 0) {
       params.append('models', this.options.instantModels.join(','));
     }
-    const url = `${this.options.baseUrl}/sync/bootstrap?${params.toString()}`;
+    const request = bootstrapRequest(this.options.baseUrl, params);
 
     // Note: ETag caching is deliberately app-side, not SDK-side. The server
     // still returns an ETag on responses, which is captured below and
@@ -799,19 +812,20 @@ export class BootstrapFetcher {
     const controller = new AbortController();
     this.activeControllers.set(controller, 'bootstrap');
     try {
-      return await this.fetchWithETagUsing(url, headers, controller);
+      return await this.fetchWithETagUsing(request, headers, controller);
     } finally {
       this.activeControllers.delete(controller);
     }
   }
 
   private async fetchWithETagUsing(
-    url: string,
+    request: ReturnType<typeof bootstrapRequest>,
     headers: Record<string, string>,
     controller: AbortController,
   ): Promise<BootstrapFetchResult> {
-    const res = await fetch(url, {
-      method: 'GET',
+    const res = await fetch(request.url, {
+      method: request.method,
+      body: request.body,
       headers,
       signal: controller.signal,
     });
@@ -973,17 +987,17 @@ export class BootstrapFetcher {
    * registry) — chunk requests run through here concurrently and must
    * not cancel each other.
    */
-  private async fetchOnce(url: string, lane: CancelLane): Promise<BootstrapData> {
+  private async fetchOnce(request: ReturnType<typeof bootstrapRequest>, lane: CancelLane): Promise<BootstrapData> {
     const controller = new AbortController();
     this.activeControllers.set(controller, lane);
     try {
-      return await this.fetchOnceWith(url, controller);
+      return await this.fetchOnceWith(request, controller);
     } finally {
       this.activeControllers.delete(controller);
     }
   }
 
-  private async fetchOnceWith(url: string, controller: AbortController): Promise<BootstrapData> {
+  private async fetchOnceWith(request: ReturnType<typeof bootstrapRequest>, controller: AbortController): Promise<BootstrapData> {
     const timeoutId = setTimeout(() => {
       this.runtime.observability.breadcrumb('Bootstrap fetch timeout', 'sync.bootstrap', 'warning', {
         timeoutMs: this.options.fetchTimeout,
@@ -998,8 +1012,9 @@ export class BootstrapFetcher {
 
     let response: Response;
     try {
-      response = await fetch(url, {
-        method: 'GET',
+      response = await fetch(request.url, {
+        method: request.method,
+        body: request.body,
 	        headers: withAuthHeaders(this.options.getAuthToken, {
 	          'Content-Type': 'application/json',
 	          'Cache-Control': 'no-cache, no-store, must-revalidate',

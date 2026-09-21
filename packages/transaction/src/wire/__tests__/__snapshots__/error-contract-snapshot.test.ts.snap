@@ -477,6 +477,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "client",
     },
+    "decision_contended": {
+      "category": "conflict",
+      "httpStatus": 409,
+      "retryable": true,
+      "surface": "wire",
+    },
     "delivery_partition_mismatch": {
       "category": "transport",
       "httpStatus": 503,
@@ -1792,6 +1798,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "client",
     },
   },
-  "version": "2026-09-12",
+  "version": "2026-09-20",
 }
 `;

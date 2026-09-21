@@ -168,7 +168,7 @@ prepare_release() {
   local old_version
   local new_version
   old_version="$(release_version)"
-  npx changeset version
+  node "$SCRIPT_DIR/version-release-family.mjs"
   new_version="$(release_version)"
   if [[ "$new_version" = "$old_version" ]]; then
     echo "error: version did not change from $old_version" >&2

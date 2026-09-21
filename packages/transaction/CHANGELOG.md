@@ -1,5 +1,14 @@
 # @abloatai/transaction
 
+## 0.66.0
+
+### Minor Changes
+
+- Report decision-lock contention as a retryable `decision_contended` error that
+  functional updates retry, resume reconnect catch-up in bounded chunks stored
+  before they are acknowledged, and include batched model writes in commit
+  latency samples.
+
 ## 0.65.0
 
 ### Minor Changes

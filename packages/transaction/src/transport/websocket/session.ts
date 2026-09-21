@@ -105,6 +105,26 @@ class AgentWebSocket<
     this.emit('sync_response', response);
   }
 
+  protected override handleCatchUpChunk(raw: unknown): void {
+    if (typeof raw !== 'object' || raw === null) return;
+    const payload = raw as { exchangeId?: unknown; sequence?: unknown; position?: unknown; deltas?: unknown };
+    if (typeof payload.exchangeId !== 'string' || !Number.isSafeInteger(payload.sequence)
+      || !Number.isSafeInteger(payload.position) || !Array.isArray(payload.deltas)) return;
+    const deltas: ClientSyncDelta[] = [];
+    for (const value of payload.deltas) {
+      const parsed = clientSyncDeltaSchema.safeParse(value);
+      if (!parsed.success) return;
+      deltas.push(parsed.data);
+    }
+    for (const delta of deltas) this.emit('delta', delta);
+    this.emit('catchup_chunk', {
+      exchangeId: payload.exchangeId,
+      sequence: payload.sequence as number,
+      position: payload.position as number,
+      deltas,
+    });
+  }
+
   positionAfter(lastSyncId: number): StoredPosition {
     return {
       lastSyncId: Math.max(this.position.lastSyncId, lastSyncId),
@@ -140,6 +160,7 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
   private readonly credentialLifecycle: CredentialLifecycle | null;
   private readonly presenceProjection: PresenceProjection;
   private pendingSessionError: Error | null = null;
+  private readonly catchUpPositions = new Map<number, number>();
 
   readonly presence: WebSocketPresence;
   readonly collaboration: WebSocketCollaboration<TEvents>;
@@ -179,6 +200,11 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     } as WebSocketCollaboration<TEvents>;
     this.socket.subscribe('session_error', (error) => {
       this.handleSessionError(error);
+    });
+    this.socket.subscribe('catchup_chunk', (chunk) => {
+      const lastVisible = chunk.deltas.at(-1);
+      if (lastVisible) this.catchUpPositions.set(lastVisible.id, chunk.position);
+      else void this.acknowledge(chunk.position).catch(ignoreObservedAcknowledgeFailure);
     });
     this.credentialLifecycle = options.access.renewable
       ? new CredentialLifecycle({
@@ -475,7 +501,9 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
           ...delta,
           checkpoint: async () => {
             if (checkpointed) return;
-            checkpointing ??= this.acknowledge(delta.id).then(() => {
+            const position = this.catchUpPositions.get(delta.id) ?? delta.id;
+            checkpointing ??= this.acknowledge(position).then(() => {
+              this.catchUpPositions.delete(delta.id);
               checkpointed = true;
             }).finally(() => {
               checkpointing = undefined;

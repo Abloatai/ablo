@@ -1,6 +1,6 @@
 {
   "$generated": "packages/ablo/scripts/generate-error-docs.mts",
-  "version": "2026-09-12",
+  "version": "2026-09-20",
   "envelope": [
     "type",
     "code",
@@ -702,6 +702,15 @@
       "retryable": false,
       "message": "An unknown database action type was dispatched.",
       "docUrl": "https://docs.abloatai.com/errors#db_unknown_action_type"
+    },
+    {
+      "code": "decision_contended",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "Another transaction is evaluating the same decision rows. Retry the unchanged request shortly.",
+      "docUrl": "https://docs.abloatai.com/errors#decision_contended"
     },
     {
       "code": "delivery_partition_mismatch",

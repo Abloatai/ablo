@@ -5,7 +5,7 @@ sidebar:
   icon: circle-alert
 ---
 
-Error contract version: `2026-09-12` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-09-20` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -488,6 +488,12 @@ A functional update kept losing to concurrent writes and exhausted its reconcile
 `HTTP 409` · not retryable
 
 This database is already connected to another environment in your organization. Ablo streams a database from one environment at a time, so connecting it to a second one would leave the two reading the same change stream, and the newer connection would take the stream over from the older. Give this environment a database of its own — on a branching provider a branch of the same database is the usual answer, and it is what sandbox is for. If you meant to move the connection rather than add one, disconnect it from the environment that holds it with `ablo connect deregister` first.
+
+### decision_contended
+
+`HTTP 409` · retryable
+
+Another transaction is evaluating the same decision rows. Retry the unchanged request shortly.
 
 ### entity_already_exists
 

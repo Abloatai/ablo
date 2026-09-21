@@ -15,6 +15,7 @@ import {
 } from '@abloatai/transaction/client/resources/functionalUpdate';
 import {
   AbloContentionError,
+  AbloError,
   AbloStaleContextError,
   AbloClaimedError,
   AbloNotFoundError,
@@ -199,7 +200,8 @@ describe('reconcileFunctionalUpdate', () => {
 });
 
 describe('isReconcilableConflict', () => {
-  it('treats stale_context and claim queued/lost as reconcilable', () => {
+  it('treats decision contention, stale_context, and claim queued/lost as reconcilable', () => {
+    expect(isReconcilableConflict(new AbloError('busy', { code: 'decision_contended' }))).toBe(true);
     expect(isReconcilableConflict(new AbloStaleContextError('s', { code: 'stale_context' }))).toBe(true);
     expect(isReconcilableConflict(new AbloClaimedError('q', { code: 'claim_queued' }))).toBe(true);
     expect(isReconcilableConflict(new AbloClaimedError('l', { code: 'claim_lost' }))).toBe(true);

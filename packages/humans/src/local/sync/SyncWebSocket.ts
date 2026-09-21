@@ -110,6 +110,7 @@ export class SyncWebSocket<
    * the state itself lives in {@link SyncCursor}.
    */
   private readonly cursor: SyncCursor;
+  private catchUp: { exchangeId: string; currentSyncId: number; nextSequence: number } | null = null;
 
   constructor(options: SyncWebSocketOptions) {
     super({
@@ -316,6 +317,11 @@ export class SyncWebSocket<
    */
   override acknowledge(syncId: number): void {
     this.sendAck(syncId);
+  }
+
+  /** Publish completion only after the store's chunk-persistence lane drains. */
+  completeCatchUp(payload: { exchangeId: string; currentSyncId: number; chunks: number }): void {
+    this.emit('catchup_complete', payload);
   }
 
   /**
@@ -546,6 +552,39 @@ export class SyncWebSocket<
     } else if (typeof payload.cursor === 'string' && payload.cursor) {
       this.cursor.syncCursor = payload.cursor;
     }
+  }
+
+  protected override handleCatchUpBegin(rawPayload: unknown): void {
+    if (!isRecord(rawPayload)) return;
+    const { exchangeId, fromSyncId, currentSyncId } = rawPayload;
+    if (typeof exchangeId !== 'string' || !Number.isSafeInteger(fromSyncId) || !Number.isSafeInteger(currentSyncId)) return;
+    this.catchUp = { exchangeId, currentSyncId: currentSyncId as number, nextSequence: 0 };
+    this.emit('catchup_begin', { exchangeId, fromSyncId: fromSyncId as number, currentSyncId: currentSyncId as number });
+  }
+
+  protected override handleCatchUpChunk(rawPayload: unknown): void {
+    if (!isRecord(rawPayload) || !this.catchUp) return;
+    const { exchangeId, sequence, position, deltas } = rawPayload;
+    if (exchangeId !== this.catchUp.exchangeId || sequence !== this.catchUp.nextSequence
+      || !Number.isSafeInteger(position) || (position as number) > this.catchUp.currentSyncId
+      || !Array.isArray(deltas)) return;
+    const normalized: SyncDelta[] = [];
+    for (const raw of deltas) {
+      const delta = this.normalizeWireDelta(raw);
+      if (delta) normalized.push(delta);
+    }
+    if (normalized.length !== deltas.length) return;
+    this.catchUp.nextSequence++;
+    this.emit('catchup_chunk', { exchangeId, sequence, position, deltas: normalized });
+  }
+
+  protected override handleCatchUpEnd(rawPayload: unknown): void {
+    if (!isRecord(rawPayload) || !this.catchUp) return;
+    const { exchangeId, currentSyncId, chunks } = rawPayload;
+    if (exchangeId !== this.catchUp.exchangeId || currentSyncId !== this.catchUp.currentSyncId
+      || chunks !== this.catchUp.nextSequence) return;
+    this.catchUp = null;
+    this.emit('catchup_end', { exchangeId, currentSyncId, chunks });
   }
 
   /**

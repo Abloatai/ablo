@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-09-12';
+export const ERROR_CONTRACT_VERSION = '2026-09-20';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -587,6 +587,12 @@ export const ERROR_CODES = {
     409,
     false,
     "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Pass a function to `update(id, current => next)` and the SDK re-reads and retries for you; or re-read and retry by hand."
+  ),
+  decision_contended: wire(
+    'conflict',
+    409,
+    true,
+    'Another transaction is evaluating the same decision rows. Retry the unchanged request shortly.'
   ),
   // Raised by the functional `update(id, current => next)` form once its
   // internal reconcile budget is exhausted, because the row stayed continuously

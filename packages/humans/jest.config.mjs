@@ -78,6 +78,7 @@ const config = {
   },
 
   testTimeout: 10000,
+  maxWorkers: 2, // Keep the 10k-create benchmark within its timeout under suite load.
 };
 
 export default config;

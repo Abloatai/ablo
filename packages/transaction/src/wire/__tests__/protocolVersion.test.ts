@@ -21,7 +21,7 @@ import {
 
 describe('protocol version contract', () => {
   it('pins the current version — bumping requires a changelog entry', () => {
-    expect(PROTOCOL_VERSION).toBe(1);
+    expect(PROTOCOL_VERSION).toBe(2);
   });
 
   it('pins the support floor — raising it cuts un-upgraded clients', () => {
@@ -39,7 +39,7 @@ describe('protocol version contract', () => {
 
   it('pins the legacy default and explicit codec manifest', () => {
     expect(DEFAULT_PROTOCOL_VERSION).toBe(1);
-    expect(SUPPORTED_PROTOCOL_VERSIONS).toEqual([1]);
+    expect(SUPPORTED_PROTOCOL_VERSIONS).toEqual([1, 2]);
   });
 
   it('has one concrete version entry for every advertised version', () => {

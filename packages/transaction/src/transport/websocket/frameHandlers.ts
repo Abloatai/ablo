@@ -117,6 +117,9 @@ export interface WsSession {
    */
   handleDelta(delta: unknown): void;
   handleSyncResponse(payload: unknown): void;
+  handleCatchUpBegin(payload: unknown): void;
+  handleCatchUpChunk(payload: unknown): void;
+  handleCatchUpEnd(payload: unknown): void;
   handleBootstrapResponse(payload: unknown): void;
   establishPresenceSession(value: PresenceSessionEstablished): void;
 }
@@ -360,6 +363,9 @@ function tracePorts(session: WsSession): { logger: Logger; observability: Socket
  */
 export const wsFrameHandlers: Record<string, WsFrameHandler> = {
   sync_response: (session, message) => { session.handleSyncResponse(message.payload); },
+  catchup_begin: (session, message) => { session.handleCatchUpBegin(message.payload); },
+  catchup_chunk: (session, message) => { session.handleCatchUpChunk(message.payload); },
+  catchup_end: (session, message) => { session.handleCatchUpEnd(message.payload); },
   bootstrap_response: (session, message) => { session.handleBootstrapResponse(message.payload); },
   mutation_result: handleMutationResult,
   subscription_ack: handleSubscriptionAck,

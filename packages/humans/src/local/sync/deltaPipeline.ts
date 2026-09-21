@@ -282,8 +282,13 @@ export function scheduleDeltaFlush(ctx: DeltaPipelineContext): void {
   }
 }
 
-/** Apply an authoritative delta frame as one atomic flush. */
+/** Apply an authoritative legacy frame without exposing its persistence promise. */
 export function applyDeltaFrame(ctx: DeltaPipelineContext, deltas: SyncDelta[]): void {
+  void persistDeltaFrame(ctx, deltas).catch(ctx.handleFlushError);
+}
+
+/** Persist one resumable chunk before its raw tail position may advance. */
+export async function persistDeltaFrame(ctx: DeltaPipelineContext, deltas: SyncDelta[]): Promise<void> {
   let enqueuedAny = false;
   for (const delta of deltas) {
     if (enqueueDelta(ctx, delta, { authoritative: true })) enqueuedAny = true;
@@ -293,7 +298,7 @@ export function applyDeltaFrame(ctx: DeltaPipelineContext, deltas: SyncDelta[]):
     clearTimeout(ctx.batchTimer);
     ctx.batchTimer = null;
   }
-  void ctx.flushPendingDeltas().catch(ctx.handleFlushError);
+  await ctx.flushPendingDeltas();
 }
 
 /**

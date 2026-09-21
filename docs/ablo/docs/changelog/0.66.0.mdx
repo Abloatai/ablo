@@ -1,0 +1,43 @@
+---
+title: "v0.66.0"
+type: changelog
+date: 2026-09-21T15:25:59.000Z
+changelog:
+  version: "0.66.0"
+  category: "Features"
+---
+
+### Contended decisions have their own error
+
+A transaction that finds its decision rows already being evaluated by another
+now fails with `decision_contended` instead of `stale_context`. Nothing has
+changed when this happens, so the error reports `retryable: true` and the
+unchanged request can be sent again shortly. Functional updates retry it
+automatically. Code that caught `AbloStaleContextError` to handle contention
+should also check for the new code, which arrives as a plain `AbloError`.
+`stale_context` now means only that a row changed after it was read. The error
+contract version is `2026-09-20`.
+
+### Reconnect catch-up arrives in bounded chunks
+
+A client returning from a disconnect now receives the changes it missed as a
+sequence of bounded chunks rather than one message covering the whole gap.
+Each chunk is stored locally before the client acknowledges its position, so
+an interrupted catch-up resumes from the last stored chunk and a replayed chunk
+does no harm. A chunk that cannot be stored stops the catch-up with a sync
+error instead of being skipped. The client reports catch-up complete only once
+every chunk is stored. The exchange is version 2 of the sync protocol; servers
+continue to serve version 1 clients, so applications can upgrade on their own
+schedule.
+
+### Commit latency covers batched model writes
+
+`onCommitLatency` now reports model writes that share a batch, with one sample
+per local transaction. A retried seal keeps its first start time,
+so the local measurement includes the wait.
+
+### Large bootstrap scopes use request bodies
+
+Browser clients with many subscriptions now send bootstrap scopes in a request
+body, avoiding proxy URL limits. The matching sync-server change must be live
+before these clients upgrade.
