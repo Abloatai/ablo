@@ -50,6 +50,7 @@ class ItemModel extends Model {
 function setup(
   readFloor: () => number,
   database: Pick<Database, 'getStore'> = { getStore: () => new InMemoryObjectStore('Item', 'Item') },
+  pendingDeletes?: ReadonlySet<string>,
 ) {
   const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
   registry.registerModel('Item', ItemModel, { loadStrategy: LoadStrategy.lazy });
@@ -63,6 +64,7 @@ function setup(
       items: model({ title: z.string().optional() }, { typename: 'Item', load: 'lazy' }),
     }),
     baseUrl: 'http://sync.test/api',
+    isDeletePending: (id) => pendingDeletes?.has(id) ?? false,
     position: {
       get readFloor() {
         return readFloor();
@@ -180,6 +182,39 @@ describe('OnDemandLoader — network rows meet the pool by log position', () => 
     serverAnswers({ id: 'r1', title: 'older' }, 5);
     await loader.fetch('items', { type: 'complete' });
     expect((await store.get('r1'))?.title).toBe('newer');
+  });
+
+  it('keeps an optimistic delete absent across local reads and stale network answers', async () => {
+    const store = new InMemoryObjectStore('Item', 'Item');
+    await store.put({ id: 'gone', title: 'durable row' });
+    await store.put({ id: 'other', title: 'unrelated row' });
+    const pending = new Set<string>();
+    const { pool, loader } = setup(() => 0, { getStore: () => store }, pending);
+    const deleted = seedFromDelta(pool, 'gone', 'durable row');
+
+    let answer!: (value: Awaited<ReturnType<typeof queryClient.postQuery>>) => void;
+    postQueryMock.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    const staleRead = loader.fetch('items', { type: 'complete' });
+    await Promise.resolve();
+
+    pending.add(deleted.id);
+    loader.markDeleted(deleted.id);
+    pool.remove(deleted.id);
+    postQueryMock.mockImplementationOnce(() => new Promise(() => undefined));
+    expect(await loader.fetch('items', { where: { id: deleted.id } })).toEqual([]);
+    expect(pool.get(deleted.id)).toBeUndefined();
+
+    // The server confirms while the older request is still in flight.
+    pending.delete(deleted.id);
+    await store.delete(deleted.id);
+    answer({ results: [[{ id: deleted.id, title: 'stale row' }]] });
+    expect(await staleRead).toEqual([]);
+    expect(pool.get(deleted.id)).toBeUndefined();
+    expect(await store.get(deleted.id)).toBeUndefined();
+    postQueryMock.mockResolvedValueOnce({ results: [[]] });
+    expect(await loader.fetch('items', { where: { id: deleted.id } })).toEqual([]);
+
+    expect((await loader.fetch('items', { where: { id: 'other' } })).map((row) => row.id)).toEqual(['other']);
   });
 
   it('waits for storage completion and propagates storage failure', async () => {

@@ -127,7 +127,9 @@ export function createInternalComponents<S extends SchemaRecord>(
     // leaves so a late answer cannot overwrite a row the pool already knows to
     // be further along.
     position: syncClient.position,
+    isDeletePending: (id) => syncClient.isDeletePending(id),
   });
+  syncClient.on('optimistic:delete', (id: string) => hydration.markDeleted(id));
 
   // Drop the lazy-lane hydration ledger on reconnect. While connected, the
   // WebSocket delta stream keeps hydrated rows fresh so repeat reads serve

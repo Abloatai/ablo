@@ -96,6 +96,46 @@ describe('SyncClient echo detection (architectural)', () => {
     ctx.cleanup();
   });
 
+  it('restores a rejected optimistic delete and clears its read guard', () => {
+    const model = pool.createFromData({
+      __typename: 'EntryDetail', id: 'rollback-layer', entryId: 'entry-1',
+      type: 'rect', zIndex: 0, organizationId: 'org-1',
+    })!;
+    pool.add(model, ModelScope.live);
+    client.delete(model);
+    expect(model.disposed).toBe(true);
+    expect(client.isDeletePending(model.id)).toBe(true);
+    expect(pool.get(model.id)).toBeUndefined();
+
+    const queue = Reflect.get(client, 'mutationQueue') as { emit: (event: string, payload: unknown) => void };
+    queue.emit('optimistic:rollback', {
+      model,
+      previousState: null,
+      transaction: { id: 'delete-rejected', type: 'delete', modelName: 'EntryDetail', modelId: model.id },
+      reason: 'permanent_error',
+      error: new Error('rejected'),
+    });
+
+    expect(client.isDeletePending(model.id)).toBe(false);
+    expect(pool.get(model.id)).toBeDefined();
+    expect(pool.get(model.id)?.disposed).toBe(false);
+  });
+
+  it('clears the read guard after the confirmed remove is applied', () => {
+    const model = pool.createFromData({
+      __typename: 'EntryDetail', id: 'confirmed-layer', entryId: 'entry-1',
+      type: 'rect', zIndex: 0, organizationId: 'org-1',
+    })!;
+    pool.add(model, ModelScope.live);
+    client.delete(model);
+    expect(client.isDeletePending(model.id)).toBe(true);
+    client.applyDeltaBatchToPool([
+      { action: 'remove', modelName: 'EntryDetail', modelId: model.id },
+    ], ENRICH_NOOP);
+    expect(client.isDeletePending(model.id)).toBe(false);
+    expect(pool.get(model.id)).toBeUndefined();
+  });
+
   // ─────────────────────────────────────────────────────────────────────────
   // 1. Reproduce the flicker
   // ─────────────────────────────────────────────────────────────────────────

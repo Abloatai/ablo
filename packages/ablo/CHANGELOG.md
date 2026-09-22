@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.66.1
+
+### Deleted rows stay absent during local reads
+
+A local read could restore a row from browser storage after it had been removed
+optimistically but before the server's delete reached that storage. A delayed
+network response could do the same. Reads now keep the row absent while its
+delete is pending and discard responses that began before the delete. If the
+server rejects the delete, the row returns through rollback.
+
 ## 0.66.0
 
 ### Contended decisions have their own error

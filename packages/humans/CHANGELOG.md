@@ -1,5 +1,12 @@
 # @abloatai/humans
 
+## 0.66.1
+
+### Patch Changes
+
+- Keep optimistically deleted rows absent from local and network reads until the delete is confirmed, and restore them if the server rejects it.
+  - @abloatai/transaction@0.66.1
+
 ## 0.66.0
 
 ### Minor Changes

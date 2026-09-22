@@ -71,6 +71,7 @@ export interface OnDemandLoaderOptions {
    * against before a snapshot may overwrite it (see {@link RowWatermarks}).
    */
   readonly position: Pick<LogPositionPort, 'readFloor'>;
+  readonly isDeletePending?: (id: string) => boolean;
 }
 
 export interface FetchOptions<T> {
@@ -153,6 +154,11 @@ function snapshotPosition(
 }
 
 export class OnDemandLoader {
+  private readonly activeReadDeletes = new Set<Set<string>>();
+
+  markDeleted(id: string): void {
+    for (const deleted of this.activeReadDeletes) deleted.add(id);
+  }
   private readonly readEvidence = new WeakMap<object, number>();
   private readonly inFlight = new Map<string, Promise<Model[]>>();
   /**
@@ -302,8 +308,10 @@ export class OnDemandLoader {
     // through to the blocking fetch that brings parent and children together;
     // the second open is served by the fast path.
     if (!explicitComplete && !hasExpand) {
-      const local = await this.readLocal(modelName, typename, ModelClass, clauses, hasExpand, expand);
-      if (local.length > 0) {
+      let suppressed = false;
+      const local = await this.readLocal(modelName, typename, ModelClass, clauses, hasExpand, expand,
+        () => { suppressed = true; });
+      if (local.length > 0 || suppressed) {
         this.scheduleHydratingFetch(queryKey, modelName, typename, clauses, options);
         return applyLimit(local, options?.limit);
       }
@@ -330,16 +338,30 @@ export class OnDemandLoader {
     clauses: readonly WhereClause[],
     hasExpand: boolean,
     expand: readonly string[] | undefined,
+    onSuppressed?: () => void,
   ): Promise<Model[]> {
-    let local = scanPool(this.opts.objectPool, ModelClass, clauses);
+    let local = scanPool(this.opts.objectPool, ModelClass, clauses)
+      .filter((model) => !this.opts.isDeletePending?.(model.id));
     if (local.length === 0) {
-      const fromIdb = await scanIdb(this.opts.database, typename, clauses);
-      const idbModels = fromIdb
-        .map((raw) => this.hydrateOne(raw, LOCAL, typename))
-        .filter((m): m is Model => m !== null);
-      if (idbModels.length > 0) {
-        this.opts.objectPool.addBatch(idbModels, ModelScope.live);
-        local = idbModels;
+      const deleted = new Set<string>();
+      this.activeReadDeletes.add(deleted);
+      try {
+        const fromIdb = await scanIdb(this.opts.database, typename, clauses);
+        if (fromIdb.some((raw) => {
+          const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined;
+          return typeof id === 'string' && (this.opts.isDeletePending?.(id) || deleted.has(id));
+        })) {
+          onSuppressed?.();
+        }
+        const idbModels = fromIdb
+          .map((raw) => this.hydrateOne(raw, LOCAL, typename, { deleted }))
+          .filter((m): m is Model => m !== null);
+        if (idbModels.length > 0) {
+          this.opts.objectPool.addBatch(idbModels, ModelScope.live);
+          local = idbModels;
+        }
+      } finally {
+        this.activeReadDeletes.delete(deleted);
       }
     }
     if (hasExpand && expand && local.length > 0) {
@@ -370,41 +392,47 @@ export class OnDemandLoader {
     clauses: readonly WhereClause[],
     options: FetchOptions<unknown> | undefined,
   ): Promise<Model[]> {
-    const network = await this.queryNetwork(modelName, clauses, options);
-    const networkRows = network.rows;
-    const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
-    const acceptedRows: unknown[] = [];
-    const networkModels = networkRows
-      // Strict: a row the server returned whose type name this client never
-      // registered is a genuine schema collision (the pushed schema differs
-      // from the local one). Throw here, naming the cause, rather than silently
-      // dropping the row and failing downstream as `entity_not_found`.
-      .map((raw) =>
-        this.hydrateOne(
-          raw,
-          { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
-          typename,
-          { strict: true, acceptedRows },
-        ),
-      )
-      .filter((m): m is Model => m !== null);
+    const deleted = new Set<string>();
+    this.activeReadDeletes.add(deleted);
+    try {
+      const network = await this.queryNetwork(modelName, clauses, options, deleted);
+      const networkRows = network.rows;
+      const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
+      const acceptedRows: unknown[] = [];
+      const networkModels = networkRows
+        // Strict: a row the server returned whose type name this client never
+        // registered is a genuine schema collision (the pushed schema differs
+        // from the local one). Throw here, naming the cause, rather than silently
+        // dropping the row and failing downstream as `entity_not_found`.
+        .map((raw) =>
+          this.hydrateOne(
+            raw,
+            { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
+            typename,
+            { strict: true, acceptedRows, deleted },
+          ),
+        )
+        .filter((m): m is Model => m !== null);
 
-    for (const model of networkModels) {
-      const stamp = evidenceById.get(model.id);
-      if (stamp === undefined) continue;
-      // The read's evidence, kept for the premise a guarded write may cite;
-      // and the position the pooled row now reflects, for freshness.
-      this.readEvidence.set(model, stamp);
-      this.opts.objectPool.watermarks.advance(model, stamp);
+      for (const model of networkModels) {
+        const stamp = evidenceById.get(model.id);
+        if (stamp === undefined) continue;
+        // The read's evidence, kept for the premise a guarded write may cite;
+        // and the position the pooled row now reflects, for freshness.
+        this.readEvidence.set(model, stamp);
+        this.opts.objectPool.watermarks.advance(model, stamp);
+      }
+
+      if (networkModels.length > 0) {
+        this.opts.objectPool.addBatch(networkModels, ModelScope.live);
+        // Persist only accepted snapshots: a stale response must not roll disk back.
+        await this.persistToIdb(modelName, acceptedRows);
+      }
+
+      return networkModels;
+    } finally {
+      this.activeReadDeletes.delete(deleted);
     }
-
-    if (networkModels.length > 0) {
-      this.opts.objectPool.addBatch(networkModels, ModelScope.live);
-      // Persist only accepted snapshots: a stale response must not roll disk back.
-      await this.persistToIdb(modelName, acceptedRows);
-    }
-
-    return networkModels;
   }
 
   /**
@@ -473,12 +501,18 @@ export class OnDemandLoader {
       );
       if (missing.length === 0) continue;
 
-      const rows = await this.readChildrenLocal(targetTypename, foreignKey, missing);
-      const models = rows
-        .map((raw) => this.hydrateOne(this.stampTypename(raw, targetTypename), LOCAL, targetTypename))
-        .filter((m): m is Model => m !== null);
-      if (models.length > 0) {
-        this.opts.objectPool.addBatch(models, ModelScope.live);
+      const deleted = new Set<string>();
+      this.activeReadDeletes.add(deleted);
+      try {
+        const rows = await this.readChildrenLocal(targetTypename, foreignKey, missing);
+        const models = rows
+          .map((raw) => this.hydrateOne(this.stampTypename(raw, targetTypename), LOCAL, targetTypename, { deleted }))
+          .filter((m): m is Model => m !== null);
+        if (models.length > 0) {
+          this.opts.objectPool.addBatch(models, ModelScope.live);
+        }
+      } finally {
+        this.activeReadDeletes.delete(deleted);
       }
     }
   }
@@ -532,11 +566,12 @@ export class OnDemandLoader {
     raw: unknown,
     origin: HydrationOrigin,
     typename?: string,
-    opts?: { strict?: boolean; acceptedRows?: unknown[] },
+    opts?: { strict?: boolean; acceptedRows?: unknown[]; deleted?: ReadonlySet<string> },
   ): Model | null {
     if (!raw || typeof raw !== 'object') return null;
     const obj = raw as Record<string, unknown>;
     if (typeof obj.id !== 'string') return null;
+    if (this.opts.isDeletePending?.(obj.id) || opts?.deleted?.has(obj.id)) return null;
     if (this.opts.objectPool.has(obj.id)) {
       // Keep the existing instance alive when a query refreshes it. A query
       // can carry fresher server state after a missed delta, but unlike the
@@ -617,6 +652,7 @@ export class OnDemandLoader {
     modelName: string,
     clauses: readonly WhereClause[],
     options: FetchOptions<unknown> | undefined,
+    deleted: ReadonlySet<string>,
   ): Promise<{
     rows: unknown[];
     evidence: readonly { id: string; stamp: number }[];
@@ -672,7 +708,7 @@ export class OnDemandLoader {
     // own typed pool, then leave the nested arrays in place on the
     // primary row.
     if (options?.expand && options.expand.length > 0) {
-      await this.hydrateExpanded(modelName, normalized, options.expand, position);
+      await this.hydrateExpanded(modelName, normalized, options.expand, position, deleted);
     }
     return { rows: normalized, evidence, position };
   }
@@ -689,6 +725,7 @@ export class OnDemandLoader {
     rows: unknown[],
     relationNames: readonly string[],
     position: number,
+    deleted: ReadonlySet<string>,
   ): Promise<void> {
     const writes: Promise<void>[] = [];
     const parentDef = this.getModelDef(parentModelName);
@@ -711,7 +748,7 @@ export class OnDemandLoader {
         const stampedItems: unknown[] = [];
         for (const item of items) {
           const stamped = this.stampTypename(item, targetTypename);
-          const m = this.hydrateOne(stamped, origin, targetTypename, { acceptedRows: stampedItems });
+          const m = this.hydrateOne(stamped, origin, targetTypename, { acceptedRows: stampedItems, deleted });
           if (m) models.push(m);
         }
         if (models.length > 0) {

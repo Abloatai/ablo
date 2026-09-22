@@ -106,6 +106,11 @@ export class SyncClient extends EventEmitter {
    * {@link SyncClient.getEchoMetrics} exposes its counters.
    */
   private readonly echoTracker = new UnconfirmedWrites();
+  private readonly pendingDeletes = new Set<string>();
+
+  isDeletePending(id: string): boolean {
+    return this.pendingDeletes.has(id);
+  }
 
   // Connection state
   private connectionState: 'connected' | 'disconnected' | 'connecting' = 'disconnected';
@@ -312,7 +317,14 @@ export class SyncClient extends EventEmitter {
             // Guard: if the model was disposed (e.g. by a concurrent DELETE rollback or
             // cascade), don't re-add it — Object.assign cannot restore the private
             // isDisposed flag, so the model would be added in a broken state.
-            if (model.disposed) {
+            if (model.disposed && transaction.type === 'delete') {
+              const restored = this.objectPool.createFromData({
+                ...model.toJSON(),
+                ...(previousState && typeof previousState === 'object' ? previousState : {}),
+                __typename: transaction.modelName,
+              });
+              if (restored) this.objectPool.add(restored, ModelScope.live);
+            } else if (model.disposed) {
               // Follow-on of an already-logged permanent error, not its own
               // problem: the tx that failed has already surfaced the cause in
               // MutationQueue. Restoring a disposed model is a no-op by
@@ -329,6 +341,8 @@ export class SyncClient extends EventEmitter {
               this.objectPool.add(model, ModelScope.live);
             }
           }
+
+          if (transaction.type === 'delete') this.pendingDeletes.delete(transaction.modelId);
 
           this.notifyObservers({
             type: 'rollback',
@@ -1084,7 +1098,17 @@ export class SyncClient extends EventEmitter {
   delete(model: Model, options?: WriteOptions): Promise<void> | undefined {
     // Clear pending mutations first to prevent "not found" errors on fast delete
     this.mutationQueue.cancelTransactionsForModel(model.id);
-    return this.mutate('delete', model, () => this.objectPool.remove(model.id), options);
+    this.pendingDeletes.add(model.id);
+    this.emit('optimistic:delete', model.id);
+    const confirmation = this.mutate('delete', model, () => this.objectPool.remove(model.id), options);
+    // Confirmation can precede the IndexedDB delta write. Keep the guard until
+    // the persisted remove is applied, except when no durable row exists.
+    void confirmation?.then(async () => {
+      if (!await this.database.getStore(model.getModelName())?.get(model.id)) {
+        this.pendingDeletes.delete(model.id);
+      }
+    }).catch(() => undefined);
+    return confirmation;
   }
 
   private fileUploadContext(): FileUploadContext {
@@ -1871,6 +1895,7 @@ export class SyncClient extends EventEmitter {
       // otherwise re-add it for the brief window before the matching delete
       // confirmation lands.
       if (this.echoTracker.consumeEcho(transactionId)) {
+        if (action === 'remove') this.pendingDeletes.delete(modelId);
         // A direct assignment can re-enter change tracking while this
         // optimistic write is in flight. Leaving the acknowledged field dirty
         // makes conflict resolution preserve it over the next collaborator
@@ -1944,6 +1969,7 @@ export class SyncClient extends EventEmitter {
         }
         case 'remove':
           idsToRemove.push(modelId);
+          this.pendingDeletes.delete(modelId);
           break;
         case 'archive':
           idsToArchive.push(modelId);
