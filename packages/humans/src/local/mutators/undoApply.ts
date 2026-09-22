@@ -16,7 +16,9 @@
  * counterparts (`paired`), which carry the value each operation established: on
  * undo the forwards say what you set, and on redo the inverses say what undo
  * restored. For `update` and `updateMany` operations it drops any field whose
- * live value no longer matches that established value. The `create` and
+ * live value no longer matches that established value. Plain JSON objects are
+ * compared recursively, so independent nested changes can still be undone.
+ * Arrays and object/type replacements remain atomic. The `create` and
  * `delete` families are structural and always applied — undoing a create
  * removes the row you added, and undoing a delete restores it.
  *
@@ -32,7 +34,7 @@ import { deepEqual } from '@abloatai/transaction/utils/json';
  * How undo and redo treat a field that a collaborator changed after your
  * operation.
  *
- *   - `skip-stale` (the default): leave the field alone. Your change has
+ *   - `skip-stale` (the default): leave superseded fields/JSON leaves alone. Your change has
  *     already been superseded, so reverting it would overwrite the
  *     collaborator's value. This is what keeps undo scoped to your own edits.
  *   - `last-writer-wins`: apply the operation verbatim, so your undo overwrites
@@ -75,10 +77,35 @@ function readCurrentField(store: SyncStoreContract, id: string, field: string): 
 
 type Patch = { id: string } & Record<string, unknown>;
 
+// Missing object properties differ from properties whose value is undefined.
+const MISSING = Symbol('missing undo property');
+const ownValue = (value: Record<string, unknown>, key: string): unknown =>
+  Object.hasOwn(value, key) ? value[key] : MISSING;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** Replay changed JSON leaves; arrays and replacements remain atomic. */
+function replayValue(value: unknown, established: unknown, current: unknown): unknown {
+  if (deepEqual(value, established)) return current;
+  if (deepEqual(current, established)) return value;
+  if (isPlainObject(value) && isPlainObject(established) && isPlainObject(current)) {
+    const keys = new Set([...Object.keys(current), ...Object.keys(established), ...Object.keys(value)]);
+    // fromEntries keeps keys such as __proto__ as ordinary own properties.
+    return Object.fromEntries([...keys].flatMap(key => {
+      const next = replayValue(ownValue(value, key), ownValue(established, key), ownValue(current, key));
+      return next === MISSING ? [] : [[key, next]];
+    }));
+  }
+  return current;
+}
+
 /**
- * Keep only the fields whose live value still equals what this op established
- * (`established[field]`). Returns `null` if nothing survives (the whole op is a
- * no-op — every field was superseded by a collaborator).
+ * Replay only changes that still stand, retaining collaborators' JSON leaves.
+ * Returns `null` when no effective change survives.
  */
 function filterStalePatch(
   store: SyncStoreContract,
@@ -90,11 +117,10 @@ function filterStalePatch(
   for (const field of Object.keys(patch)) {
     if (field === 'id') continue;
     if (established && field in established) {
-      // Apply only if the field still holds the value we established, meaning no
-      // collaborator has overwritten it since. Otherwise skip it, so the
-      // collaborator's change is left intact.
-      if (deepEqual(readCurrentField(store, patch.id, field), established[field])) {
-        out[field] = patch[field];
+      const current = readCurrentField(store, patch.id, field);
+      const next = replayValue(patch[field], established[field], current);
+      if (!deepEqual(next, current)) {
+        out[field] = next;
         kept++;
       }
     } else {

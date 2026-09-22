@@ -1,5 +1,19 @@
 # @abloatai/humans
 
+## 0.66.2
+
+### Undo preserves independent changes inside objects
+
+Undo and redo now resolve conflicts at changed properties within plain JSON
+objects. Moving a shape can be undone while retaining a collaborator’s resize,
+even when coordinates and dimensions share one field. Conflicting properties
+and remote key additions or deletions remain untouched. The same rules apply
+to batch updates; arrays and replacements between value types remain atomic.
+
+The default policy compares recorded values with current values. It does not
+track causal history, and applications do not need to split related properties
+into separate fields or enable last-writer-wins to use this behavior.
+
 ## 0.66.1
 
 ### Patch Changes

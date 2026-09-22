@@ -48,6 +48,7 @@ const testSchema = defineSchema({
       status: z.enum(['todo', 'in_progress', 'done']).default('todo'),
       order: z.number().default(0),
       workspaceId: z.string().optional(),
+      position: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
     },
     { typename: 'Item' }),
 });
@@ -57,6 +58,7 @@ class TestItem extends Model {
   status!: 'todo' | 'in_progress' | 'done';
   order!: number;
   workspaceId?: string;
+  position?: { x: number; y: number; width: number; height: number };
   organizationId!: string;
   override archivedAt?: Date | null;
 
@@ -66,6 +68,7 @@ class TestItem extends Model {
     this.status = (data.status as 'todo' | 'in_progress' | 'done') ?? 'todo';
     this.order = (data.order as number) ?? 0;
     this.workspaceId = data.workspaceId as string | undefined;
+    this.position = data.position as TestItem['position'];
     this.organizationId = (data.organizationId as string) ?? '';
     this.archivedAt = data.archivedAt as Date | null | undefined;
   }
@@ -78,6 +81,7 @@ class TestItem extends Model {
       status: this.status,
       order: this.order,
       workspaceId: this.workspaceId,
+      position: this.position,
       organizationId: this.organizationId,
       archivedAt: this.archivedAt,
       createdAt: this.createdAt,
@@ -407,6 +411,28 @@ describe('UndoScope reparent (FK change)', () => {
 // undo respects the policy when it replays against the now-changed live state.
 
 describe('UndoScope conflict resolution (e2e)', () => {
+  it('undoes and redoes a nested move while preserving a collaborator resize', async () => {
+    const scope = new UndoScope(testSchema, store, 'org-1');
+    const before = { x: 100, y: 200, width: 300, height: 200 };
+    const created = await createTransaction(testSchema, store, 'org-1').mutations.items.create({ title: 'Rectangle', position: before });
+    const id = created.id;
+    const rec = createRecordingMutation(testSchema, store, 'org-1');
+    const moved = { ...before, x: 180, y: 230 };
+    await rec.tx.mutations.items.update({ id, position: moved });
+    scope.record(rec.getEntry()!);
+    item(id).position = { ...moved, width: 380, height: 245 };
+
+    await scope.undo();
+    expect(item(id).position).toEqual({ ...before, width: 380, height: 245 });
+    await scope.redo();
+    expect(item(id).position).toEqual({ ...moved, width: 380, height: 245 });
+
+    await scope.undo();
+    item(id).position = { ...item(id).position!, x: 999 };
+    await scope.redo();
+    expect(item(id).position).toEqual({ ...moved, x: 999, width: 380, height: 245 });
+  });
+
   it('skip-stale (default): undo leaves a field a collaborator changed after you', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1'); // default policy
     const id = await seed({ title: 'old' });
@@ -510,6 +536,54 @@ describe('resolveOps (unit)', () => {
     expect(resolveOps(inv, fwd, s, 'skip-stale')).toEqual([
       { kind: 'updateMany', modelKey: 'items', patches: [{ id: 'a', title: 'oldA' }] },
     ]);
+  });
+
+  it.each([
+    {
+      name: 'a conflicting coordinate and independent resized width',
+      before: { x: 100, y: 200, width: 300 }, after: { x: 180, y: 230, width: 300 },
+      current: { x: 999, y: 230, width: 380 }, undone: { x: 999, y: 200, width: 380 },
+    },
+    {
+      name: 'nested key additions/removals and remote additions',
+      before: { nested: { old: 1, keep: 'a' } }, after: { nested: { added: 2, keep: 'a' } },
+      current: { nested: { added: 2, keep: 'theirs', remote: 3 } },
+      undone: { nested: { old: 1, keep: 'theirs', remote: 3 } },
+    },
+    {
+      name: 'arrays stay atomic while a sibling changes',
+      before: { points: [1, 2], x: 0 }, after: { points: [3, 4], x: 10 },
+      current: { points: [3, 99], x: 10 }, undone: { points: [3, 99], x: 0 },
+    },
+    {
+      name: 'a remotely removed branch stays removed',
+      before: { nested: { x: 0 }, y: 0 }, after: { nested: { x: 10 }, y: 10 },
+      current: { y: 10 }, undone: { y: 0 },
+    },
+    {
+      name: 'remote null replaces a branch atomically',
+      before: { nested: { x: 0 }, y: 0 }, after: { nested: { x: 10 }, y: 10 },
+      current: { nested: null, y: 10 }, undone: { nested: null, y: 0 },
+    },
+  ])('preserves $name for updateMany', ({ before, after, current, undone }) => {
+    const inverse: InverseOp[] = [{ kind: 'updateMany', modelKey: 'items', patches: [{ id: 'a', position: before }] }];
+    const forward: InverseOp[] = [{ kind: 'updateMany', modelKey: 'items', patches: [{ id: 'a', position: after }] }];
+    expect(resolveOps(inverse, forward, storeWith({ a: { position: current } }), 'skip-stale')).toEqual([
+      { kind: 'updateMany', modelKey: 'items', patches: [{ id: 'a', position: undone }] },
+    ]);
+  });
+
+  it('restores an own JSON __proto__ key without changing the object prototype', () => {
+    const before = JSON.parse('{"__proto__":{"label":"old"},"x":0}') as Record<string, unknown>;
+    const after = { x: 10 };
+    const current = { x: 10, remote: true };
+    const inverse: InverseOp[] = [{ kind: 'update', modelKey: 'items', patch: { id: 'a', position: before } }];
+    const forward: InverseOp[] = [{ kind: 'update', modelKey: 'items', patch: { id: 'a', position: after } }];
+    const result = resolveOps(inverse, forward, storeWith({ a: { position: current } }), 'skip-stale');
+    expect(result).toEqual([{ kind: 'update', modelKey: 'items', patch: { id: 'a', position: { ...before, remote: true } } }]);
+    if (result[0]?.kind !== 'update') throw new Error('expected update');
+    expect(Object.getPrototypeOf(result[0].patch.position)).toBe(Object.prototype);
+    expect(current).toEqual({ x: 10, remote: true });
   });
 
   it('passes structural create/delete ops through unconditionally', () => {

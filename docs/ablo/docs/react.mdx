@@ -467,6 +467,21 @@ An app's ambient registration cannot retroactively change a separately compiled
 library. Use `defineMutators(schema, definitions)`, `useMutators(schema, definitions)`
 and `useUndoScope(schema, name)` across those boundaries.
 
+## Undo and collaborator changes
+
+`useUndoScope(schema, name, options)` defaults to `conflictPolicy: 'skip-stale'`.
+Undo restores a changed property only if its current value still matches the
+value recorded by the original edit. Plain JSON objects are compared recursively:
+undoing a move in `position: { x, y, width, height }` restores matching `x` and
+`y` while preserving a collaborator’s changed `width` and `height`.
+
+Conflicting properties and remote key additions or deletions stay intact.
+Arrays and replacements between value types are atomic. Redo and batch updates
+use the same rules, including protection for edits made after undo. This is
+selective replay based on current value equality, not causal history or an
+array/text CRDT. `conflictPolicy: 'last-writer-wins'` instead replays the original
+patch and can overwrite collaborator changes.
+
 ## Mutation failures and scoped collaborators
 
 ```tsx
