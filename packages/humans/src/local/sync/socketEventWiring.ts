@@ -49,9 +49,9 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
         deps.updateSyncStatus({ offlineSince: undefined });
       }
       // Re-assert read interest on every (re)connect. After a transient
-      // reconnect the socket re-sends its URL groups, but interest may have
-      // changed while offline; after a full reconnect the new socket's URL
-      // carries only base groups. `resync` re-pushes the current desired set
+      // reconnect the socket restores its last confirmed groups, but interest
+      // may have changed while offline; after a full reconnect the new socket
+      // starts with only base groups. `resync` re-pushes the current desired set
       // so the server-side index matches what the user is actually viewing.
       void deps.areaOfInterest.resync();
     });

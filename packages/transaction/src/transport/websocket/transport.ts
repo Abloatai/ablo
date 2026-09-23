@@ -81,6 +81,7 @@ import {
  * ±15% jitter). A client-side setting, not part of the wire contract.
  */
 const MAX_RECONNECT_DELAY_MS = 30_000;
+const MAX_UPGRADE_URL_LENGTH = 2_000;
 
 export interface SyncCapabilities {
   partialBootstrap?: boolean;
@@ -434,6 +435,8 @@ export class WsTransport<
    * usually settle before the next one, so depth is ~1 in practice.)
    */
   private pendingSubscriptions: PendingSubscription[] = [];
+  private initialSubscription: string[] | null = null;
+  private initialSubscriptionInFlight = false;
 
   constructor(options: WsTransportOptions) {
     super();
@@ -580,6 +583,22 @@ export class WsTransport<
 
   private completePresenceHandshake(): void {
     if (this.presenceSessionEstablishedForSocket || this.ws?.readyState !== WebSocket.OPEN) return;
+    if (this.initialSubscription !== null) {
+      if (this.initialSubscriptionInFlight) return;
+      this.initialSubscriptionInFlight = true;
+      const socket = this.ws;
+      void this.updateSubscription(this.initialSubscription).then(() => {
+        if (this.ws !== socket) return;
+        this.initialSubscription = null;
+        this.initialSubscriptionInFlight = false;
+        this.completePresenceHandshake();
+      }).catch((error: unknown) => {
+        if (this.ws !== socket) return;
+        socket.close(1011, 'initial_subscription_failed');
+        if (this.listenerCount('error') > 0) this.emit('error', toAbloError(error));
+      });
+      return;
+    }
     this.presenceSessionEstablishedForSocket = true;
     this.observability.breadcrumb('WebSocket connected', 'sync.websocket', 'info', {
       reconnectAttempts: this.reconnectAttempts,
@@ -690,7 +709,15 @@ export class WsTransport<
       );
     }
 
-    const wsUrl = `${this.options.url}?${params.toString()}`;
+    let wsUrl = `${this.options.url}?${params.toString()}`;
+    this.initialSubscription = null;
+    this.initialSubscriptionInFlight = false;
+    if (wsUrl.length > MAX_UPGRADE_URL_LENGTH && this.options.syncGroups.length > 0) {
+      // Keep the HTTP upgrade small; confirm the full interest before catch-up.
+      params.delete('syncGroups');
+      wsUrl = `${this.options.url}?${params.toString()}`;
+      this.initialSubscription = [...this.options.syncGroups];
+    }
 
     // Carry the bearer in a `Sec-WebSocket-Protocol` value, not the URL. A
     // browser cannot set an Authorization header on a WebSocket, but it can
@@ -1475,9 +1502,9 @@ export class WsTransport<
   }
 
   /**
-   * Seeds the connection's read interest — the sync groups the next upgrade
-   * URL carries. The set is already mutable state (`subscription_ack` writes
-   * the acked set back so a reconnect resubscribes to current interest);
+   * Seeds the connection's read interest. Small sets travel in the upgrade
+   * URL; large sets are confirmed by a frame before catch-up starts.
+   * `subscription_ack` writes the acked set back for reconnects;
    * this setter is the host's way to seed it once identity resolves, before
    * the first `connect()`.
    */

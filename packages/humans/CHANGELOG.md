@@ -1,5 +1,11 @@
 # @abloatai/humans
 
+## 0.66.3
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.3
+
 ## 0.66.2
 
 ### Undo preserves independent changes inside objects

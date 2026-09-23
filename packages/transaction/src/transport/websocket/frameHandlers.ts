@@ -311,8 +311,8 @@ const handleSubscriptionAck: WsFrameHandler = (session, message) => {
   }
   const ack = parsed.data;
   if (ack.success) {
-    // Keep the reconnect URL aligned with current interest: a
-    // reconnect re-subscribes from `this.options.syncGroups`.
+    // Keep the next connection aligned with current interest: it uses
+    // `this.options.syncGroups` in the upgrade or the initial frame.
     session.options.syncGroups = ack.syncGroups;
     pending.resolve({ syncGroups: ack.syncGroups });
   } else {

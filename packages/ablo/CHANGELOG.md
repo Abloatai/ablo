@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.66.3
+
+### Larger live workspaces connect reliably
+
+An application watching many repositories or projects could put enough sync
+groups in its WebSocket address for a gateway to refuse the connection with
+HTTP 414. Ablo now keeps the address short and confirms the full subscription
+over the open connection before replaying missed changes. Existing small
+subscriptions continue to open as before.
+
 ## 0.66.2
 
 ### Undo preserves independent changes inside objects

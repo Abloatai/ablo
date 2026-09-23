@@ -29,6 +29,9 @@ class PackedConsumerWebSocket {
   open() {
     this.readyState = PackedConsumerWebSocket.OPEN;
     this.onopen?.();
+    this.receive({ type: 'presence_session', payload: {
+      presenceSessionId: 'b6741f5a-e982-4f9c-916b-2d247b8d4646', resumed: false,
+    } });
   }
 
   send(value) {

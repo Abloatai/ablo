@@ -232,12 +232,12 @@ export class SubscriptionManager {
   /**
    * Re-asserts the full desired set against the transport, forgetting what was
    * previously confirmed. Call this after a reconnect: a fresh
-   * {@link SyncWebSocket} starts from the sync groups named in the connect-time
-   * URL, so the manager's diff baseline no longer reflects the new socket.
+   * {@link SyncWebSocket} starts from the groups confirmed during connection,
+   * so the manager's diff baseline no longer reflects the new socket.
    * Clearing that baseline makes the next reconcile push one
    * `update_subscription` frame that re-establishes the current interest —
    * including any warm or pinned groups that drifted while the connection was
-   * down. The connect-time URL already carries the last-acknowledged set, so
+   * down. The connection already carries the last-acknowledged set, so
    * this is a correction, not the primary mechanism.
    */
   resync(): Promise<void> {
