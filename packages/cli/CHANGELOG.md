@@ -1,5 +1,12 @@
 # @abloatai/cli
 
+## 0.66.4
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.4
+- @abloatai/humans@0.66.4
+
 ## 0.66.3
 
 ### Patch Changes

@@ -1,0 +1,14 @@
+---
+title: "v0.66.4"
+type: changelog
+date: 2026-09-23T15:32:47.000Z
+changelog:
+  version: "0.66.4"
+  category: "Fixes"
+---
+
+### Failed live subscriptions close cleanly
+
+When a large WebSocket subscription is rejected, the browser now closes the
+connection and reports the subscription error. An invalid close code previously
+raised a separate exception and obscured the reason for the rejection.

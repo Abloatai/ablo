@@ -594,7 +594,7 @@ export class WsTransport<
         this.completePresenceHandshake();
       }).catch((error: unknown) => {
         if (this.ws !== socket) return;
-        socket.close(1011, 'initial_subscription_failed');
+        socket.close(4000, 'initial_subscription_failed');
         if (this.listenerCount('error') > 0) this.emit('error', toAbloError(error));
       });
       return;

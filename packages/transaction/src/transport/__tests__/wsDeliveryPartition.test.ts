@@ -101,6 +101,55 @@ describe('WsTransport delivery routing', () => {
     transport.disconnect();
   });
 
+  it('closes with a browser-valid code when the initial subscription fails', async () => {
+    class RejectingWebSocket {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      static readonly CLOSED = 3;
+      static instance: RejectingWebSocket;
+      readyState = RejectingWebSocket.OPEN;
+      onopen: (() => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      closeCode: number | null = null;
+
+      constructor() { RejectingWebSocket.instance = this; }
+      send(): void {}
+      close(code: number): void {
+        if (code !== 1000 && (code < 3000 || code > 4999)) throw new DOMException('Invalid close code', 'InvalidAccessError');
+        this.closeCode = code;
+        this.onclose?.({ code, reason: 'initial_subscription_failed' } as CloseEvent);
+      }
+      receive(frame: unknown): void {
+        this.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent);
+      }
+    }
+
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: RejectingWebSocket,
+    });
+
+    const groups = Array.from({ length: 60 }, (_, i) => `repository:org:${i.toString().padStart(40, '0')}`);
+    const transport = new WsTransport({ baseUrl: 'https://sync.example.test', syncGroups: groups });
+    const errors: Error[] = [];
+    transport.subscribe('error', error => { errors.push(error); });
+    transport.connect();
+    const socket = RejectingWebSocket.instance;
+    socket.onopen?.();
+    socket.receive({ type: 'presence_session', payload: { presenceSessionId: 'b6741f5a-e982-4f9c-916b-2d247b8d4646', resumed: false } });
+    socket.receive({ type: 'subscription_ack', payload: { success: false, syncGroups: [], error: { code: 'malformed_subscription', message: 'Rejected scope' } } });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(socket.closeCode).toBe(4000);
+    expect(errors[0]?.message).toContain('Rejected scope');
+    transport.disconnect();
+  });
+
   it('suppresses a synchronous socket error caused by manual disconnect', () => {
     class ErrorOnCloseWebSocket {
       static readonly CONNECTING = 0;
