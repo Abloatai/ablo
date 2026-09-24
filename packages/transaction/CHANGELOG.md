@@ -1,5 +1,11 @@
 # @abloatai/transaction
 
+## 0.66.5
+
+### Patch Changes
+
+- Allow browser sessions with hundreds of authorized sync groups to complete their WebSocket subscription.
+
 ## 0.66.4
 
 ## 0.66.3

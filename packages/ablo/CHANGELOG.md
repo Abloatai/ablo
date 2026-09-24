@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.66.5
+
+### Large browser workspaces can finish connecting
+
+Browser sessions with hundreds of authorized sync groups could pass the
+WebSocket upgrade but fail the subscription that followed it. Ablo now accepts
+these larger subscriptions within the existing frame-size and credential-scope
+checks, allowing the connection to finish before missed changes are replayed.
+
 ## 0.66.4
 
 ### Failed live subscriptions close cleanly

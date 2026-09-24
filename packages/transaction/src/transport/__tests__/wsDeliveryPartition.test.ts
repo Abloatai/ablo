@@ -81,7 +81,7 @@ describe('WsTransport delivery routing', () => {
       value: CapturingWebSocket,
     });
 
-    const groups = Array.from({ length: 60 }, (_, i) => `repository:org:${i.toString().padStart(40, '0')}`);
+    const groups = Array.from({ length: 253 }, (_, i) => `repository:org:${i.toString().padStart(40, '0')}`);
     const transport = new WsTransport({ baseUrl: 'https://sync.example.test', syncGroups: groups });
     let connected = false;
     transport.subscribe('connected', () => { connected = true; });

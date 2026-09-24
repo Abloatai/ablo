@@ -987,12 +987,11 @@ export type ClaimHeartbeatBatchAckPayload = z.infer<
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * How many scopes one frame may name. A coarse abuse ceiling, not a business
- * limit: a connection legitimately watches a handful of entities, and a list
- * this long is an amplification attempt rather than a workload. Declared here,
- * beside the two frames it bounds, so neither can be given a different answer.
+ * How many scopes one subscription frame may name. Browser sessions can hold
+ * several groups per repository, so this is an abuse ceiling rather than a
+ * limit on ordinary work. The WebSocket server also caps frame bytes.
  */
-export const MAX_FRAME_SYNC_GROUPS = 200;
+export const MAX_FRAME_SYNC_GROUPS = 5_000;
 
 /**
  * The sync groups a scope-subscription frame names. Each entry is a
