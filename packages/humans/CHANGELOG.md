@@ -1,5 +1,12 @@
 # @abloatai/humans
 
+## 0.66.6
+
+### Patch Changes
+
+- Keep the browser client usable when a navigation is canceled. If another tab upgrades or the browser closes its IndexedDB connection, reject new local writes before dispatch and retain the durable outbox for a fresh client.
+  - @abloatai/transaction@0.66.6
+
 ## 0.66.5
 
 ### Patch Changes

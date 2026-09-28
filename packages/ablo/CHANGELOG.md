@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.66.6
+
+### Browser editing stays available after a canceled departure
+
+A canceled page departure could leave an open editor with its local database
+connection closing. Ablo no longer starts disposal before the browser decides
+whether to leave. If another tab upgrades the browser database, the old client
+now rejects new writes before dispatch and keeps its durable pending writes
+for a fresh client. Reopen the app to use the updated database.
+
 ## 0.66.5
 
 ### Large browser workspaces can finish connecting

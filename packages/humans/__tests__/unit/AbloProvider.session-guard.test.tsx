@@ -100,6 +100,24 @@ describe('AbloProvider — reactive binding over a prebuilt client', () => {
     unmount();
     expect(client.dispose).not.toHaveBeenCalled();
   });
+
+  it('keeps the client alive when a beforeunload prompt is canceled', () => {
+    const { client } = makeClient();
+    const cancelNavigation = (event: BeforeUnloadEvent) => { event.preventDefault(); };
+    window.addEventListener('beforeunload', cancelNavigation);
+    render(
+      <AbloProvider client={client} fallback="passthrough">
+        <div>child</div>
+      </AbloProvider>,
+    );
+
+    const event = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(client.dispose).not.toHaveBeenCalled();
+    window.removeEventListener('beforeunload', cancelNavigation);
+  });
 });
 
 // Status must be usable before identity resolves, including a custom fallback.

@@ -1,4 +1,5 @@
 import { Database } from '../../Database.js';
+import type { PersistedTransaction } from '../../transactions/persistedTransaction.js';
 import { Model } from '../../Model.js';
 import { ModelRegistry } from '../../ModelRegistry.js';
 import { BootstrapFetcher } from '../../sync/BootstrapFetcher.js';
@@ -12,7 +13,7 @@ import {
   persistenceDatabaseName,
   type PersistenceIdentity,
 } from '../persistenceIdentity.js';
-import { deleteIDBWithTimeout } from '../openIDBWithTimeout.js';
+import { deleteIDBWithTimeout, openIDBWithTimeout } from '../openIDBWithTimeout.js';
 
 const identity = (
   participantId: string,
@@ -149,5 +150,37 @@ it('restores the same authority but never another account group or narrower perm
   } finally {
     await Promise.all(databases.map(database => database.close()));
     await Promise.all([...names, 'ablo_databases'].map(name => deleteIDBWithTimeout(name)));
+  }
+});
+
+it('stops writes on a workspace connection closed by another tab without losing the outbox', async () => {
+  const registry = new ModelRegistry({ validateOnRegister: false });
+  registry.registerModel('Item', Item, { loadStrategy: LoadStrategy.instant });
+  const scope = identity('version-change');
+  const name = await persistenceDatabaseName(scope);
+  const database = new Database(registry, new BootstrapFetcher({ baseUrl: 'https://api.example.com' }));
+  let upgraded: IDBDatabase | undefined;
+  try {
+    await database.open(scope);
+    await database.getStore('__transactions')!.put({ id: 'staged-write' });
+
+    upgraded = await openIDBWithTimeout(name, 2);
+    expect(database.isOpen()).toBe(false);
+    await expect(database.saveTransactions([{ id: 'new-write' } as PersistedTransaction]))
+      .rejects.toMatchObject({ code: 'db_not_opened' });
+    await expect(database.open(scope)).rejects.toMatchObject({ code: 'db_not_opened' });
+
+    const staged = await new Promise<unknown>((resolve, reject) => {
+      const request = upgraded!.transaction('__transactions', 'readonly')
+        .objectStore('__transactions').get('staged-write');
+      request.onsuccess = () => { resolve(request.result); };
+      request.onerror = () => { reject(request.error); };
+    });
+    expect(staged).toMatchObject({ id: 'staged-write' });
+  } finally {
+    upgraded?.close();
+    await database.close();
+    await deleteIDBWithTimeout(name);
+    await deleteIDBWithTimeout('ablo_databases');
   }
 });

@@ -223,6 +223,11 @@ export class Database {
   }
 
   async open(identity: PersistenceIdentity, version = 1): Promise<void> {
+    if (this.isClosing && this.currentDbInfo && !this.workspaceDb) {
+      throw new AbloConnectionError('IndexedDB connection closed; recreate the client', {
+        code: 'db_not_opened',
+      });
+    }
     this.isClosing = false;
 
     if (this.workspaceDb && this.currentDbInfo) {
@@ -281,6 +286,15 @@ export class Database {
         await this.storeManager.createStores(db);
       }
     );
+    const openedDb = this.workspaceDb;
+    const connectionClosed = () => {
+      if (this.workspaceDb !== openedDb) return;
+      this.workspaceDb = null;
+      this.isClosing = true;
+      this.storeManager.markAllStoresAsClosing();
+    };
+    openedDb.addEventListener('versionchange', connectionClosed);
+    openedDb.addEventListener('close', connectionClosed);
 
     // Initialize stores
     await this.storeManager.initializeStores(this.workspaceDb);

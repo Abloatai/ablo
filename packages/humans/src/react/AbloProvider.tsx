@@ -145,10 +145,8 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handler = (event: BeforeUnloadEvent) => {
-      // Best-effort IDB flush on TAB CLOSE — the client is going away with the
-      // page regardless. This is NOT an unmount teardown: the consumer owns the
-      // client's lifecycle and the provider never disposes it on unmount.
-      void engine.dispose();
+      // The user may cancel navigation. Keep the client and its IndexedDB
+      // connection alive until the page actually goes away.
       if (preventUnsavedChanges && engine._store.hasUnsyncedChanges) {
         event.preventDefault();
         event.returnValue = '';

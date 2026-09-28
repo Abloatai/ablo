@@ -52,7 +52,7 @@ describe('WsTransport delivery routing', () => {
     transport.disconnect();
   });
 
-  it('confirms large subscriptions after upgrade and before reporting connected', async () => {
+  it.each([253, 5_000])('confirms %i groups before reporting connected or starting catch-up', async (count) => {
     class CapturingWebSocket {
       static readonly CONNECTING = 0;
       static readonly OPEN = 1;
@@ -81,8 +81,12 @@ describe('WsTransport delivery routing', () => {
       value: CapturingWebSocket,
     });
 
-    const groups = Array.from({ length: 253 }, (_, i) => `repository:org:${i.toString().padStart(40, '0')}`);
-    const transport = new WsTransport({ baseUrl: 'https://sync.example.test', syncGroups: groups });
+    const groups = Array.from({ length: count }, (_, i) => `repository:org:${i.toString().padStart(40, '0')}`);
+    let opened = false;
+    class ObservedTransport extends WsTransport {
+      protected override onOpened(): void { opened = true; }
+    }
+    const transport = new ObservedTransport({ baseUrl: 'https://sync.example.test', syncGroups: groups });
     let connected = false;
     transport.subscribe('connected', () => { connected = true; });
     transport.connect();
@@ -94,10 +98,17 @@ describe('WsTransport delivery routing', () => {
     socket.onopen?.();
     socket.receive({ type: 'presence_session', payload: { presenceSessionId: 'b6741f5a-e982-4f9c-916b-2d247b8d4646', resumed: false } });
     expect(socket.sent).toContainEqual({ type: 'update_subscription', payload: { syncGroups: groups } });
+    await Promise.resolve();
     expect(connected).toBe(false);
+    expect(opened).toBe(false);
     socket.receive({ type: 'subscription_ack', payload: { success: true, syncGroups: groups } });
     await Promise.resolve();
     expect(connected).toBe(true);
+    expect(opened).toBe(true);
+    const sent = socket.sent.length;
+    await expect(transport.updateSubscription(Array.from({ length: 5_001 }, (_, i) => `repository:org:${i}`)))
+      .rejects.toMatchObject({ code: 'malformed_subscription' });
+    expect(socket.sent).toHaveLength(sent);
     transport.disconnect();
   });
 
@@ -133,8 +144,10 @@ describe('WsTransport delivery routing', () => {
       value: RejectingWebSocket,
     });
 
-    const groups = Array.from({ length: 60 }, (_, i) => `repository:org:${i.toString().padStart(40, '0')}`);
+    const groups = Array.from({ length: 5_000 }, (_, i) => `repository:org:${i.toString().padStart(40, '0')}`);
     const transport = new WsTransport({ baseUrl: 'https://sync.example.test', syncGroups: groups });
+    let connected = false;
+    transport.subscribe('connected', () => { connected = true; });
     const errors: Error[] = [];
     transport.subscribe('error', error => { errors.push(error); });
     transport.connect();
@@ -145,6 +158,7 @@ describe('WsTransport delivery routing', () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    expect(connected).toBe(false);
     expect(socket.closeCode).toBe(4000);
     expect(errors[0]?.message).toContain('Rejected scope');
     transport.disconnect();
