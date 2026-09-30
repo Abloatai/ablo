@@ -84,6 +84,8 @@ export class InstanceCache {
 
   // Deduplication tracking
   private recentAdditions = new Map<string, number>(); // "modelType:modelId" -> timestamp
+  // Conservative minimum: removal/refresh may leave it stale, causing only an extra scan.
+  private earliestRecentAddition = Infinity;
   private deltaHistory = new Map<
     string,
     {
@@ -448,7 +450,9 @@ export class InstanceCache {
     }
 
     // Track this addition
-    this.recentAdditions.set(addKey, Date.now());
+    const addedAt = Date.now();
+    this.recentAdditions.set(addKey, addedAt);
+    this.earliestRecentAddition = Math.min(this.earliestRecentAddition, addedAt);
 
     // Clean old tracking entries periodically
     if (this.recentAdditions.size > 100) {
@@ -1063,6 +1067,7 @@ export class InstanceCache {
         index.clear();
       }
       this.recentAdditions.clear();
+      this.earliestRecentAddition = Infinity;
       this.deltaHistory.clear();
       this.metrics = {
         hits: 0,
@@ -1175,9 +1180,13 @@ export class InstanceCache {
 
   private cleanupTracking(): void {
     const now = Date.now();
+    if (now - this.earliestRecentAddition <= 1000) return;
+    this.earliestRecentAddition = Infinity;
     for (const [key, time] of this.recentAdditions) {
       if (now - time > 1000) {
         this.recentAdditions.delete(key);
+      } else {
+        this.earliestRecentAddition = Math.min(this.earliestRecentAddition, time);
       }
     }
   }

@@ -1,0 +1,14 @@
+---
+title: "v0.66.7"
+type: changelog
+date: 2026-09-30T09:05:37.000Z
+changelog:
+  version: "0.66.7"
+  category: "Fixes"
+---
+
+### Faster bursts of local cache insertions
+
+Fresh insertion bursts no longer repeatedly scan the recent-entry cache. The
+one-second expiry boundary, duplicate detection and cleanup behavior stay intact,
+including after clearing the cache. Applications do not need to change their API calls.

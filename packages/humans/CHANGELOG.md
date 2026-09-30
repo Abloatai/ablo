@@ -1,5 +1,13 @@
 # @abloatai/humans
 
+## 0.66.7
+
+### Patch Changes
+
+- Avoid repeated InstanceCache expiry scans during fresh insertion bursts while preserving the one-second expiry boundary, deduplication and cleanup. Reset the expiry guard when clearing the cache. Rust/WASM ownership remains experimental and is not shipped in the SDK.
+- Updated dependencies
+  - @abloatai/transaction@0.66.7
+
 ## 0.66.6
 
 ### Patch Changes

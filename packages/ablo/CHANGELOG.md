@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.66.7
+
+### Faster bursts of local cache insertions
+
+Fresh insertion bursts no longer repeatedly scan the recent-entry cache. The
+one-second expiry boundary, duplicate detection and cleanup behavior stay intact,
+including after clearing the cache. Applications do not need to change their API calls.
+
 ## 0.66.6
 
 ### Browser editing stays available after a canceled departure
