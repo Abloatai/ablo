@@ -1,7 +1,8 @@
 # Sync engine / Rust assessment — 2026-09-30
 
-**Recommendation: keep the current engine. Do not authorize a rewrite or a
-native extraction from this evidence.** The measured client deduplication stage
+**Recommendation: do not approve a rewrite from this evidence; investigate the
+actual bottleneck first. This does not establish that the engine is healthy.**
+The measured client deduplication stage
 is too small a share of normal receive work to justify a new runtime boundary.
 The authoritative server is outside this repository. **The requested Rust
 comparison is incomplete:** the prototype is written, but no Rust compiler was
@@ -222,3 +223,67 @@ benefit currently pays for that migration.
 Production behavior is unchanged. This is a reviewable partial experiment,
 not completion of the requested Rust/server assessment. No merge or deployment
 is authorized by this work.
+
+## Follow-up: broader hot-path investigation
+
+The original cold-update baseline cannot rule out severe behavior with active
+consumers, create bursts, or backlog. Two additional probes expose that gap.
+
+The existing benchmark was run with:
+
+```sh
+npm test --workspace=@abloatai/humans -- --runInBand --silent=false --runTestsByPath __tests__/unit/applyPool.bench.test.ts
+```
+
+Both tests passed. In this **single diagnostic run** (not a repeated estimate),
+104,000 updates took 2,970.9 ms with activated models versus 598.9 ms cold:
+approximately 5x. Activating 8,000 models cost another 834.3 ms once. This is
+an isolated pool test, not a React/browser or server latency result.
+Its at-cap CREATE result (23.1 ms) is particularly misleading as a general
+throughput number: `wireAddRetentionLimit` admits zero fresh rows into a full,
+unsubscribed headless cache. With subscribers/views, that limit is disabled.
+The benchmark's reported input count is not the number of materialized rows.
+
+The new focused probe runs the real `InstanceCache` on unique preconstructed
+rows, checks every retained object by identity, and measures seven samples
+after warmup. It excludes construction, WeakRefs, eviction and subscribers.
+
+```sh
+node experiments/rust-sync/hotpath.mjs
+```
+
+Raw results are in [hotpath-results.json](hotpath-results.json), with source
+commit and runtime metadata. Single/batch timing order alternates; the
+cleanup-disabled diagnostic runs last, so its ratio is indicative rather than
+a rigorously randomized causal estimate.
+
+| Unique rows | Single `add` median | `addBatch` median | Single add, cleanup disabled |
+| --- | ---: | ---: | ---: |
+| 1,000 | 8.07 ms | 0.93 ms | 1.71 ms |
+| 4,000 | 70.86 ms | 2.83 ms | 5.59 ms |
+| 8,000 | 251.50 ms | 5.91 ms | 12.10 ms |
+
+**Concrete scaling defect:** after 100 tracked additions, each single `add`
+calls `cleanupTracking`, which scans the entire map to expire entries older
+than one second. During a sub-second unique-row burst, it repeatedly scans
+entries that cannot yet expire. A separate fixed-clock structural check
+asserts exactly `n * (n + 1) / 2 - 5050` visits: 495,450 at 1k, 7,996,950 at
+4k, and **31,998,950 at 8k**. Those fixed-clock runs are excluded from timing.
+The real-clock measurements also complete within one second at all sizes.
+
+This single-add path is reached from `createModelOperations` → `SyncClient.add`
+→ `InstanceCache.add`, and from custom-entity delivery in `deltaPipeline`.
+Ordinary received deltas generally use batch pool operations, so this finding
+must not be attributed to every incoming frame or to the absent server.
+
+Disabling cleanup is an experimental ablation, **not a fix**: expiry and rapid
+re-add deduplication must remain correct. Likewise `addBatch` is a useful
+comparison for unique rows, not a semantics-equivalent substitute for arbitrary
+single adds. A follow-up fix should amortize expiry work (for example, ordered
+expiry pruning) and test the 50 ms re-add window, one-second expiry, deletes,
+and clock behavior. A Rust port preserving the repeated full scan would still
+retain its quadratic burst work.
+
+No production code was changed. These are reproducible client-side findings,
+not proof of the cause of a live incident. Incident symptoms, affected clients,
+workload and server traces are still needed to establish that connection.
