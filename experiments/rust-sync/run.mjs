@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { cpus, totalmem, release } from 'node:os';
@@ -143,7 +143,7 @@ try {
       results.flows.push({ mode, inputCount: count, wireBytes: wire.reduce((n, w) => n + Buffer.byteLength(w), 0), timing: summary(values, count), attribution });
       console.log(`${mode} full headless receive flow: median ${summary(values, count).medianMs.toFixed(2)} ms`);
     }
-    results.memory = { nodeProcessPeakRssKiB: process.resourceUsage().maxRSS, rustWorkerStatus: worker ? readFileSync(`/proc/${worker.process.pid}/status`, 'utf8').split('\n').filter(s => /^(VmHWM|VmRSS):/.test(s)) : null, note: 'Process high-water RSS, including harness and full workloads; Rust holds IDs only while Node owns payloads. Not equivalent engine footprints.' };
+    results.memory = { nodeProcessPeakRssKiB: process.resourceUsage().maxRSS, rustMemoryNote: process.platform === 'linux' ? 'Linux proc status' : 'Rust RSS unavailable: Linux proc status does not exist on this platform', rustWorkerStatus: worker && existsSync(`/proc/${worker.process.pid}/status`) ? readFileSync(`/proc/${worker.process.pid}/status`, 'utf8').split('\n').filter(s => /^(VmHWM|VmRSS):/.test(s)) : null, note: 'Process high-water RSS, including harness and full workloads; Rust holds IDs only while Node owns payloads. Not equivalent engine footprints.' };
     writeFileSync(baselineOnly ? 'baseline-results.json' : 'results.json', JSON.stringify(results, null, 2) + '\n');
   }
 } finally { worker?.close(); }

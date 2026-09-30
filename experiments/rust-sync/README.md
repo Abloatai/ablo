@@ -1,13 +1,111 @@
 # Sync engine / Rust assessment — 2026-09-30
 
-**Recommendation: do not approve a rewrite from this evidence; investigate the
-actual bottleneck first. This does not establish that the engine is healthy.**
-The measured client deduplication stage
-is too small a share of normal receive work to justify a new runtime boundary.
-The authoritative server is outside this repository. **The requested Rust
-comparison is incomplete:** the prototype is written, but no Rust compiler was
-available and permitted compiler acquisition failed. There are no Rust speedup,
-memory, compilation, or differential-parity results in this report.
+**Recommendation: fix the repeated expiry scan in JavaScript before considering
+an engine rewrite. The requested Rust kernels have now been compiled and run.**
+The current algorithm is faster in Rust, but retaining the same repeated scan
+retains quadratic burst work. The comparison below separates changing the
+language from skipping work whose expiry condition cannot yet be true.
+This is a client hot-path experiment, not a full Rust engine or server test.
+
+## Completed Rust comparison
+
+Measured on Apple M1 (arm64), Node v24.18.0,
+rustc 1.98.1 (48a229cea 2026-09-01). Seven samples per variant, rotating execution order,
+after warmup. The final complete run is in [tracking-results.json](tracking-results.json);
+an earlier complete run is retained in [tracking-first-results.json](tracking-first-results.json).
+Background browser/editor/system activity caused substantial variance. For the
+8k current algorithm, JS medians were 445 and 269 ms; Rust medians were 99 and
+57 ms across those runs. These are local directional measurements, not capacity
+or latency guarantees. No unrelated applications were stopped.
+
+**Identical tracking workload in both languages, median milliseconds:**
+
+| Additions | Current JS | Same algorithm, Rust | Expiry gate, JS | Same expiry gate, Rust |
+| --- | ---: | ---: | ---: | ---: |
+| 1,000 | 7.18 | 1.45 | 0.59 | 0.71 |
+| 4,000 | 89.92 | 18.29 | 2.73 | 3.10 |
+| 8,000 | 269.38 | 57.37 | 4.82 | 4.78 |
+
+The Rust port preserves the full repeated scan. Both current kernels visit
+31,998,950 entries for the 8k fixed-clock burst. Rust is approximately 4.7x
+faster on that workload; the optimized kernels have similar 8k medians, with
+no demonstrated material Rust advantage after removing redundant scans.
+The gate tracks a conservative minimum timestamp and scans only when an
+entry can be older than one second. It preserves the exact `> 1000` expiry,
+truthy timestamp / `< 50` rapid-add check, live-instance rejection, delta
+history comparison and clearing on removal. Removing or overwriting the
+minimum may trigger an extra scan, but cannot delay expiry; backwards time
+changes also retain the production decisions. No cleanup is disabled.
+The gate is a benchmark-only prototype, not a production patch.
+
+**Actual InstanceCache.add with preconstructed models, median milliseconds:**
+
+| Additions | Current cache | JS cache with expiry gate |
+| --- | ---: | ---: |
+| 1,000 | 22.81 | 2.17 |
+| 4,000 | 100.56 | 6.93 |
+| 8,000 | 248.27 | 11.42 |
+
+The 8k actual-cache improvement is about 22x, including normal MobX/index/view
+notification work with no active subscribers. This confirms that the algorithm
+change helps the real method. It is not a full Rust cache comparison: the
+Rust kernel excludes models, payloads, observability, views, eviction and
+WeakRefs. Tracking inputs are the same precomputed timestamps/IDs/actions;
+source clocks are fixed during parity and pool timings to represent the
+sub-second burst and make the exact work independent of machine contention.
+Kernel timings include map construction, insertion, duplicate checks and
+expiry; snapshot sorting/encoding, input parsing, file transfer and process
+startup are excluded in both languages. Rust state destruction is included;
+JS garbage collection follows V8's normal schedule. Rust HashMap iteration
+order differs, but only final membership and decisions are observable here.
+There is no equivalent whole-engine memory comparison.
+
+**Correctness and replay checks:**
+
+- 171 cases compare the projection with the actual production cache, both
+  Rust algorithms and the JavaScript expiry gate. Every prefix of the boundary
+  fixture checks the 49/50 ms duplicate boundary, 1000/1001 ms expiry boundary,
+  timestamp zero, same/older/newer sync IDs, disposed models, removal/re-add,
+  backwards clocks and final retained history. Fifty seeded random sequences
+  exercise combinations. The unoptimized variants also match exact scan counts.
+- One release Rust unit check and 309 delta-dedupe differential cases passed,
+  including payload identity, ordering, bypass behavior and invalid input.
+  Actual JavaScript persistence-failure and revocation-failure checks passed.
+- The original replay experiment now runs in Rust: a 1,430-delta replay kernel
+  measured JS 0.349 ms / Rust 0.0206 ms / Rust plus IPC 0.155 ms. For 55k replay
+  deltas: JS 28.457 ms / Rust 1.558 ms / Rust plus IPC 11.207 ms. This candidate
+  also changes algorithm/representation, so its ratio is not a pure language
+  comparison. Ordered 1,300-delta frames cost JS 0.0104 ms versus 0.0406 ms with
+  Rust IPC, illustrating the boundary cost. Raw results are in
+  [results.json](results.json).
+- The complete **JavaScript** local receive/persist/apply/ack baseline measured
+  239.89 ms ordered (52k deltas) and 287.22 ms replay (57.2k deltas), checking all
+  8,000 final rows. These are not complete Rust-pipeline measurements. Profiled
+  dedupe contributed 1.24 ms / 14.54 ms respectively. Browser IndexedDB,
+  real networking, active UI and authoritative-server execution are excluded.
+
+Reproduce from the repository root after `npm ci --ignore-scripts` with `rustc`
+and `cargo` on PATH:
+
+```sh
+node experiments/rust-sync/tracking.mjs
+node experiments/rust-sync/run.mjs --check
+node experiments/rust-sync/run.mjs
+```
+
+On this machine, also set
+`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk`.
+The tracking executable compiles with `rustc -O`; the replay executable uses
+Cargo release optimization/LTO with no external dependencies. Tracking fixtures
+are passed through an ignored temporary file because a repeat using Node's
+synchronous stdin pipe stalled; that incomplete repeat was stopped and its
+samples are excluded. The file-input rerun completed all checks and samples.
+The scripts fail on compilation/parity errors and never substitute JS for Rust.
+
+The authoritative-server source is locally present in a separate monorepo,
+but this completed comparison does not benchmark it. These results justify a
+focused JavaScript expiry fix and its integration tests, not a server rewrite.
+
 
 ## Ownership and version
 
@@ -81,7 +179,7 @@ node experiments/rust-sync/run.mjs --check
 node experiments/rust-sync/run.mjs
 ```
 
-The latter commands are **prepared but unverified in this environment**. They
+The latter commands were **compiled and executed locally on macOS**. They
 run dependency-free `cargo test --release --offline` and
 `cargo build --release --offline` with LTO and one codegen unit, then 309
 cross-language differential cases. They compare the production JS function
@@ -95,7 +193,7 @@ files and package manifests are unchanged. Generated bundles/binaries are
 ignored. Baseline runs write `baseline-results.json`; Rust-enabled runs write
 `results.json`. A failed Rust build does not silently fall back to a baseline.
 
-## Measured baseline
+## Initial JavaScript baseline (historical)
 
 Raw samples, throughput, stage counts, timestamps, and memory are in
 [`baseline-results.json`](baseline-results.json). Final recorded run:
@@ -158,7 +256,7 @@ work, but that stress case is not evidence that they dominate actual traffic.
 
 Peak process RSS was 625,660 KiB (~611 MiB), including bundled SDKs, fixtures,
 two profiling module instances, repeated workloads, GC, and the harness. This
-is not retained engine memory. The planned Rust worker holds only IDs while
+is not retained engine memory. The measured Rust worker holds only IDs while
 Node retains payloads; its RSS must not be presented as an equivalent-engine
 memory comparison.
 
@@ -170,7 +268,7 @@ Observed checks:
   309 JS-versus-independent-reference cases, payload identity/input immutability,
   nonpositive/fractional/large IDs, all action types carried unchanged, malformed
   wire rejection, persistence failure requeue/no ack, and revocation failure
-  clear/rebootstrap passed. **Zero Rust differential cases executed.**
+  clear/rebootstrap passed. The original restricted environment executed zero Rust cases; the completed local run below executed all 309.
 - `npm test --workspace=@abloatai/humans -- --runInBand --runTestsByPath`
   with these paths: `src/local/sync/__tests__/deltaPipeline.deduplication.test.ts`,
   `deltaPipeline.revocation.test.ts`, `deltaPipeline.singleFlight.test.ts`,
@@ -187,13 +285,13 @@ ordinary updates; group handling is checked separately. It establishes no
 server I/O bottleneck or end-to-end server latency. A server-wide full-flow
 baseline remains missing because its implementation is unavailable.
 
-Rust/Cargo were absent. The official installer returned HTTP 403; the static
-distribution host explicitly returned `blocked-by-allowlist`. System package
-installation failed on read-only package-list storage. A scoped Lobby network
-access request then failed with `Access requests are unavailable`. These
-restrictions were respected. A local Docker inventory had no cached compiler
-image. Supply a permitted arm64 Rust toolchain, run the two Rust commands above,
-and record compiler version/results before treating the prototype as tested.
+Rust/Cargo were absent in the original Lobby environment, whose downloads
+and access requests were blocked. The local follow-up installed the official
+minimal toolchain under temporary storage, without changing shell profiles or
+system packages. Rust 1.98.1 compiled and executed the prototypes. The default
+macOS 27 SDK did not link with the installed linker; selecting the existing
+macOS 15.4 SDK resolved this. No Rust dependencies were downloaded for either
+prototype.
 
 ## Decision and cost
 
@@ -216,13 +314,13 @@ A full rewrite additionally moves schema validation, authority, groups,
 ordered replay, claims, idempotency, persistence cursors, reconnect/retry,
 observability, and rolling protocol compatibility into a second implementation.
 It needs differential replay, fault injection, shadow traffic, staged rollout,
-rollback, and ongoing Rust operational ownership. With the server absent and
-Rust unmeasured, a schedule/cost estimate would be invented. No demonstrated
-benefit currently pays for that migration.
+rollback, and ongoing Rust operational ownership. These measurements do not establish a server migration cost or benefit.
+The full server remains unmeasured. The client tracking results favor removing
+repeated scans before introducing a Rust runtime boundary.
 
-Production behavior is unchanged. This is a reviewable partial experiment,
-not completion of the requested Rust/server assessment. No merge or deployment
-is authorized by this work.
+Production behavior is unchanged. The Rust tracking and replay comparisons
+are completed; a full server rewrite assessment remains outside these measurements.
+No merge or deployment is authorized by this work.
 
 ## Follow-up: broader hot-path investigation
 
