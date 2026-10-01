@@ -1239,6 +1239,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": true,
       "surface": "wire",
     },
+    "read_evidence_client_mismatch": {
+      "category": "validation",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
+    },
     "registry_invalid_constructor": {
       "category": "client",
       "httpStatus": null,

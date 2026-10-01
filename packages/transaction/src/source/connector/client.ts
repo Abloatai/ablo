@@ -38,6 +38,7 @@ import {
   type ReadyFrame,
 } from './protocol.js';
 import { ABLO_HOSTED_HTTP_BASE_URL } from '../../auth/hostedEndpoints.js';
+import { trimTrailingSlashes } from '../../auth/baseUrl.js';
 
 /**
  * The default Ablo base URL the connector dials, to which it appends
@@ -148,7 +149,7 @@ type ConnectionOutcome = 'retry' | 'ready' | 'superseded';
 export function createSourceConnector(
   options: SourceConnectorOptions,
 ): SourceConnector {
-  const baseURL = (options.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const baseURL = trimTrailingSlashes(options.baseURL ?? DEFAULT_BASE_URL);
   const url = toWebSocketUrl(baseURL) + SOURCE_CONNECTOR_WS_PATH;
   const schedule = options.reconnectSchedule ?? DEFAULT_RECONNECT_SCHEDULE;
   const jitter = options.jitter ?? 0.1;

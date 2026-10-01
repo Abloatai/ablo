@@ -5,6 +5,7 @@ import {
   translateHttpError,
 } from '../errors.js';
 import { effectiveAuthoritySchema } from './capability.js';
+import { trimTrailingSlashes } from './baseUrl.js';
 import type {
   RotateSessionParams,
   SessionRevocation,
@@ -80,7 +81,7 @@ async function requestCapabilityLifecycle(
   let response: Response;
   try {
     response = await (options.fetch ?? fetch)(
-      `${options.baseUrl.replace(/\/+$/, '')}/v1/capabilities/${encodeURIComponent(options.id)}${options.suffix ?? ''}`,
+      `${trimTrailingSlashes(options.baseUrl)}/v1/capabilities/${encodeURIComponent(options.id)}${options.suffix ?? ''}`,
       {
         method: options.method,
         headers: {

@@ -319,6 +319,10 @@ export interface CommitCreateOptions<Read = ReadDependency> {
    * (`{ group, readAt }`, for example `report:abc`) this batch was premised on; the
    * server rejects the batch if any moved since `readAt`. This is distinct from the write-target `readAt`: it guards what
    * you read, not what you write.
+   * On typed clients, captured rows must be the exact objects returned by this
+   * same client instance's `read`. Switching clients requires a new read and
+   * authority/decision validation; foreign rows reject locally with
+   * `read_evidence_client_mismatch` even when TypeScript accepts them.
    */
   readonly reads?: readonly Read[] | null;
 }

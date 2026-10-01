@@ -37,7 +37,14 @@ class MockWebSocket {
   constructor(url: string | URL) {
     this.url = String(url);
     sockets.push(this);
-    queueMicrotask(() => this.onopen?.(new Event('open')));
+    queueMicrotask(() => {
+      this.onopen?.(new Event('open'));
+      this.onmessage?.(new MessageEvent('message', {
+        data: JSON.stringify({ type: 'presence_session', payload: {
+          presenceSessionId: crypto.randomUUID(), resumed: false,
+        } }),
+      }));
+    });
   }
 
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
@@ -45,8 +52,16 @@ class MockWebSocket {
     this.sent.push(data);
     const frame = JSON.parse(data) as {
       type?: string;
-      payload?: { clientTxId?: string; operations?: unknown[] };
+      payload?: { clientTxId?: string; operations?: unknown[]; syncGroups?: string[] };
     };
+    if (frame.type === 'update_subscription') {
+      queueMicrotask(() => this.onmessage?.(new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscription_ack', payload: {
+          success: true, syncGroups: frame.payload?.syncGroups ?? [],
+        } }),
+      })));
+      return;
+    }
     if (frame.type !== 'commit' || !frame.payload?.clientTxId) return;
     const clientTxId = frame.payload.clientTxId;
     queueMicrotask(() => this.onmessage?.(new MessageEvent('message', {
@@ -81,7 +96,7 @@ function response(body: unknown): Response {
   });
 }
 
-function createClient() {
+function createClient(agentId = 'agent-1') {
   return Ablo({
     baseURL: 'ws://localhost:8080',
     schema,
@@ -89,7 +104,7 @@ function createClient() {
     branchId: 'branch-1',
     branchRoot: false,
     kind: 'agent',
-    agentId: 'agent-1',
+    agentId,
     bootstrapMode: 'none',
     inMemory: true,
     capabilityToken: 'test-token',
@@ -136,6 +151,23 @@ describe('reactive/WebSocket atomic commit context reads', () => {
       await client.ready();
       const premise = await client.notes.read({ id: 'note-2' });
       if (!premise) throw new Error('expected premise row');
+
+      const otherClient = createClient('agent-2');
+      try {
+        await otherClient.ready();
+        const before = sockets.map((socket) => socket.sent.length);
+        await expect(otherClient.commits.create({
+          operations: [{ action: 'update', model: 'notes', id: 'note-1', data: { status: 'reviewed' } }],
+          reads: [premise],
+          wait: 'queued',
+        })).rejects.toMatchObject({
+          code: 'read_evidence_client_mismatch', param: 'reads',
+          details: { model: 'notes' },
+        });
+        expect(sockets.map((socket) => socket.sent.length)).toEqual(before);
+      } finally {
+        await otherClient.dispose();
+      }
 
       await expect(client.commits.create({
         operations: [{

@@ -26,6 +26,7 @@ import { z } from 'zod';
 import { classifyRecovery } from '../../errors.js';
 import { withAuthHeaders, type AuthTokenGetter } from '../../auth/credentialSource.js';
 import { ABLO_DEFAULT_BASE_URL } from '../../auth/hostedEndpoints.js';
+import { trimTrailingSlashes } from '../../auth/baseUrl.js';
 import { noopLogger, type Logger } from '../../logger.js';
 
 /**
@@ -99,7 +100,7 @@ function resolveProbeUrl(baseUrl?: string): string {
 
   // Normalize ws → http so fetch() accepts the URL. Strip any trailing slash
   // so we don't produce `//api/auth/check`.
-  const httpBase = resolved.replace(/^ws/, 'http').replace(/\/+$/, '');
+  const httpBase = trimTrailingSlashes(resolved.replace(/^ws/, 'http'));
   return `${httpBase}/api/auth/check`;
 }
 

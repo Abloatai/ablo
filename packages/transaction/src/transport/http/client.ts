@@ -103,18 +103,29 @@ export interface AbloHttpClientOptions<S extends SchemaRecord>
 
 declare const capturedRowBrand: unique symbol;
 
-/** A point-read row whose exact watermark is privately retained by its client. */
+/**
+ * Client-bound evidence: the exact point-read row and watermark belong to the
+ * Ablo client instance that returned it. Use only with that instance's `reads`
+ * or `ifUnchanged`. Copies and serialized rows lose their evidence.
+ *
+ * This brand distinguishes captured reads from ordinary rows, but TypeScript
+ * cannot distinguish client instances. A foreign row rejects at runtime with
+ * `read_evidence_client_mismatch`. When switching to an attributed/scoped client,
+ * read again through that client and revalidate authority and the decision.
+ */
 export type CapturedRow<T = unknown> = T & {
   readonly [capturedRowBrand]: true;
 };
 
 /** Exact returned rows or low-level canonical dependencies accepted by `reads`. */
 export type HttpModelMutationParams<P> = Omit<P, 'reads'> & {
+  /** Exact captured rows from this client instance, or canonical dependencies. */
   readonly reads?: readonly (ReadDependency | CapturedRow)[] | null;
 };
 
 /** A target-row write that can derive its compare-and-swap watermark from `read`. */
 export type HttpGuardedMutationParams<P, T> = HttpModelMutationParams<P> & {
+  /** Exact target row from this model's `read` on this same client instance. */
   readonly ifUnchanged?: CapturedRow<T>;
 };
 
@@ -148,7 +159,9 @@ export interface HttpModelClient<T, C = T> {
    *
    * Unlike `get`, the exact returned object privately carries model, id, and
    * readAt evidence. Pass it in one mutation's `reads` array when that mutation
-   * was decided from this version.
+   * was decided from this version, using the same client instance. A helper
+   * returning this row must preserve that ownership; a new scoped/attributed
+   * client must re-read and revalidate the decision.
    */
   read(params: ModelReadParams & ModelReadOptions): Promise<CapturedRow<T> | undefined>;
   /**

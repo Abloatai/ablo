@@ -35,6 +35,7 @@ import { spawn } from 'child_process';
 import pc from 'picocolors';
 import { intro, outro, note, spinner, log, select, isCancel, cancel } from '@clack/prompts';
 import { translateHttpError } from '@abloatai/transaction/errors';
+import { trimTrailingSlashes } from '@abloatai/transaction/auth/baseUrl';
 import { provisionKeyResponseSchema, type ProvisionedKey } from '@abloatai/transaction/wire';
 import {
   setProfileKeys,
@@ -53,8 +54,6 @@ import {
 import { brand } from './theme';
 
 const CLIENT_ID = 'ablo-cli';
-
-const stripSlash = (u: string) => u.replace(/\/+$/, '');
 
 /**
  * The device flow talks to two separate hosts, each overridable by an
@@ -75,8 +74,8 @@ const stripSlash = (u: string) => u.replace(/\/+$/, '');
  *   browser reads "Approved" while the command reports "Could not provision a
  *   key". Override it with `ABLO_DASHBOARD_URL`.
  */
-const AUTH_URL = stripSlash(process.env.ABLO_AUTH_URL ?? 'https://auth.abloatai.com');
-const DASHBOARD_URL = stripSlash(process.env.ABLO_DASHBOARD_URL ?? 'https://www.abloatai.com');
+const AUTH_URL = trimTrailingSlashes(process.env.ABLO_AUTH_URL ?? 'https://auth.abloatai.com');
+const DASHBOARD_URL = trimTrailingSlashes(process.env.ABLO_DASHBOARD_URL ?? 'https://www.abloatai.com');
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

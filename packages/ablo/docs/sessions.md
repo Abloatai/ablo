@@ -7,6 +7,13 @@ hands to one actor — a signed-in **person's browser** or a scoped **agent**. I
 the same primitive in both cases (backend-minted, short-lived, scoped); the only
 difference is the subject and how much authority it carries.
 
+**Read again when switching clients.** Captured rows from a server client cannot
+guard writes by a newly created session client. Read through the writing client,
+then revalidate application authority and the decision. The SDK rejects known
+foreign rows before submission with `read_evidence_client_mismatch`, even if
+TypeScript accepts them. See [Switching clients](./api.md#switching-clients)
+for a complete example and regression-testing guidance.
+
 One server-only issuer mints both. It is separate from `Ablo(...)` so the
 participant client keeps every schema model name, including `ablo.sessions`:
 

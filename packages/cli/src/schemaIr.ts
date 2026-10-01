@@ -78,11 +78,11 @@ function isIdentifier(s: string): boolean {
 
 /** Object-literal key — bare when it's a valid identifier, quoted otherwise. */
 function quoteKey(s: string): string {
-  return isIdentifier(s) ? s : `'${s.replace(/'/g, "\\'")}'`;
+  return isIdentifier(s) ? s : quoteString(s);
 }
 
 function quoteString(s: string): string {
-  return `'${s.replace(/'/g, "\\'")}'`;
+  return `'${s.replace(/[\\']/g, '\\$&')}'`;
 }
 
 // ── Field expression ────────────────────────────────────────────────────────

@@ -181,7 +181,9 @@ async function readDocsDirectory(
 }
 
 /** The H1 a page opens with, and the blockquote paragraph that follows it. */
-const H1_LINE = /^#[ \t]+(.+?)[ \t]*$/m;
+// The title opens on a non-space so the separator and title cannot trade
+// characters; trailing whitespace is trimmed in code, not by backtracking.
+const H1_LINE = /^#[ \t]+(\S.*)$/m;
 const PROMISE_BLOCKQUOTE = /^\s*\n((?:>.*\n)+)/;
 
 /**
@@ -196,7 +198,7 @@ export function parseDocHeader(body: string): {
   readonly description: string;
 } {
   const heading = H1_LINE.exec(body);
-  const title = heading?.[1] ?? null;
+  const title = heading?.[1]?.trimEnd() ?? null;
 
   const afterHeading = heading === null ? body : body.slice(heading.index + heading[0].length);
   const promise = PROMISE_BLOCKQUOTE.exec(afterHeading);

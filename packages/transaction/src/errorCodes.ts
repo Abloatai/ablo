@@ -638,6 +638,10 @@ export const ERROR_CODES = {
   ),
 
   // ── validation (400 / 422) ─────────────────────────────────────────
+  read_evidence_client_mismatch: client(
+    'validation',
+    'Captured read evidence belongs to another Ablo client instance. Re-read through the writing client and revalidate authority and the decision before retrying. Rejected locally before write submission; param names reads or ifUnchanged. Details contain the model and opaque, process-local sourceClient and targetClient labels, never credentials or row contents.'
+  ),
   write_options_invalid: client(
     'validation',
     'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `claim`) failed validation against the write-options schema.'

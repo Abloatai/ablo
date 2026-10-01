@@ -137,7 +137,59 @@ Delivery is lossy: sending while disconnected is dropped, and events are not
 replayed after reconnect. Cursor and live selection fit this contract. Persist
 anything that must be recovered as ordinary model data.
 
+## Switching clients
+
+`CapturedRow<T>` marks an authoritative read in the public types. It does not
+encode the identity of each client instance: TypeScript can accept a foreign
+captured row, and spreading a row can preserve its static type while losing its
+runtime evidence. Helpers that return captured rows must also make their owning
+client clear. Prefer passing the writing client into the helper.
+
+When moving from a server client to an attributed or scoped-session client,
+carry the row ID across the boundary and read again through the writing client.
+Validate authority and the proposed action against that new result. A previous
+server-side authorization decision may no longer apply; rereading is not itself
+an application permission check.
+
+```ts
+// writingClient is the already-created attributed/scoped client.
+const conversation = await writingClient.conversations.read({ id: conversationId });
+if (!conversation) throw new Error('Conversation unavailable');
+await assertCanReply(actor, conversation); // Your application's authorization.
+const reply = buildReply(conversation); // Recompute from the new evidence.
+
+await writingClient.commits.create({
+  reads: [conversation],
+  operations: [{ action: 'create', model: 'messages', id: messageId, data: reply }],
+});
+```
+
+A known foreign row fails locally with `read_evidence_client_mismatch` before
+the write is submitted. `param` is `reads` or `ifUnchanged`; `details` contains
+`model`, `sourceClient`, and `targetClient`. Client labels are opaque and local
+to the running SDK module, not account, actor, session, or credential identifiers.
+They contain no row contents or credentials. Cloned, serialized, and uncaptured
+rows still fail with `write_options_invalid`; ownership cannot be recovered from
+those values. Do not cast a row or manufacture canonical dependencies to bypass
+the ownership check.
+
+For regression tests, instantiate two real SDK clients and mock their transport,
+not `read` or `commits.create`. Read with client A, submit that exact row through
+client B, assert the dedicated code and no write request/frame, then reread and
+revalidate through B and assert its commit carries the new evidence. Also test
+copied rows and the application's denied-authority path. Two clients with the
+same credentials are still distinct owners. Preserve the SDK error code and
+parameter in application diagnostics instead of reducing every failure to an
+unexplained HTTP 500.
+
 ## Atomic commits
+
+Captured rows are bound to the client instance that read them. Use that same
+client for the commit. When switching to an attributed or scoped client, reread
+and revalidate authority and the decision first. TypeScript's `CapturedRow<T>`
+brand does not distinguish instances; foreign rows reject locally with
+`read_evidence_client_mismatch`. See [Switching clients](#switching-clients)
+for the transition example and regression-test pattern.
 
 Use one `ablo.commits.create` when several Ablo model writes must all land or
 none may land. Put every operation in `operations` and every exact row returned

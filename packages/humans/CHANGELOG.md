@@ -1,5 +1,13 @@
 # @abloatai/humans
 
+## 0.66.8
+
+### Patch Changes
+
+- Distinguish captured evidence owned by another client and explain scoped-client transitions.
+- Updated dependencies
+  - @abloatai/transaction@0.66.8
+
 ## 0.66.7
 
 ### Patch Changes

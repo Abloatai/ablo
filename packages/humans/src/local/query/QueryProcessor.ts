@@ -37,7 +37,7 @@ export interface QueryResult<T extends Model> {
 interface QueryCache {
   get<T>(key: string): T | undefined;
   set(key: string, data: unknown): void;
-  invalidate(pattern?: string): void;
+  invalidate(modelType?: string): void;
   clear(): void;
   /** Number of entries currently cached. */
   readonly size: number;
@@ -46,9 +46,7 @@ interface QueryCache {
 /**
  * The default in-memory cache. It keeps a reverse index from model type to the
  * cache keys for that type, so invalidating one model type costs work
- * proportional to that type's keys rather than a scan of the whole cache. A
- * regex fallback still covers the rare pattern that is not a plain model-type
- * match.
+ * proportional to that type's keys rather than a scan of the whole cache.
  */
 class BasicQueryCache implements QueryCache {
   private cache = new Map<string, unknown>();
@@ -76,50 +74,17 @@ class BasicQueryCache implements QueryCache {
     }
   }
 
-  /**
-   * Optimized invalidation - O(k) where k = keys for model type
-   * Supports both exact model type names and regex patterns (fallback)
-   */
-  invalidate(pattern?: string): void {
-    if (!pattern) {
+  /** Drops every entry for one model type, or everything when none is named. */
+  invalidate(modelType?: string): void {
+    if (!modelType) {
       this.cache.clear();
       this.modelTypeIndex.clear();
       return;
     }
-
-    // Fast path: Check if pattern is a simple model type match like ".*ModelType.*"
-    const modelType = /^\.\*(\w+)\.\*$/.exec(pattern)?.[1];
-    if (modelType !== undefined) {
-      const keysToDelete = this.modelTypeIndex.get(modelType);
-      if (keysToDelete) {
-        for (const key of keysToDelete) {
-          this.cache.delete(key);
-        }
-        this.modelTypeIndex.delete(modelType);
-      }
-      return;
-    }
-
-    // Slow path fallback: regex matching for complex patterns
-    // This should rarely be needed with proper model type patterns
-    const regex = new RegExp(pattern);
-    const keysToDelete: string[] = [];
-
-    for (const key of this.cache.keys()) {
-      if (regex.test(key)) {
-        keysToDelete.push(key);
-      }
-    }
-
-    // Batch delete to avoid iterator invalidation
-    for (const key of keysToDelete) {
+    for (const key of this.modelTypeIndex.get(modelType) ?? []) {
       this.cache.delete(key);
-      // Clean up index
-      const modelType = this.extractModelType(key);
-      if (modelType) {
-        this.modelTypeIndex.get(modelType)?.delete(key);
-      }
     }
+    this.modelTypeIndex.delete(modelType);
   }
 
   clear(): void {
@@ -307,23 +272,15 @@ export class QueryProcessor {
     return hasPredicate ? `pred:${key}` : key;
   }
 
-  /**
-   * Invalidate cache by pattern
-   */
-  invalidateCache(pattern?: string): void {
-    this.cache.invalidate(pattern);
-    // Also invalidate predicate result cache for this model type
-    if (pattern) {
-      const modelType = /^\.\*(\w+)\.\*$/.exec(pattern)?.[1];
-      if (modelType !== undefined) {
-        for (const key of this.predicateResultCache.keys()) {
-          if (key.includes(modelType)) {
-            this.predicateResultCache.delete(key);
-          }
-        }
-      }
-    } else {
+  /** Invalidates cached results for one model type, or all of them. */
+  invalidateCache(modelType?: string): void {
+    this.cache.invalidate(modelType);
+    if (!modelType) {
       this.predicateResultCache.clear();
+      return;
+    }
+    for (const key of this.predicateResultCache.keys()) {
+      if (key.includes(modelType)) this.predicateResultCache.delete(key);
     }
   }
 

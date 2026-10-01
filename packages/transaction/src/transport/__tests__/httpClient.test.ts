@@ -828,7 +828,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     await expect(otherClient.items.update({
       id: 'item-1', data: { status: 'done' },
       idempotencyKey: 'cross-client-must-fail', reads: [dependency!],
-    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
+    })).rejects.toMatchObject({ code: 'read_evidence_client_mismatch', param: 'reads' });
     await c.items.update({
       id: 'item-1', data: { status: 'done' },
       idempotencyKey: 'cross-target-update', reads: [dependency!],
@@ -842,34 +842,30 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
 
   it('resolves captured rows for an atomic commits.create batch', async () => {
     let commitBody: Record<string, unknown> | undefined;
-    const c = Ablo({
-      schema,
-      apiKey: 'sk_test_atomic_context_reads',
-      baseURL: 'https://api.example.test',
-      transport: 'http',
-      fetch: (input, init) => {
-        const url =
-          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-        const path = new URL(url).pathname;
-        const method = init?.method ?? 'GET';
-        if (method === 'GET' && path.endsWith('/item-2')) {
-          return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'items', id: 'item-2',
-            data: { id: 'item-2', title: 'Premise', status: 'ready' }, stamp: 51,
-          })));
-        }
-        if (method === 'POST' && path.endsWith('/commits')) {
-          commitBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-          return Promise.resolve(jsonResponse(confirmedCommitReceiptResponse({
-            clientTxId: 'atomic-context-reads',
-            serverTxId: 'server-atomic-context-reads',
-            lastSyncId: 52,
-            ops: 2,
-          })));
-        }
-        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
-      },
+    const fetchMock = jest.fn<typeof fetch>((input, init) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(url).pathname;
+      const method = init?.method ?? 'GET';
+      if (method === 'GET' && path.endsWith('/item-2')) {
+        return Promise.resolve(jsonResponse(modelReadResponse({
+          model: 'items', id: 'item-2',
+          data: { id: 'item-2', title: 'Premise', status: 'ready' }, stamp: 51,
+        })));
+      }
+      if (method === 'POST' && path.endsWith('/commits')) {
+        commitBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return Promise.resolve(jsonResponse(confirmedCommitReceiptResponse({
+          clientTxId: 'atomic-context-reads',
+          serverTxId: 'server-atomic-context-reads',
+          lastSyncId: 52,
+          ops: 2,
+        })));
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
     });
+    const c = Ablo({ schema, apiKey: 'sk_test_atomic_context_reads',
+      baseURL: 'https://api.example.test', transport: 'http', fetch: fetchMock });
 
     const premise = await c.items.read({ id: 'item-2' });
     await expect(c.commits.create({
@@ -881,24 +877,43 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
     const otherClient = Ablo({
       schema,
-      apiKey: 'sk_test_atomic_context_other_client',
+      apiKey: 'sk_test_atomic_context_reads',
       baseURL: 'https://api.example.test',
       transport: 'http',
-      fetch: () => Promise.reject(new Error('cross-client row reached the network')),
+      fetch: fetchMock,
     });
-    await expect(otherClient.commits.create({
+    fetchMock.mockClear();
+    const mismatch = otherClient.commits.create({
       operations: [
         { action: 'update', model: 'items', id: 'item-1', data: { status: 'done' } },
       ],
       reads: [premise!],
       idempotencyKey: 'atomic-context-cross-client-must-fail',
-    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
-    await c.commits.create({
+    });
+    await expect(mismatch).rejects.toMatchObject({
+      code: 'read_evidence_client_mismatch', param: 'reads',
+      details: { model: 'items', sourceClient: expect.stringMatching(/^client-\d+$/),
+        targetClient: expect.stringMatching(/^client-\d+$/) },
+    });
+    const error: unknown = await mismatch.catch((reason: unknown) => reason);
+    if (!(error instanceof AbloError)) throw new Error('expected SDK error');
+    expect(Object.keys(error.details ?? {}).sort()).toEqual(['model', 'sourceClient', 'targetClient']);
+    expect(error.details?.sourceClient).not.toEqual(error.details?.targetClient);
+    expect(JSON.stringify(error.toJSON())).not.toContain('sk_test');
+    expect(JSON.stringify(error.toJSON())).not.toContain('Premise');
+    await expect(otherClient.items.update({
+      id: 'item-2', data: { status: 'done' }, ifUnchanged: premise!,
+    })).rejects.toMatchObject({ code: 'read_evidence_client_mismatch', param: 'ifUnchanged' });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const reread = await otherClient.items.read({ id: 'item-2' });
+    expect(reread?.status).toBe('ready'); // Revalidate the decision on the new read.
+    await otherClient.commits.create({
       operations: [
         { action: 'update', model: 'items', id: 'item-1', data: { status: 'done' } },
         { action: 'create', model: 'items', id: 'item-3', data: { title: 'Audit', status: 'done' } },
       ],
-      reads: [premise!],
+      reads: [reread!],
       idempotencyKey: 'atomic-context-reads',
       wait: 'confirmed',
     });
