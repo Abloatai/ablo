@@ -73,7 +73,7 @@ export function Sessions<const S extends SchemaRecord>(
   const baseUrl = resolveBootstrapBaseUrl({
     url: resolveBaseURL(authInput),
     bootstrapBaseUrl: options.bootstrapBaseUrl,
-  }).replace(/\/+$/, '');
+  });
   const modelTypenames = modelWireNames(options.schema.models);
 
   async function secret(): Promise<string> {

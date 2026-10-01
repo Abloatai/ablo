@@ -8,6 +8,11 @@ conversation, search documents, or create memory. The application chooses the
 values; Ablo awaits them and identifies the exact returned rows that can guard
 a later model write or atomic commit.
 
+**Captured rows belong to one client instance.** Use the same client for `read`,
+`context({ ablo })`, and the write. A server client's row cannot guard an
+attributed or scoped client's write, even when both clients use the same schema
+or credentials. See [Switching clients](./api.md#switching-clients).
+
 ## Context, model, write
 
 This is the complete shape. `loadMemories()` and `parseTaskUpdate()` are

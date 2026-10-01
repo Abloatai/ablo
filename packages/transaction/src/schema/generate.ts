@@ -34,7 +34,7 @@ function tsType(meta: FieldMeta): string {
       return 'unknown';
     case 'enum':
       return meta.enumValues && meta.enumValues.length > 0
-        ? meta.enumValues.map((v) => `'${v.replace(/'/g, "\\'")}'`).join(' | ')
+        ? meta.enumValues.map((v) => `'${v.replace(/[\\']/g, '\\$&')}'`).join(' | ')
         : 'string';
     default:
       return 'unknown';

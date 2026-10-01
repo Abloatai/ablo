@@ -15,6 +15,7 @@ import {
 } from '@ablo/product-analytics';
 import { cliArchitecture, cliOs, cliVersion } from './cliEnvironment';
 import { apiBaseUrl } from './controlPlane';
+import { trimTrailingSlashes } from '@abloatai/transaction/auth/baseUrl';
 import { configDir, resolveRuntimeApiKey } from './config';
 
 const TELEMETRY_FILE_VERSION = 1 as const;
@@ -162,7 +163,7 @@ async function flushOnce(options: FlushTelemetryOptions): Promise<void> {
   try {
     const apiKey = telemetryApiKey();
     response = await (options.fetchImpl ?? fetch)(
-      `${(options.baseUrl ?? apiBaseUrl()).replace(/\/+$/, '')}/api/v1/analytics/events`,
+      `${trimTrailingSlashes(options.baseUrl ?? apiBaseUrl())}/api/v1/analytics/events`,
       {
         method: 'POST',
         headers: {

@@ -259,7 +259,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   const apiBaseUrl = resolveBootstrapBaseUrl({
     url,
     bootstrapBaseUrl: options.bootstrapBaseUrl,
-  }).replace(/\/+$/, '');
+  });
   const durableWrites = resolveDurableWrites(options);
   // Internal replay code retains transactional-outbox terminology. The public
   // constructor exposes the behavior as `durableWrites`.

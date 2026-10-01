@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.66.8
+
+### Captured reads explain their client ownership
+
+Rows used to guard a write belong to the client instance that read them. Passing
+one to another client now reports `read_evidence_client_mismatch` before the
+write is submitted, with the model name and opaque client labels that omit
+credentials and row contents. Previously this case reported
+`write_options_invalid`; applications that match that code must also handle the
+new code.
+
+The API and session guides now explain how to reread and revalidate a decision
+when moving to an attributed or scoped client, and how to test the transition
+using real SDK clients. TypeScript's captured-row brand still cannot distinguish
+client instances; the runtime check enforces ownership.
+
 ## 0.66.7
 
 ### Faster bursts of local cache insertions

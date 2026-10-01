@@ -369,10 +369,14 @@ export function readProjectEnvVariable(
   for (const filename of ['.env.local', '.env']) {
     const path = resolve(cwd, filename);
     if (!existsSync(path)) continue;
-    const match = new RegExp(`^${variable}=(.+)$`, 'm').exec(readFileSync(path, 'utf8'));
-    if (match?.[1]) {
+    // A prefix match, not a RegExp: `variable` comes from the command line.
+    const line = readFileSync(path, 'utf8')
+      .split('\n')
+      .find((candidate) => candidate.startsWith(`${variable}=`));
+    const raw = line?.slice(variable.length + 1);
+    if (raw) {
       return {
-        value: match[1].trim().replace(/^["']|["']$/g, ''),
+        value: raw.trim().replace(/^["']|["']$/g, ''),
         source: filename as '.env.local' | '.env',
       };
     }

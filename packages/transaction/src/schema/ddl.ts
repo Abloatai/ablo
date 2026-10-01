@@ -68,7 +68,9 @@ export interface MigrationPlan {
 
 /** Postgres unquoted-identifier-safe slug: lowercase `[a-z0-9_]`, ≤50 chars. */
 function slug(raw: string): string {
-  const s = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  // The first pass leaves no `__` (an `_` is itself collapsed), so a single
+  // edge `_` is all the second pass can find.
+  const s = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
   return s.slice(0, 50) || 'x';
 }
 
@@ -89,7 +91,9 @@ export function camelToSnake(identifier: string): string {
  * `snakeToCamel('operator_id') === 'operatorId'` round-trip.
  */
 export function snakeToCamel(identifier: string): string {
-  return identifier.replace(/_+([a-z0-9])/g, (_, ch: string) => ch.toUpperCase());
+  // `?` keeps the match from failing after a long `_` run, which would retry
+  // from every underscore; a run with nothing to capitalize is kept as-is.
+  return identifier.replace(/_+([a-z0-9]?)/g, (run, ch: string) => (ch ? ch.toUpperCase() : run));
 }
 
 /** Quote an identifier (defense-in-depth; inputs are already slug/snake). */

@@ -34,6 +34,7 @@ export {
   ABLO_SITE_BASE_URL,
 } from './hostedEndpoints.js';
 export { normalizeAbloBaseUrl } from './baseUrl.js';
+import { trimTrailingSlashes } from './baseUrl.js';
 
 export type {
   EphemeralKeyResponse,
@@ -167,7 +168,7 @@ export async function exchangeApiKey(
   }
 
   const fetcher = options.fetch ?? fetch;
-  const url = `${options.baseUrl.replace(/\/+$/, '')}/v1/capabilities`;
+  const url = `${trimTrailingSlashes(options.baseUrl)}/v1/capabilities`;
   const timeoutMs = options.timeoutMs ?? 10_000;
 
   const controller = new AbortController();
@@ -359,7 +360,7 @@ export async function mintUserSessionKey(
   }
 
   const fetcher = options.fetch ?? fetch;
-  const url = `${options.baseUrl.replace(/\/+$/, '')}/v1/ephemeral_keys`;
+  const url = `${trimTrailingSlashes(options.baseUrl)}/v1/ephemeral_keys`;
   const timeoutMs = options.timeoutMs ?? 10_000;
 
   const controller = new AbortController();
@@ -431,7 +432,7 @@ export async function resolveIdentity(
   }
 
   const fetcher = options.fetch ?? fetch;
-  const url = `${options.baseUrl.replace(/\/+$/, '')}/auth/identity`;
+  const url = `${trimTrailingSlashes(options.baseUrl)}/auth/identity`;
   const timeoutMs = options.timeoutMs ?? 10_000;
 
   const controller = new AbortController();

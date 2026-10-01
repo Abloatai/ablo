@@ -49,7 +49,7 @@ export function transactionSourceModuleMapper() {
 
     const head = escapeRegExp(name + specifier.slice(0, star));
     const tail = escapeRegExp(specifier.slice(star + 1));
-    patterns[`^${head}(.*)${tail}$`] = target.replace('*', '$1');
+    patterns[`^${head}(.*)${tail}$`] = target.replaceAll('*', '$1');
   }
 
   return { ...exact, ...patterns };

@@ -907,6 +907,12 @@ The query references a relation the model does not define. Check the relation na
 
 The query used an unsupported operator.
 
+### read_evidence_client_mismatch
+
+`client-only` · not sent over the network
+
+Captured read evidence belongs to another Ablo client instance. Re-read through the writing client and revalidate authority and the decision before retrying. Rejected locally before write submission; param names reads or ifUnchanged. Details contain the model and opaque, process-local sourceClient and targetClient labels, never credentials or row contents.
+
 ### replication_publication_drift
 
 `HTTP 400` · not retryable

@@ -140,5 +140,17 @@ export function normalizeAbloBaseUrl(rawUrl: string): string {
     );
   }
 
-  return url.toString().replace(/\/+$/, '');
+  return trimTrailingSlashes(url.toString());
+}
+
+/**
+ * Drops every trailing `/` so a path can be appended without doubling it.
+ *
+ * A scan from the end rather than `/\/+$/`: the regex retries from each slash
+ * in a run, so a caller-supplied value with many slashes costs quadratic time.
+ */
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end--;
+  return value.slice(0, end);
 }

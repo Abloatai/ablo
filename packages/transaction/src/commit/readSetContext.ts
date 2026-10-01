@@ -11,6 +11,37 @@ import type { CommitRecord } from './contract.js';
 
 type ClientIdentity = object;
 
+// Diagnostic ownership only. Acceptance still requires the client's own registry.
+const rowOwners = new WeakMap<object, { client: ClientIdentity; model: string }>();
+const clientIds = new WeakMap<ClientIdentity, string>();
+let nextClientId = 0;
+
+function diagnosticClientId(client: ClientIdentity): string {
+  let id = clientIds.get(client);
+  if (!id) {
+    id = `client-${++nextClientId}`;
+    clientIds.set(client, id);
+  }
+  return id;
+}
+
+function assertReadOwner(row: unknown, client: ClientIdentity, param: string): void {
+  const owner = typeof row === 'object' && row !== null ? rowOwners.get(row) : undefined;
+  if (!owner || owner.client === client) return;
+  throw new AbloValidationError(
+    `Captured read evidence in \`${param}\` belongs to another Ablo client. Re-read through the writing client and revalidate authority and the decision before retrying.`,
+    {
+      code: 'read_evidence_client_mismatch',
+      param,
+      details: {
+        model: owner.model,
+        sourceClient: diagnosticClientId(owner.client),
+        targetClient: diagnosticClientId(client),
+      },
+    },
+  );
+}
+
 /** @internal Symbol-keyed bridge used by additive SDK structures. */
 export const kReadEvidence = Symbol.for('ablo.transaction.read-evidence');
 
@@ -77,6 +108,7 @@ export function targetGuardForRow(
     context && typeof row === 'object' && row !== null
       ? context.getStore().byRow.get(row)
       : undefined;
+  if (captured?.client !== client) assertReadOwner(row, client, 'ifUnchanged');
   if (
     captured?.client !== client ||
     'group' in captured.entry ||
@@ -141,6 +173,7 @@ export function capturePointRead(
 ): void {
   if (!context || typeof row !== 'object' || row === null) return;
   const rowObject = row as object;
+  rowOwners.set(rowObject, { client, model });
   context.getStore().byRow.set(rowObject, {
     client,
     row: rowObject,
@@ -181,6 +214,7 @@ export function prepareReadSet(
       });
       continue;
     }
+    assertReadOwner(entry, client, 'reads');
     const canonical = readDependencySchema.safeParse(entry);
     if (canonical.success) {
       resolvedReads.push(canonical.data);

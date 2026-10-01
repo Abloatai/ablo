@@ -694,7 +694,7 @@ export class BaseSyncedStore<
     // Replaces all manual queryProcessor.invalidateCache() calls.
     this.syncClient.on('models:changed', (modelNames: Set<string>) => {
       for (const name of modelNames) {
-        this.queryProcessor.invalidateCache(`.*${name}.*`);
+        this.queryProcessor.invalidateCache(name);
       }
     });
 

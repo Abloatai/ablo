@@ -1817,6 +1817,14 @@
       "docUrl": "https://docs.abloatai.com/errors#rate_limiter_unavailable"
     },
     {
+      "code": "read_evidence_client_mismatch",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "Captured read evidence belongs to another Ablo client instance. Re-read through the writing client and revalidate authority and the decision before retrying. Rejected locally before write submission; param names reads or ifUnchanged. Details contain the model and opaque, process-local sourceClient and targetClient labels, never credentials or row contents.",
+      "docUrl": "https://docs.abloatai.com/errors#read_evidence_client_mismatch"
+    },
+    {
       "code": "registry_invalid_constructor",
       "category": "client",
       "surface": "client",

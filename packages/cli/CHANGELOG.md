@@ -1,5 +1,7 @@
 # @abloatai/cli
 
+## 0.66.8
+
 ## 0.66.7
 
 ### Patch Changes

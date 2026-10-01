@@ -15,7 +15,7 @@
 import { AbloAuthenticationError, AbloValidationError } from '../errors.js';
 import { classifyCredentialKind } from './credentialKind.js';
 import { ABLO_DEFAULT_BASE_URL } from './hostedEndpoints.js';
-import { normalizeAbloBaseUrl } from './baseUrl.js';
+import { normalizeAbloBaseUrl, trimTrailingSlashes } from './baseUrl.js';
 import type { KeyEnvironment } from '../environment.js';
 import { isCredentialEndpoint } from './credentialEndpoint.js';
 import {
@@ -458,13 +458,13 @@ export function resolveBootstrapBaseUrl(input: {
  * correct, and it is idempotent for callers who already include it.
  */
 function ensureApiSuffix(httpBase: string): string {
-  const trimmed = httpBase.replace(/\/+$/, '');
+  const trimmed = trimTrailingSlashes(httpBase);
   try {
     const u = new URL(trimmed);
     const segments = u.pathname.split('/').filter(Boolean);
     if (segments[segments.length - 1] === 'api') return trimmed;
-    u.pathname = `${u.pathname.replace(/\/+$/, '')}/api`;
-    return u.toString().replace(/\/+$/, '');
+    u.pathname = `${trimTrailingSlashes(u.pathname)}/api`;
+    return trimTrailingSlashes(u.toString());
   } catch {
     // Should be unreachable after `normalizeAbloBaseUrl`, which yields an
     // absolute URL, but fall back to a string check rather than throwing.
