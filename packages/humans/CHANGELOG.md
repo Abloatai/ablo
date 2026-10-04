@@ -1,5 +1,12 @@
 # @abloatai/humans
 
+## 0.66.9
+
+### Patch Changes
+
+- Catch up an open browser connection as soon as its tab becomes visible. A tab that missed a live broadcast no longer waits for the next 30-second background poll before showing the new data.
+  - @abloatai/transaction@0.66.9
+
 ## 0.66.8
 
 ### Patch Changes

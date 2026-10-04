@@ -1,5 +1,7 @@
 # @abloatai/transaction
 
+## 0.66.9
+
 ## 0.66.8
 
 ### Patch Changes
