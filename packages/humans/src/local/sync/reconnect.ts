@@ -51,6 +51,9 @@ export async function performReconnect<
     if (!host.syncWebSocket.isConnected()) {
       host.syncWebSocket.resetReconnectAttempts();
       host.syncWebSocket.connect();
+    } else {
+      // A visible tab can retain its socket while missing broadcasts in the background.
+      await host.syncWebSocket.requestIncrementalSync();
     }
     host.updateSyncStatus({ state: 'idle', progress: 100 });
     return 'success';
