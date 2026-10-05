@@ -288,11 +288,17 @@ export {
   modelReadResponseSchema,
   modelListResponseSchema,
   modelListEvidenceSchema,
+  MODEL_READ_BATCH_SIZE,
+  MODEL_READ_BATCH_MAX_BYTES,
+  modelReadBatchRequestSchema,
+  modelReadBatchResponseSchema,
 } from './modelResponses.js';
 export type {
   ModelReadResponse,
   ModelListResponse,
   ModelListEvidence,
+  ModelReadBatchItem,
+  ModelReadBatchResponse,
 } from './modelResponses.js';
 
 // What a model is made of — the artifact's own field and relation shapes, which

@@ -12,6 +12,7 @@
 import { z } from 'zod';
 import { modelClaimSchema } from '../coordination/schema.js';
 import { listEnvelopeSchema } from './listEnvelope.js';
+import { errorEnvelopeSchema } from './errorEnvelope.js';
 
 /** Evidence for one row returned by a collection snapshot. */
 export const modelListEvidenceSchema = z.object({
@@ -59,3 +60,22 @@ export const modelListResponseSchema = listEnvelopeSchema(z.unknown()).extend({
   evidence: z.array(modelListEvidenceSchema).readonly().optional(),
 });
 export type ModelListResponse = z.infer<typeof modelListResponseSchema>;
+
+/** Bounded model reads with the same envelopes as the individual GET routes. */
+export const MODEL_READ_BATCH_SIZE = 50;
+export const MODEL_READ_BATCH_MAX_BYTES = 1024 * 1024;
+export const modelReadBatchItemSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('read'), model: z.string().min(1), id: z.string().min(1) }),
+  z.object({ kind: z.literal('list'), model: z.string().min(1), query: z.record(z.string(), z.string()) }),
+]);
+export type ModelReadBatchItem = z.infer<typeof modelReadBatchItemSchema>;
+export const modelReadBatchRequestSchema = z.object({
+  reads: z.array(modelReadBatchItemSchema).min(1).max(MODEL_READ_BATCH_SIZE),
+});
+export const modelReadBatchResponseSchema = z.object({
+  results: z.array(z.union([
+    z.object({ result: z.union([modelReadResponseSchema, modelListResponseSchema]) }),
+    z.object({ status: z.number().int().min(400).max(599), error: errorEnvelopeSchema }),
+  ])).min(1).max(MODEL_READ_BATCH_SIZE),
+});
+export type ModelReadBatchResponse = z.infer<typeof modelReadBatchResponseSchema>;

@@ -68,7 +68,8 @@ import {
   RATE_LIMIT_POLICY_HEADER,
   RETRY_AFTER_HEADER,
 } from '../wire/rateLimit.js';
-import { modelReadResponseSchema, modelListResponseSchema } from '../wire/modelResponses.js';
+import { modelReadResponseSchema, modelListResponseSchema,
+  modelReadBatchRequestSchema, modelReadBatchResponseSchema } from '../wire/modelResponses.js';
 import { modelMutationRequestSchema } from '../wire/modelMutations.js';
 import { logListResponseSchema, logQuerySchema } from '../observation/feedContract.js';
 import { logDeliveryResponseSchema } from '../observation/deliveryContract.js';
@@ -149,6 +150,7 @@ function applyOperationIds(
 }
 
 const ABLO_OPERATION_IDS: Readonly<Record<string, string>> = {
+  'POST /v1/reads': 'readModelBatch',
   'GET /v1/models/{model}': 'listModelRows',
   'POST /v1/models/{model}': 'createModelRow',
   'GET /v1/models/{model}/{id}': 'getModelRow',
@@ -646,6 +648,7 @@ function abloComponentSchemas(): Record<string, Json> {
     CommitReceipt: commitReceiptSchemaJson,
     ModelRead: withGenericRows(derive(modelReadResponseSchema, 'output')),
     ModelPage: withGenericRows(derive(modelListResponseSchema, 'output')),
+    ModelReadBatch: derive(modelReadBatchResponseSchema, 'output'),
     LogPage: derive(logListResponseSchema, 'output'),
     SchemaRead: derive(schemaReadResponseSchema, 'output'),
   };
@@ -690,6 +693,14 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
   const tags = ['models'];
 
   const paths: Json = {
+    '/v1/reads': {
+      post: {
+        tags, summary: 'Read models in one request',
+        description: 'Up to 50 independent point reads or list pages. Each slot retains its own result or typed error; reads are not an atomic snapshot.',
+        requestBody: jsonBody(derive(modelReadBatchRequestSchema, 'input')),
+        responses: { '200': namedResp('Ordered model envelopes and per-read errors.', 'ModelReadBatch') },
+      },
+    },
     '/v1/models/{model}': {
       get: {
         tags,
