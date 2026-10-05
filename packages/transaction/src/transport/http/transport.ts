@@ -61,6 +61,8 @@ import { CLAIM_CONTINUATION_HEADER } from '../../claims/httpContinuation.js';
 import {
   modelListResponseSchema,
   modelReadResponseSchema,
+  modelReadBatchResponseSchema,
+  type ModelReadBatchItem,
 } from '../../wire/modelResponses.js';
 import { toMs } from '../../utils/duration.js';
 import {
@@ -168,6 +170,7 @@ import { createHttpReadOnChange } from './subscription.js';
 import { awaitClaimGrantOverHttp } from './claimWait.js';
 import type { CommitFrameOperation } from '../websocket/commitFrames.js';
 import { retryAfterSecondsFromHeader } from '../../wire/rateLimit.js';
+import { createHttpReadBatch } from './readBatch.js';
 
 /** @internal Default per-request deadline for the private HTTP transport. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -559,6 +562,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     },
     skipReady = false
   ): Promise<unknown> {
+    if (init.method !== 'GET' && path !== '/v1/reads') readBatch.flush();
     requestStarted();
     try {
       const retryDeadline = requestTimeoutMs > 0 ? Date.now() + requestTimeoutMs : null;
@@ -616,6 +620,30 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       );
     }
     return parsed.data;
+  }
+
+  const singleModelRead = (item: ModelReadBatchItem) => item.kind === 'read'
+    ? requestJson(`/v1/models/${encodeURIComponent(item.model)}/${encodeURIComponent(item.id)}`,
+        { method: 'GET' }, modelReadResponseSchema)
+    : requestJson(`/v1/models/${encodeURIComponent(item.model)}${Object.keys(item.query).length
+        ? `?${new URLSearchParams(item.query)}` : ''}`,
+        { method: 'GET' }, modelListResponseSchema);
+  const readBatch = createHttpReadBatch({
+    single: singleModelRead,
+    send: reads => requestJson('/v1/reads', {
+      method: 'POST', body: JSON.stringify({ reads }),
+    }, modelReadBatchResponseSchema),
+  });
+
+  async function requestModelRead(item: ModelReadBatchItem) {
+    // Count queued reads too: dispose must not return before their timer fires.
+    requestStarted();
+    try {
+      // A provider may return a different principal per invocation. Never
+      // combine those requests under one batch credential.
+      return await (typeof configuredApiKey === 'function'
+        ? singleModelRead(item) : readBatch.read(item));
+    } finally { requestFinished(); }
   }
 
   function isDefinitiveHttpRejection(error: unknown): boolean {
@@ -1352,12 +1380,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         params.set(column, String(value));
       }
     }
-    const qs = params.toString();
-    const res = await requestJson(
-      `/v1/models/${encodeURIComponent(modelName)}${qs ? `?${qs}` : ''}`,
-      { method: 'GET' },
-      modelListResponseSchema
-    );
+    const res = modelListResponseSchema.parse(await requestModelRead({
+      kind: 'list', model: modelName, query: Object.fromEntries(params),
+    }));
     // The envelope is checked; the rows are not, and cannot be here. This
     // transport is schema-agnostic — it moves rows for whatever schema the
     // caller declared, and `T` is that declaration. Row validation belongs to
@@ -1376,11 +1401,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   ): Promise<HttpTransportRead<T>> {
     await applyClaimedPolicy({ model: modelName, id: params.id }, params);
 
-    const query = await requestJson(
-      `/v1/models/${encodeURIComponent(modelName)}/${encodeURIComponent(params.id)}`,
-      { method: 'GET' },
-      modelReadResponseSchema
-    );
+    const query = modelReadResponseSchema.parse(await requestModelRead({
+      kind: 'read', model: modelName, id: params.id,
+    }));
 
     // A miss is `data: undefined`, not a thrown error. The WebSocket client's
     // `read` returns `T | undefined` for a missing row; throwing only here

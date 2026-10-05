@@ -27,6 +27,14 @@ try {
 }
 ```
 
+Concurrent model reads on one HTTP client are automatically grouped into a
+bounded request. Start independent reads together with `Promise.all`; each read
+keeps its pagination, row stamps, claim information and typed errors. Identical
+reads in the same group execute once. Results are not cached between groups,
+and batching does not make independent reads an atomic snapshot. An older
+server falls back to individual requests. A credential provider that can change
+principal per call keeps its reads separate.
+
 For bounded work that must have a distinct agent identity, create a session and
 explicitly select HTTP:
 

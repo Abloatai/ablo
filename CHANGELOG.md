@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.66.10
+
+### Fewer round trips for parallel reads
+
+The HTTP client now groups model reads started together into a bounded request
+and removes duplicate reads within that group. Applications that load several
+collections in parallel make fewer HTTP requests without changing their calls.
+Each read retains its own permissions, pagination, claims and transaction
+evidence; results are not cached between requests. Older servers continue to
+receive individual reads. The reduction takes effect after updating the SDK
+against a server that supports the batch endpoint.
+
 ## 0.66.9
 
 ### Visible tabs catch up sooner
