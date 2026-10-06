@@ -1,0 +1,15 @@
+---
+title: "v0.66.9"
+type: changelog
+date: 2026-10-04T14:11:22.000Z
+changelog:
+  version: "0.66.9"
+  category: "Fixes"
+---
+
+### Visible tabs catch up sooner
+
+A browser tab now requests missed changes as soon as it becomes visible while
+its WebSocket remains open. Previously, it could wait for the next 30-second
+catch-up poll before showing data missed in the background. Applications receive
+this change when they update to the new SDK release.

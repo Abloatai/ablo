@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.66.8",
+    "version": "0.66.10",
     "description": "Ablo collaboration infrastructure: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.\n\n## Versioning\n\nEvery route is mounted under `/v1`, and that segment is part\nof the address you call. A change that would break a caller — a field removed, a\ntype narrowed, a status changed — arrives as a new segment beside this one, never\nas a change to this one. Additive changes do land here: a new field on a\nresponse, a new optional parameter, a new error code. Ignore what you do not\nrecognize and you will not be broken by them.\n\nEvery response carries `Ablo-Version`, a date stamp for the contract\nthe server is serving. Record the value your integration was built against and\ncompare it if behavior surprises you.\n\n## Deprecation\n\nA route being withdrawn says so on itself, for at least\n180 days before it stops answering:\n\n- `Deprecation` — an sf-Date of when the deprecation took effect\n  (RFC 9745). The route still answers normally while this is present.\n- `Sunset` — an HTTP-date of when it stops answering (RFC 8594).\n- `Link` with `rel=\"deprecation\"` pointing at what to read, and\n  `rel=\"successor-version\"` at what to call instead when there is one.\n\nThe same operations are marked `deprecated: true` in this document. Treating\neither signal as a build failure is the intended use; nothing is removed without\nboth.",
     "license": {
       "name": "Apache License 2.0",
@@ -1198,6 +1198,329 @@
         ],
         "additionalProperties": false
       },
+      "ModelReadBatch": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "object": {
+                              "type": "string",
+                              "const": "model"
+                            },
+                            "model": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "data": {},
+                            "stamp": {
+                              "type": "number"
+                            },
+                            "claims": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "readOnly": true,
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "actor": {
+                                    "type": "string"
+                                  },
+                                  "participantKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "user",
+                                      "agent",
+                                      "system"
+                                    ]
+                                  },
+                                  "onBehalfOfId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "onBehalfOfKind": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "user",
+                                          "agent",
+                                          "system"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "capabilityId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "active",
+                                      "queued"
+                                    ]
+                                  },
+                                  "position": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "expiresAt": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "fenceToken": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "target": {
+                                    "readOnly": true,
+                                    "type": "object",
+                                    "properties": {
+                                      "model": {
+                                        "type": "string"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "field": {
+                                        "type": "string"
+                                      },
+                                      "fields": {
+                                        "readOnly": true,
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "meta": {
+                                        "type": "object",
+                                        "additionalProperties": true
+                                      }
+                                    },
+                                    "required": [
+                                      "model",
+                                      "id"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "meta": {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                  },
+                                  "field": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "actor",
+                                  "participantKind",
+                                  "expiresAt",
+                                  "target"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "object",
+                            "model",
+                            "id",
+                            "data",
+                            "stamp",
+                            "claims"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "object": {
+                              "type": "string",
+                              "const": "list"
+                            },
+                            "data": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {}
+                            },
+                            "has_more": {
+                              "type": "boolean"
+                            },
+                            "next_cursor": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "model": {
+                              "type": "string"
+                            },
+                            "stamp": {
+                              "type": "number"
+                            },
+                            "evidence": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "stamp": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "stamp"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "object",
+                            "data",
+                            "has_more",
+                            "next_cursor",
+                            "model",
+                            "stamp"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "result"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "integer",
+                      "minimum": 400,
+                      "maximum": 599
+                    },
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "param": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "doc_url": {
+                          "type": "string"
+                        },
+                        "request_id": {
+                          "type": "string"
+                        },
+                        "event_id": {
+                          "type": "string"
+                        },
+                        "errors": {
+                          "readOnly": true,
+                          "type": "array",
+                          "items": {
+                            "readOnly": true,
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "param": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "message"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "message"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "additionalProperties": false
+      },
       "LogPage": {
         "type": "object",
         "properties": {
@@ -1865,6 +2188,511 @@
     }
   },
   "paths": {
+    "/v1/reads": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Read models in one request",
+        "description": "Up to 50 independent point reads or list pages. Each slot retains its own result or typed error; reads are not an atomic snapshot.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reads": {
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "read"
+                            },
+                            "model": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "model",
+                            "id"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "list"
+                            },
+                            "model": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "query": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "model",
+                            "query"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ordered model envelopes and per-read errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelReadBatch"
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "400": {
+            "description": "The request did not satisfy the published contract.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "401": {
+            "description": "The Bearer credential is missing, malformed, or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "403": {
+            "description": "The credential does not authorize this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist in the credential scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current claim, version, or idempotency state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "429": {
+            "description": "The caller exceeded an enforced rate limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "500": {
+            "description": "The server could not complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "default": {
+            "description": "An HTTP error not otherwise listed; decoded through the canonical envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          }
+        },
+        "operationId": "readModelBatch"
+      }
+    },
     "/v1/models/{model}": {
       "get": {
         "tags": [

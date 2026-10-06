@@ -13,6 +13,7 @@
  */
 import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, z } from '../../schema/index.js';
+import { modelReadBatchRequestSchema } from '../../wire/modelResponses.js';
 import {
   confirmedCommitReceiptResponse,
   modelReadResponse,
@@ -87,6 +88,14 @@ function clientEchoingRows(
             }),
           ),
         );
+      }
+      if (method === 'POST' && path.endsWith('/v1/reads')) {
+        const { reads } = modelReadBatchRequestSchema.parse(body);
+        return Promise.resolve(jsonResponse({ results: reads.map(read => {
+          if (read.kind !== 'read') throw new Error('Replay requires point reads');
+          return { result: modelReadResponse({ model: read.model, id: read.id,
+            data: opts?.unreadable ? null : stored.get(read.id) ?? null, stamp: 10 }) };
+        }) }));
       }
       if (method === 'GET' && path.includes('/v1/models/items/')) {
         const id = decodeURIComponent(path.slice(path.lastIndexOf('/') + 1));
@@ -180,7 +189,9 @@ describe('create with a list of rows', () => {
     });
 
     expect(rows.map((row) => row.title)).toEqual(['first', 'second']);
-    expect(calls.filter((call) => call.method === 'GET')).toHaveLength(2);
+    const recoveryReads = calls.filter((call) => call.path.endsWith('/v1/reads'));
+    expect(recoveryReads).toHaveLength(1);
+    expect(modelReadBatchRequestSchema.parse(recoveryReads[0]?.body).reads).toHaveLength(2);
   });
 
   it('refuses a confirmation that cannot account for every row', async () => {

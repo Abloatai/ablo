@@ -108,6 +108,7 @@ describe('abloOpenApi (protocol reference)', () => {
         // only half a participant.
         '/v1/logs',
         '/v1/logs/delivery',
+        '/v1/reads',
         '/v1/models/{model}',
         '/v1/models/{model}/{id}',
         '/v1/models/{model}/{id}/claim',
@@ -143,7 +144,7 @@ describe('abloOpenApi (protocol reference)', () => {
     expect(Object.keys(schemaToOpenApi(few).paths as object).length).toBeLessThan(
       Object.keys(schemaToOpenApi(many).paths as object).length,
     );
-    expect(referencePaths).toBeLessThan(23);
+    expect(referencePaths).toBeLessThan(Object.keys(schemaToOpenApi(many).paths as object).length);
   });
 
   it('is byte-identical no matter whose schema is pushed', () => {
