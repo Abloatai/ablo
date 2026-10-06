@@ -36,6 +36,27 @@ from a lockfile's runtime classification. Blume also brings HTTP, MCP,
 rendering and build dependencies; those remain worth patching. A local build
 does not prove what is currently deployed.
 
+The CLI uses ts-morph 28, whose maintained glob implementation removes the
+vulnerable braces dependency rather than overriding it to a nonexistent patch.
+The existing upgrade-rewrite checks verify the AST API remains compatible.
+
+The docs override selects http-cache-semantics 4.3.0 for
+[GHSA-ch52-4w7c-c8xp](https://github.com/advisories/GHSA-ch52-4w7c-c8xp).
+The docs also constrain KaTeX, proxy-addr, postcss-selector-parser, smol-toml
+and source-map-js to verified patched releases. A fresh advisory check is
+required even when an earlier audit was clean. Blume remains pinned to the
+existing 1.0.4 generator: newer releases require a separate js-yaml 5 migration
+and fail with the current js-yaml 4 override.
+
+## Remaining finding
+
+The October 6 root audit still reports
+[GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)
+in sprintf-js 1.1.3, reached through Jest reporting/configuration dependencies.
+No patched sprintf-js release was published when checked. The affected path is
+development tooling; CI input exposure and treatment require review. No risk
+acceptance, scanner dismissal or zero-findings claim is recorded.
+
 ## Verification
 
 Use Node 24 and the checked-in lockfiles (`lobby setup` runs both installs):
