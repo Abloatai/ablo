@@ -18,6 +18,7 @@ export function isPermanentError(error: Error): boolean {
 }
 
 export function isDefinitiveRejection(error: Error): boolean {
+  if (error instanceof AbloConnectionError) return false;
   const code = (error as { code?: string }).code;
   const spec = code ? errorCodeSpec(code) : undefined;
   if (spec) return !spec.retryable;

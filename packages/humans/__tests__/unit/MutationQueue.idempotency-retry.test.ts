@@ -137,6 +137,20 @@ describe('MutationQueue retry idempotency', () => {
     cleanup();
   });
 
+  it('keeps a new same-row patch separate from a sealed pending retry', async () => {
+    queue.dispose();
+    queue = new MutationQueue({ batchDelay: 60_000, enablePersistence: false });
+    const item = createItemFixture({ title: 'before' });
+    const first = await queue.update(item, USER_CONTEXT, { title: 'first' });
+    first.commitEnvelope = { idempotencyKey: 'sealed-retry', operationIndex: 0, operationCount: 1 };
+    first.attempts = 1;
+    const second = await queue.update(item, USER_CONTEXT, { title: 'offline edit' });
+    await Promise.resolve();
+    expect(first.data).toEqual({ title: 'first' });
+    expect(second.data).toEqual({ title: 'offline edit' });
+    expect(queue.getStats().pending).toBe(2);
+  });
+
   it('retries an ambiguous batch with the identical key, members, and order', async () => {
     const attempts = failFirstCommitAfterCapturing(queue);
 
