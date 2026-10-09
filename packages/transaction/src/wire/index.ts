@@ -449,3 +449,4 @@ export {
   API_DEPRECATION_NOTICE_DAYS,
   API_LIFECYCLE,
 } from './apiLifecycle.js';
+export { postgresOnboardingTargetSchema, postgresOnboardingConnectionSchema, postgresOnboardingSelectionSchema, postgresOnboardingPlanRequestSchema, postgresOnboardingRecipeRequestSchema, postgresOnboardingRuntimeSchema, postgresOnboardingStepSchema, postgresOnboardingTableSchema, postgresOnboardingInspectionSchema, postgresOnboardingPlanSchema, postgresOnboardingApplyRequestSchema, type PostgresOnboardingConnection, type PostgresOnboardingSelection, type PostgresOnboardingInspection, type PostgresOnboardingPlan, type PostgresOnboardingPlanRequest } from './postgresOnboarding.js';

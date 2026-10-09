@@ -1,4 +1,4 @@
-import { detectProvider, detectPooler, logicalReplicationGuidance } from '../dbProvider';
+import { detectProvider, detectPooler, logicalReplicationGuidance } from '@abloatai/transaction/server/postgresSetup';
 
 /**
  * The corpus is real host shapes taken from each provider's own connection
