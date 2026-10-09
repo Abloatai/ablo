@@ -2,7 +2,34 @@
 
 > Install Ablo, declare the models participants share, and create a typed client.
 
-Install the Ablo TypeScript SDK in an existing or new project.
+Start from your PostgreSQL database in the dashboard, or install the TypeScript
+SDK in an existing or new project.
+
+## Start with the HTTP API
+
+For Go, Python, or another HTTP client, [sign up](https://abloatai.com/signup)
+and open **Connect database** in your project. New workspaces open this setup
+automatically.
+
+1. Connect a network-reachable PostgreSQL database and select its tables.
+2. Confirm whether the connected workspace owns every row or rows carry an
+   Ablo organisation ID in a tenant column.
+3. Review and apply the scoped access setup and generated JSON contract.
+4. Save the API key, copy the curl or Go example, and verify the first request.
+
+Automatic setup uses your owner credential temporarily. Ongoing access uses a
+separate scoped reader and writer; your migrations stay under your control.
+Logical replication must already be enabled. The setup checks supported column
+types and a unique, non-null text or UUID `id` before activating a model.
+
+Choose **Manual setup** to generate the SQL and run it with your
+own database administrator. Ablo then verifies the scoped credentials you
+provide. If database credentials must stay in your infrastructure, use a
+[signed Data Source](./data-sources.md); arbitrary direct SQL writes require
+their own authoritative change feed in that mode.
+
+This path generates the contract from PostgreSQL and needs no npm installation
+or TypeScript file. Continue with the [HTTP API reference](./api.md#http-api).
 
 ## Install the package
 

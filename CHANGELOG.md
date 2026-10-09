@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.66.12
+
+### Browser edits converge after reconnect
+
+Browser clients now reconcile their live cache after replaying offline updates.
+Previously, reconnect catch-up could replace a staged text edit with an older
+server value, and the confirming update was then skipped even though the queue
+and IndexedDB journal had drained. The cache now preserves fields still owned
+by queued patches and applies confirming updates while retaining unrelated
+remote edits. Applications receive the fix when they update the SDK.
+
 ## 0.66.11
 
 ### Offline writes retain their journal

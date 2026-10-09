@@ -96,8 +96,8 @@ export class SyncClient extends EventEmitter {
    * Tracks the ids of transactions the client has applied optimistically but
    * the server has not yet confirmed. When a delta arrives, the receive path
    * consults this set to recognize the echo of the client's own mutation and
-   * skip the now-redundant pool update; the IndexedDB write still runs,
-   * because the delta is the authoritative version of the row. Without this
+   * suppress lifecycle echoes while reconciling update echoes. IndexedDB
+   * always receives the authoritative row. Without this
    * discriminator, an optimistically applied delete followed by a
    * server-confirmed create echo would resurrect the row for the window
    * between the two confirmations.
@@ -443,8 +443,8 @@ export class SyncClient extends EventEmitter {
 
     // Echo detection bridge. When the queue stages a transaction, the
     // client has already optimistically applied the change to the
-    // pool — record the tx id so the matching server delta echo gets
-    // recognized in `applyDeltaBatchToPool`. The set is drained when
+    // pool — record the tx id so `applyDeltaBatchToPool` can reconcile
+    // update echoes and suppress lifecycle echoes. The set is drained when
     // the echo lands; if a transaction is rolled back before the
     // server processes it, we drain on rollback too so a stale id
     // doesn't permanently silence a foreign delta sharing the same id
@@ -1240,10 +1240,15 @@ export class SyncClient extends EventEmitter {
       return localModel;
     }
 
-    // Local-first: if we have local dirty fields, merge by field.
-    // Keep locally changed fields; apply server for the rest.
-    if (localModel.hasChanges) {
-      const localChanges = localModel.getChanges();
+    // Staging consumes dirty flags, but the queued patches still own those fields.
+    const localChanges = localModel.getChanges();
+    for (const transaction of this.mutationQueue.getOutstandingTransactions()) {
+      if (transaction.modelId !== localModel.id || transaction.type !== 'update') continue;
+      for (const field of Object.keys(transaction.data ?? {})) {
+        localChanges[field] = Reflect.get(localModel, field);
+      }
+    }
+    if (Object.keys(localChanges).length > 0) {
       this.runtime.logger.debug('Merging server update with local dirty fields', {
         modelId: localModel.id,
         keptFields: Object.keys(localChanges || {}),
@@ -1885,14 +1890,9 @@ export class SyncClient extends EventEmitter {
       const resident = this.objectPool.peek(modelId);
       if (resident) this.objectPool.watermarks.advance(resident, syncId);
 
-      // Echo detection: if this delta carries a transaction id that matches
-      // one already applied optimistically, the pool already reflects the
-      // mutation, so the pool operation is skipped. The IndexedDB write in
-      // Database.processDeltaBatch still runs; only the in-memory pool update
-      // is suppressed. This prevents a resurrection flicker: a server-confirmed
-      // create arriving after the user has optimistically deleted the row would
-      // otherwise re-add it for the brief window before the matching delete
-      // confirmation lands.
+      // Own lifecycle echoes must not resurrect optimistically deleted rows.
+      // Update echoes still reconcile: reconnect catch-up may have replaced
+      // the optimistic fields after staging consumed their dirty flags.
       if (this.echoTracker.consumeEcho(transactionId)) {
         if (action === 'remove') this.pendingDeletes.delete(modelId);
         // A direct assignment can re-enter change tracking while this
@@ -1914,6 +1914,10 @@ export class SyncClient extends EventEmitter {
             }
           }
           resident.consumeModifiedFields(acknowledgedFields);
+          if (action === 'update' && !resident.disposed && !idsBeingRemoved.has(modelId)) {
+            enrichRelations(modelName, result.data);
+            modelsToUpsert.push(this.resolveConflicts(resident, result.data));
+          }
           resident.markAsSynced();
         }
         continue;

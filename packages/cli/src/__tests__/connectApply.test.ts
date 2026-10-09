@@ -10,12 +10,7 @@ import {
   formatUnresolvedOwnership,
   type OwnedRelationRow,
 } from '../connectOwnership';
-import {
-  connectSetupSql,
-  ABLO_PUBLICATION,
-  ABLO_REPLICATION_ROLE,
-  ABLO_WRITE_ROLE,
-} from '../connectSetup';
+import { connectSetupSql, ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE } from '@abloatai/transaction/server/postgresSetup';
 
 const CREDS = { replicationClause: 'REPL_PW', writeClause: 'WRITE_PW' } as const;
 
