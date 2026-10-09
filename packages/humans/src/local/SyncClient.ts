@@ -1096,8 +1096,7 @@ export class SyncClient extends EventEmitter {
 
   /** Delete model (DELETE) - works offline */
   delete(model: Model, options?: WriteOptions): Promise<void> | undefined {
-    // Clear pending mutations first to prevent "not found" errors on fast delete
-    this.mutationQueue.cancelTransactionsForModel(model.id);
+    // The queue owns cancellation and must retain creates as delete barriers.
     this.pendingDeletes.add(model.id);
     this.emit('optimistic:delete', model.id);
     const confirmation = this.mutate('delete', model, () => this.objectPool.remove(model.id), options);

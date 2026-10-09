@@ -35,6 +35,7 @@ export function enqueueTransaction(ctx: QueueCoalescingContext, transaction: Que
     const pendingInQueue = ctx.executionQueue.find((candidate) =>
       candidate.id !== transaction.id && candidate.type === 'update' &&
       candidate.modelId === transaction.modelId && candidate.modelName === transaction.modelName &&
+      candidate.attempts === 0 && !candidate.commitEnvelope &&
       !hasCommitCoalescingBarrier(candidate.writeOptions));
     if (!preserveWatermark && pendingInQueue) {
       pendingInQueue.data = mergeUpdateData(pendingInQueue.data || {}, transaction.data || {}, transaction.modelName);

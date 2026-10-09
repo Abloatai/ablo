@@ -876,7 +876,19 @@ export class MutationQueue extends EventEmitter {
   }
 
   private async persistQueuedTransaction(transaction: QueuedMutation, modelData?: Record<string, unknown>): Promise<void> {
-    await persistQueuedTransaction(this.persistenceContext, transaction, modelData);
+    try {
+      await persistQueuedTransaction(this.persistenceContext, transaction, modelData);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      // An unjournaled write cannot enter the retry lane or remain pending.
+      this.store.updateStatus(transaction.id, 'failed');
+      if (this.config.enableOptimistic) {
+        await this.rollbackOptimistic(transaction, 'journal_failed', error);
+      }
+      this.emit('transaction:failed', { transaction, error });
+      this.emit(`transaction:failed:${transaction.id}`, { error });
+      throw error;
+    }
   }
 
   private persistAndStage(

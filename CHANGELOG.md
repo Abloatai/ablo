@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.66.11
+
+### Offline writes retain their journal
+
+Browser clients configured for IndexedDB now retain sealed writes when their
+socket disconnects. Previously, a connection failure could be mistaken for a
+server refusal and remove the stored request before confirmation, leaving an
+offline edit vulnerable to a process crash. Reconnection replays the same
+request and its original field patch.
+
+Journal storage failures now reject promptly, report through the mutation
+failure callback and roll back the unsaved local value. Later patches remain
+separate from retries whose requests have already been sealed. Write promises
+still wait for authoritative confirmation, and stale-context and claim checks
+continue to reject unsafe writes.
+
 ## 0.66.10
 
 ### Fewer round trips for parallel reads
