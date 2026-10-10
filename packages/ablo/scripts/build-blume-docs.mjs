@@ -91,6 +91,7 @@ const TITLES = {
   debugging: 'Debugging & Logs',
   idempotency: 'Idempotency',
   integrations: 'Integrations',
+  'guarded-acceptance': 'Guarded acceptance',
   'libraries/typescript': 'TypeScript library',
   'approaches/graphql/graphql-js': 'GraphQL.js over an existing backend',
   'integrations/temporal': 'Temporal for long-running tasks',

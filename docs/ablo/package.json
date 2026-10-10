@@ -8,6 +8,7 @@
     "doctor": "blume doctor"
   },
   "dependencies": {
+    "@astrojs/mdx": "7.0.3",
     "blume": "^1.0.4"
   },
   "overrides": {
