@@ -4,10 +4,11 @@
  *
  * Blume exposes exactly one site-wide injection point below the content grid,
  * so this is where every page-level behavior has to mount. It owns no chrome
- * and renders nothing visible; its single job is composing the behaviors, each
+ * and renders the shared Ablo footer alongside page behaviors, each
  * of which stays a module with one responsibility rather than being folded in
  * here as a second concern.
  */
+import { ABLO_FOOTER_COLUMNS } from "../../../packages/marketing/src/ablo-footer/index";
 import SidebarAccordion from "./SidebarAccordion.astro";
 import DocsAnalytics from "./DocsAnalytics.astro";
 import ChangelogPagination from "./ChangelogPagination.astro";
@@ -16,3 +17,21 @@ import ChangelogPagination from "./ChangelogPagination.astro";
 <SidebarAccordion />
 <DocsAnalytics />
 <ChangelogPagination />
+
+<footer class="ablo-docs-footer" aria-label="Ablo">
+  <div class="ablo-docs-footer-inner">
+    <div class="ablo-docs-signature">
+      <a href="https://www.abloatai.com" aria-label="Ablo home">Ablo</a>
+      <div class="ablo-docs-worktable" aria-hidden="true"></div>
+    </div>
+    <nav aria-label="Footer navigation">
+      {ABLO_FOOTER_COLUMNS.map(column => (
+        <section>
+          <h2>{column.heading}</h2>
+          <div>{column.links.map(link => <a href={link.href.startsWith('/') ? `https://www.abloatai.com${link.href}` : link.href}>{link.label}</a>)}</div>
+        </section>
+      ))}
+    </nav>
+    <p class="ablo-docs-copyright">© {new Date().getFullYear()} Ablo</p>
+  </div>
+</footer>

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.66.13
+
+### Guarded acceptance for collaborative agents
+
+The package now includes a copyable acceptance module that prepares immutable
+proposals, reconciles durable Git receipts, and lists pending work for recovery.
+The accompanying guide explains client-bound read evidence, ownership changes,
+and the boundary between Ablo acknowledgement and external application.
+
+Applications supply their own trusted verification and protected Git broker.
+This release adds example source and documentation; it requires no Ablo server
+deployment and introduces no breaking SDK changes. See the
+[integration example](https://github.com/Abloatai/ablo/tree/v0.66.13/packages/ablo/examples/guarded-acceptance)
+and [acceptance guide](https://github.com/Abloatai/ablo/blob/v0.66.13/packages/ablo/docs/guarded-acceptance.md).
+
 ## 0.66.12
 
 ### Browser edits converge after reconnect

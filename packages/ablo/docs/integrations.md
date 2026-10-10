@@ -11,6 +11,10 @@ runtime keeps owning the job it was designed for.
 those systems. It carries Ablo read evidence without turning an external result
 into authoritative application state.
 
+For a trusted service accepting worker proposals before applying an external
+change, use [Guarded acceptance](./guarded-acceptance.md). It composes client-bound
+reads, atomic preparation, durable proposal identity, and receipt reconciliation.
+
 | Category | Integration | Status | Use it for |
 |---|---|---|---|
 | Agent execution | [Anthropic Sandbox Runtime](./integrations/sandbox-runtime.md) | Available | Restricting the filesystem, network, sockets, and inherited authority of an agent process |

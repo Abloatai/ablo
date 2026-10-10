@@ -1,5 +1,11 @@
 # @abloatai/humans
 
+## 0.66.13
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.13
+
 ## 0.66.12
 
 ### Browser edits converge after reconnect
