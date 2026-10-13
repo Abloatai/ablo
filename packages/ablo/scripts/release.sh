@@ -188,7 +188,7 @@ prepare_release() {
 
   echo ">>> prepare 3/5: committing the release candidate"
   git add packages/ablo packages/transaction packages/humans \
-    packages/cli docs/ablo .changeset .public-ablo package-lock.json \
+    packages/cli packages/resource-adapter docs/ablo .changeset .public-ablo package-lock.json \
     scripts/typesafety/public-surface-baseline.json
   git commit -q -m "$RELEASE_ISSUE: release(ablo): $new_version" -m "Linear: $RELEASE_LINEAR_URL"
 

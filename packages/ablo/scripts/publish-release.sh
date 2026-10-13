@@ -40,6 +40,35 @@ if [ -z "${NOTES//[$'\n\t ']/}" ]; then
   exit 1
 fi
 
+# Build the matched installable adapter before creating the release. Existing
+# assets are immutable: reruns preserve them rather than overwriting downloads.
+if [[ "$(node -p "require('$PKG_DIR/package.json').version")" != "$VERSION" ]]; then
+  echo "error: release assets must be built from the requested version" >&2
+  exit 1
+fi
+ASSETS="$(mktemp -d)"
+trap 'rm -rf "$ASSETS"' EXIT
+node "$PKG_DIR/scripts/pack-resource-assets.mjs" "$ASSETS"
+upload_resource_assets() {
+  local existing asset
+  existing="$(gh release view "$TAG" --repo "$MIRROR_REPO" --json assets -q '.assets[].name')"
+  mkdir -p "$ASSETS/existing"
+  for asset in transaction.tgz adapter.tgz manifest.json; do
+    if grep -Fxq "$asset" <<<"$existing"; then
+      gh release download "$TAG" --repo "$MIRROR_REPO" --pattern "$asset" --dir "$ASSETS/existing"
+      cmp "$ASSETS/$asset" "$ASSETS/existing/$asset" || {
+        echo "error: existing release asset differs: $asset" >&2
+        return 1
+      }
+    fi
+  done
+  for asset in transaction.tgz adapter.tgz manifest.json; do
+    if ! grep -Fxq "$asset" <<<"$existing"; then
+      gh release upload "$TAG" "$ASSETS/$asset" --repo "$MIRROR_REPO"
+    fi
+  done
+}
+
 # Release creation is idempotent, and its prose is convergent: rerunning after a
 # changelog correction updates the existing body instead of preserving stale
 # generated notes forever.
@@ -53,6 +82,7 @@ if gh release view "$TAG" --repo "$MIRROR_REPO" >/dev/null 2>&1; then
   else
     echo "Release $TAG already matches the current changelog."
   fi
+  upload_resource_assets
   echo "Done: https://github.com/$MIRROR_REPO/releases/tag/$TAG"
   exit 0
 fi
@@ -73,4 +103,5 @@ printf '%s\n' "$NOTES" | gh release create "$TAG" \
   --title "$TAG" \
   --notes-file -
 
+upload_resource_assets
 echo "Done: https://github.com/$MIRROR_REPO/releases/tag/$TAG"

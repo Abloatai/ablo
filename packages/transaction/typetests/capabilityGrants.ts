@@ -22,3 +22,7 @@ void valid;
 void empty;
 void emptyOperations;
 void unknownModel;
+
+// External claims need no application model.
+const external: CapabilityCan<{}> = { $ablo_resource: ['update'] };
+void external;

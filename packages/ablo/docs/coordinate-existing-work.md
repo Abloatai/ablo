@@ -13,6 +13,10 @@ heartbeat, waiting, recovery, participant identity, and operational visibility.
 Ablo standardizes that coordination lifecycle. It does not replace the
 application's authoritative transaction.
 
+For native file edits and Git commands, use [Managed filesystems](./managed-filesystems.md).
+Its Linux adapter owns enforcement and publication; an identifier lease alone
+cannot prevent an ordinary filesystem write.
+
 ## Existing backend: copy this shape
 
 For an application that already owns its API and Postgres transaction:

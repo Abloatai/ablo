@@ -1,5 +1,24 @@
 # @abloatai/transaction
 
+## 0.66.14
+
+### Ownership extends to files and Git
+
+Ablo now coordinates files and Git refs through a managed Linux adapter. Native
+commands keep their usual interfaces while edits remain private until ownership
+and the versions read by the worker are validated. Successful publication writes
+files, refs and a durable receipt together; interrupted work can be reconciled
+without blindly repeating a write.
+
+The SDK adds resource claims, versioned reads and receipt recovery. The matching
+adapter is supplied as an installable GitHub release archive. It requires a
+trusted Linux supervisor, FUSE and persistent state, and must be explicitly
+integrated into the runner. Existing applications remain unchanged. The release
+introduces no breaking SDK changes; scoped resource credentials require server
+support for the resource claim namespace. See the
+[filesystem guide](https://github.com/Abloatai/ablo/blob/v0.66.14/packages/ablo/docs/managed-filesystems.md)
+for installation, supported operations and deployment requirements.
+
 ## 0.66.13
 
 ## 0.66.12

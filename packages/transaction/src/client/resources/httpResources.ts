@@ -47,6 +47,7 @@ import type {
   ClaimWaitOptions,
   Duration,
   HeldClaim,
+  HeldLease,
 } from '../../types/streams.js';
 import type { ModelUpdater, FunctionalUpdateOptions } from './functionalUpdate.js';
 import type {
@@ -364,6 +365,8 @@ export interface ClaimResource extends ClaimStream {
  * describe a response the server does not send.
  */
 export interface HttpClaimsResource {
+  /** Acquire a server-owned resource lease without declaring a schema model or row. */
+  acquireResource(params: { readonly workspaceId: string; readonly resource: string; readonly ttl?: Duration }): Promise<HeldLease>;
   /**
    * The claim's current state, by its id — `GET /v1/claims/{claimId}`. The
    * poll half of the queued-grant handover: a queued caller polls until
