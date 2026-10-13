@@ -17,6 +17,7 @@ reads, atomic preparation, durable proposal identity, and receipt reconciliation
 
 | Category | Integration | Status | Use it for |
 |---|---|---|---|
+| Filesystem and Git | [Managed filesystems](./managed-filesystems.md) | Available with explicit Linux setup | Enforcing file ownership and rejecting edits based on stale reads |
 | Agent execution | [Anthropic Sandbox Runtime](./integrations/sandbox-runtime.md) | Available | Restricting the filesystem, network, sockets, and inherited authority of an agent process |
 | Long-running records | [Temporal](./integrations/temporal.md) | Available | Durable Workflows, Activity retries, timers, cancellation, and durable AI SDK calls |
 | Long-running records | [Inngest](./integrations/inngest.md) | Available | Event-driven durable functions, retriable steps, flow control, and checkpointed AI SDK calls |

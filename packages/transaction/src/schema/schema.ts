@@ -1,3 +1,4 @@
+import { RESOURCE_CLAIM_MODEL } from '../resource/claimTarget.js';
 /**
  * Schema Definition + Type Inference
  *
@@ -666,6 +667,9 @@ export function buildFieldRefs(
 ): Record<string, Record<string, FieldRef>> {
   const refs: Record<string, Record<string, FieldRef>> = {};
   for (const [model, def] of Object.entries(models)) {
+    if ([model, def.typename, def.tableName].some(name => name?.toLowerCase() === RESOURCE_CLAIM_MODEL)) {
+      throw new AbloValidationError('The resource claim namespace is reserved by Ablo.', { code: 'invalid_options' });
+    }
     const perField: Record<string, FieldRef> = {};
     for (const field of Object.keys(def.shape)) perField[field] = fieldRef(model, field);
     refs[model] = perField;

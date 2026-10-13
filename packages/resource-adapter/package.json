@@ -1,0 +1,41 @@
+{
+  "name": "@ablo/resource-adapter",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "@ablo/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "linux/*.py"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build && node ../ablo/scripts/strip-source-condition.mjs",
+    "test": "python3 -m unittest discover -s tests -p 'test_*.py'",
+    "typecheck": "tsc --noEmit",
+    "test:linux": "node scripts/test-linux.mjs",
+    "postpack": "node ../ablo/scripts/restore-source-condition.mjs",
+    "pack:check": "node ../ablo/scripts/pack-check.mjs"
+  },
+  "dependencies": {
+    "@abloatai/transaction": "0.66.14"
+  },
+  "devDependencies": {
+    "@ablo/tsconfig": "*",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
+  },
+  "description": "Managed Linux filesystem and Git enforcement for Ablo resource claims.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abloatai/ablo.git",
+    "directory": "packages/resource-adapter"
+  }
+}

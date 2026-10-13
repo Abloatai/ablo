@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONOREPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUTPUT_DIR="${1:-$(mktemp -d)/ablo-public-workspace}"
-PACKAGES=(transaction humans ablo cli tsconfig product-analytics)
+PACKAGES=(transaction humans ablo cli tsconfig product-analytics resource-adapter)
 
 if [[ "$OUTPUT_DIR" == "/" || "$OUTPUT_DIR" == "$HOME" || -z "$OUTPUT_DIR" ]]; then
   echo "Refusing to clean suspicious output dir: $OUTPUT_DIR" >&2
@@ -29,7 +29,7 @@ fi
 
 DIRTY="$(git -C "$MONOREPO_ROOT" status --porcelain -- \
   packages/ablo packages/transaction packages/humans packages/cli \
-  packages/product-analytics docs/ablo examples/account-multiplayer | grep -v '^??' || true)"
+  packages/product-analytics packages/resource-adapter docs/ablo examples/account-multiplayer | grep -v '^??' || true)"
 if [[ -n "$DIRTY" && "${ALLOW_DIRTY:-}" != "1" ]]; then
   echo "error: refusing to build a public snapshot from a dirty tree" >&2
   echo "$DIRTY" | sed 's/^/  /' >&2
@@ -86,8 +86,8 @@ cat > "$OUTPUT_DIR/package.json" <<'EOF'
   "license": "Apache-2.0",
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo",
-    "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo",
+    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo && npm run build --workspace=@ablo/resource-adapter",
+    "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo && npm run typecheck --workspace=@ablo/resource-adapter",
     "test": "npm test --workspaces --if-present"
   }
 }
@@ -104,6 +104,7 @@ cp "$PUBLIC_LOCKFILE" "$OUTPUT_DIR/package-lock.json"
 cat > "$OUTPUT_DIR/.gitignore" <<'EOF'
 node_modules/
 dist/
+__pycache__/
 .turbo/
 *.log
 .DS_Store

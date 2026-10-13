@@ -157,6 +157,7 @@ export default defineConfig({
           icon: "blocks",
           items: [
             "/integrations",
+            "/managed-filesystems",
             "/guarded-acceptance",
             "/integrations/temporal",
             "/integrations/inngest",

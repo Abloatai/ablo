@@ -1,5 +1,6 @@
 node_modules/
 dist/
+__pycache__/
 .turbo/
 *.log
 .DS_Store

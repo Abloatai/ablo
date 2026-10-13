@@ -1,5 +1,7 @@
 # @abloatai/humans
 
+## 0.66.14
+
 ## 0.66.13
 
 ### Patch Changes

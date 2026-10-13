@@ -92,6 +92,7 @@ const TITLES = {
   idempotency: 'Idempotency',
   integrations: 'Integrations',
   'guarded-acceptance': 'Guarded acceptance',
+  'managed-filesystems': 'Managed filesystems and Git',
   'libraries/typescript': 'TypeScript library',
   'approaches/graphql/graphql-js': 'GraphQL.js over an existing backend',
   'integrations/temporal': 'Temporal for long-running tasks',
