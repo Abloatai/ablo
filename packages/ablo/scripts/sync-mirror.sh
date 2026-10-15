@@ -55,7 +55,8 @@ bash "$SCRIPT_DIR/build-workspace-mirror.sh" "$TMP/snapshot"
 git -C "$MIRROR_DIR" fetch origin main --quiet
 git -C "$MIRROR_DIR" checkout main --quiet 2>/dev/null || git -C "$MIRROR_DIR" checkout -B main origin/main --quiet
 git -C "$MIRROR_DIR" reset --hard origin/main --quiet
-rsync -a --delete --exclude '.git' --exclude 'node_modules' "$TMP/snapshot/" "$MIRROR_DIR/"
+# Checkout and snapshot files can share timestamps and sizes despite version changes.
+rsync -ac --delete --exclude '.git' --exclude 'node_modules' "$TMP/snapshot/" "$MIRROR_DIR/"
 
 # 3. Commit if anything changed. The version gate lives in the mirror's
 #    release.yml, so a normal commit publishes only when the version is new.

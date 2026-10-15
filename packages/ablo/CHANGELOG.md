@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.66.15
+
+### Quieter project discovery
+
+The CLI now reports a missing management credential locally when naming a
+project. Runtime keys no longer generate project-list requests that the server
+must reject. Project management permissions remain unchanged.
+
 ## 0.66.14
 
 ### Ownership extends to files and Git

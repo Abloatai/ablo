@@ -197,8 +197,8 @@ async function nameProject(
   // listing the organization's projects; using it here made every correctly
   // minted branch key render its project as "unnamed". Name the already-
   // confirmed id with the stored/org management credential when available.
-  // Falling back to the runtime key preserves the explicit failure reason for
-  // stateless CI, where no management credential is expected.
+  // Without a management credential, listProjects reports the missing
+  // authority locally rather than sending a request that must be rejected.
   const namingKey = resolveOrgManagementKey({
     persistConfigMigrations: opts.readOnlyConfig ? false : undefined,
   }) ?? opts.apiKey;

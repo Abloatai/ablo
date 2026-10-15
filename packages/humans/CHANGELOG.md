@@ -1,5 +1,11 @@
 # @abloatai/humans
 
+## 0.66.15
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.15
+
 ## 0.66.14
 
 ## 0.66.13
