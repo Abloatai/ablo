@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.15
+
 ## 0.1.1
 
 ### Protected native workspaces

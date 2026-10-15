@@ -1,6 +1,6 @@
 {
   "name": "@ablo/resource-adapter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "exports": {
@@ -25,7 +25,7 @@
     "pack:check": "node ../ablo/scripts/pack-check.mjs"
   },
   "dependencies": {
-    "@abloatai/transaction": "0.66.14"
+    "@abloatai/transaction": "0.66.15"
   },
   "devDependencies": {
     "@ablo/tsconfig": "*",

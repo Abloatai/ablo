@@ -124,6 +124,9 @@ export async function listProjects(
   apiKey: string,
   baseUrl?: string,
 ): Promise<ProjectListResult> {
+  if (!apiKey.startsWith('mk_')) {
+    return { ok: false, reason: 'project listing requires a management credential (run ablo login)' };
+  }
   try {
     const { status, body } = await request('/api/v1/projects', apiKey, {}, baseUrl);
     return projectListResult(status, body);
