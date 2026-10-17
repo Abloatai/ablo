@@ -7,6 +7,16 @@ import { capabilityCanSchemaFor } from '../../auth/capability.js';
 import { createAbloHttpClient } from '../../transport/http/client.js';
 
 describe('external resources', () => {
+  it('forwards an explicit bounded claim wait without reading or rebasing context', async () => {
+    const requests: Readonly<Record<string, unknown>>[] = [];
+    const workspace: ResourceWorkspace = { request: async request => {
+      requests.push(request);
+      return { resource: 'file:source', claim: 'granted', fence: 7, expires: Date.now() / 1000 + 30 };
+    } };
+    const held = await createResource(workspace, 'source').claim({ waitMs: 2000 });
+    expect(requests).toEqual([{ action: 'claim', resource: 'file:source', waitMs: 2000 }]);
+    expect(held.fenceToken).toBe(7);
+  });
   it('retains signed native evidence without resending dependency contents', async () => {
     const operationId = randomUUID();
     const reads = [{ resource: 'file:source', revision: 1, evidence: 'signed' }];

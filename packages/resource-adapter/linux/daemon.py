@@ -13,6 +13,7 @@ import time
 
 from fusepy import FUSE
 from filesystem import Filesystem
+from commands import CommandServer
 from git import initialize_refs, validate_git_publication
 from store import Rejected, Store, canonical, path_name
 from process import ProcessChannel, Profile, HOME, await_domain_exit
@@ -63,14 +64,28 @@ class Adapter:
         return self.workers[uid]
 
     def execute(self, owner, request, channel=None):
+        try:
+            return self._execute(owner, request, channel)
+        finally:
+            # Publication's transaction has exited, even if the caller loses its reply.
+            if request.get("action") in ("write", "delete", "rename", "run"):
+                with self.store.changed:
+                    self.store.changed.notify_all()
+
+    def _execute(self, owner, request, channel=None):
         action = request.get("action")
         if action == "ready":
             return {"ready": os.path.ismount(self.mountpoint)}
-        if action == "claim":
+        if action in ("claim", "claim_install"):
             resource = request["resource"]
-            resource_path(resource)
-            grant = self.upstream(owner, "claim", resource=resource, ttl=request.get("ttl", "30s"))
+            if action == "claim":
+                resource_path(resource)
+                grant = self.upstream(owner, "claim", resource=resource, ttl=request.get("ttl", "30s"))
+            else:
+                grant = request["grant"]
             try:
+                if action == "claim_install":
+                    resource_path(resource)
                 with self.store.lock, self.store.db:
                     return self.store.install(owner, resource, grant)
             except Exception:
@@ -117,6 +132,17 @@ class Adapter:
                     raise Rejected("text_read_required") from None
                 return {"resource": request["resource"], "content": content,
                         "revision": self.store.revision(path), "evidence": self.store.evidence(owner, path)}
+        if action == "change_cursor":
+            with self.store.lock:
+                return {"cursor": self.store.db.execute("SELECT COALESCE(MAX(sequence),0) FROM events").fetchone()[0]}
+        if action == "await_changes":
+            after = request.get("after", 0)
+            if not isinstance(after, int) or after < 0:
+                raise Rejected("cursor_invalid")
+            with self.store.changed:
+                self.store.changed.wait_for(lambda: self.store.db.execute("SELECT COALESCE(MAX(sequence),0) FROM events").fetchone()[0] > after)
+            request = {**request, "action": "changes"}
+            action = "changes"
         if action == "changes":
             with self.store.lock:
                 after = request.get("after", 0)
@@ -181,6 +207,8 @@ class Adapter:
                     detail = {}
             with self.store.lock, self.store.db:
                 self.store.validate(identifier)
+                if detail.get("exitCode", 0):
+                    return self.store.finish(identifier, "rejected", {"code": "command_failed", "resources": [], **detail})
                 refs = validate_git_publication(self.store, identifier)
                 return self.store.publish(identifier, detail, refs)
         except Rejected as error:
@@ -205,6 +233,8 @@ class Adapter:
             raise Rejected("permission_denied")
         if channel and any(key in supplied for key in ("HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR")):
             raise Rejected("profile_environment_invalid")
+        with self.store.lock:
+            self.store.pin(operation["id"])
         uid = operation["uid"]
         private_mount = os.path.join(self.store.directory, "mounts", operation["id"])
         os.makedirs(private_mount, mode=0o700, exist_ok=True)
@@ -212,7 +242,7 @@ class Adapter:
             mount_failure = []
             def mount_operation():
                 try:
-                    FUSE(Filesystem(self.store, self.workers, operation["id"]), private_mount,
+                    FUSE(Filesystem(self.store, self.workers, operation), private_mount,
                          foreground=True, allow_other=True, direct_io=True, atomic_o_trunc=True,
                          attr_timeout=0, entry_timeout=0, negative_timeout=0, fsname=self.mount_tag + ":" + operation["id"])
                 except Exception as error:
@@ -300,10 +330,10 @@ class Adapter:
                     channel.decision.wait(timeout=max(0, min(5, deadline - time.monotonic())))
                     if not channel.decision.is_set() or channel.action != "complete" or channel.failed:
                         raise Rejected("operation_interrupted")
-                if process.returncode:
-                    with self.store.lock:
-                        self.store.validate(operation["id"])
-                    raise Rejected("command_failed")
+                    if process.returncode:
+                        with self.store.lock:
+                            self.store.validate(operation["id"])
+                        raise Rejected("command_failed")
             finally:
                 # Operation UIDs are never reused; escaped children cannot join later operations.
                 subprocess.run(["pkill", "-KILL", "-u", str(uid)], capture_output=True)
@@ -391,9 +421,8 @@ if __name__ == "__main__":
 
     if os.path.exists(arguments.socket):
         os.unlink(arguments.socket)
-    server = socketserver.ThreadingUnixStreamServer(arguments.socket, Commands)
-    server.daemon_threads = True
-    os.chmod(arguments.socket, 0o666)
+    server = CommandServer(arguments.socket, Commands)
+    os.chmod(arguments.socket, 0o600)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     os.makedirs(arguments.mount, mode=0o755, exist_ok=True)
     FUSE(Filesystem(store, workers), arguments.mount, foreground=True, allow_other=True,

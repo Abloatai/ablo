@@ -1,0 +1,120 @@
+{
+  "date": "2026-10-17",
+  "issue": "ABL-1102",
+  "candidateCommit": "27a2dde1a34fa7afc9eefc3313373b88d9b2ed90",
+  "status": "Unpublished release-built candidate; published v0.66.15 remains unchanged",
+  "build": "node packages/ablo/scripts/pack-resource-assets.mjs OUTPUT_DIRECTORY (normal npm prepack builds; no lib overrides)",
+  "negativeControl": {
+    "release": "v0.66.15",
+    "adapterSha256": "2f9986c682f312de3584eeb5e1f57bbd37dc7380b77b80994b3845f58299463d",
+    "check": "verify-resource-recovery.py",
+    "failure": "sqlite3.IntegrityError: UNIQUE constraint failed: operations.uid"
+  },
+  "checks": {
+    "pythonTests": 55,
+    "adapterTypecheck": true,
+    "transactionTypecheck": true,
+    "packagedRecovery": true,
+    "publicWorkspace": {
+      "freshNpmCi": true,
+      "command": "bash packages/ablo/scripts/verify-release-workspace.sh",
+      "exitCode": 0,
+      "gatesPassed": 8,
+      "productionDependencyVulnerabilities": 0,
+      "verificationLogSha256": "991e5464085941d17bf738db35b8a5837c930ee26b9c15af49be15e24f676c15",
+      "limits": "Public workspace contains the reviewed source with pre-bump package versions. Three existing skipped tests remain; not a package publication or production deployment."
+    }
+  },
+  "recovery": {
+    "role": "writer",
+    "traceId": "fb54b22c-1bdf-4b85-a1cb-3e9c968c7e3f",
+    "modelCalls": 0,
+    "runtime": {
+      "adapter": "9c6f27d97fa9d4223860fe1404ddc60b9da5c1a57074a44692c5c5b1720b3e83",
+      "transaction": "385ab6b61a381343959bfeac2dc5a9cfbdfb30280dab4cfb7575779eedf7e486"
+    },
+    "storage": {
+      "snapshotUploads": 1,
+      "snapshotBytes": 2110010,
+      "deltaUploads": 5,
+      "deltaBytes": 10009,
+      "headUploads": 6,
+      "headBytes": 4180
+    },
+    "pinnedBuild": {
+      "source": {
+        "workspaceId": "9ae71b25-b97b-405d-b64e-1f0699856989",
+        "bucket": "lobby-lab-bd372772f8",
+        "manifest": "f070857ea59aad3e36e007b661402caea76b683f2a09d7e34a13b7566b69f741"
+      },
+      "liveSource": {
+        "workspaceId": "9ae71b25-b97b-405d-b64e-1f0699856989",
+        "bucket": "lobby-lab-bd372772f8",
+        "manifest": "fd08e07c540dd62627ac7f39d9f22f1f29cb3cb79f181abf8f88ea4cc14f8cde"
+      },
+      "sha256": "c595e457311a604819c19109b6969031ed379d9f571896472f988fd9ef81b496",
+      "key": "artifacts/c595e457311a604819c19109b6969031ed379d9f571896472f988fd9ef81b496.cjs",
+      "verified": true,
+      "overwriteRejected": true
+    },
+    "exactAcceptedVersionRestored": true,
+    "passed": true,
+    "workspaceId": "9ae71b25-b97b-405d-b64e-1f0699856989",
+    "acknowledgedSurvived": true,
+    "lostReplySurvived": true,
+    "retryDidNotExecute": true,
+    "newOperation": "d4ad6a89-54f7-4026-be80-33683ee6928d",
+    "recoveredCheckpoint": "5ec21b7d1a42e1048bcbd6f12721b978c8292841ce11401969bc564739360a68",
+    "recoveredDeltas": 5
+  },
+  "traceReview": [
+    {
+      "traceId": "12f23efe-e0d0-4db1-a460-afbd234ac9d4",
+      "sequences": [
+        3,
+        6,
+        8,
+        9
+      ],
+      "finding": "Version 1 acknowledged; version 2 durably published with reply withheld before terminating old authority."
+    },
+    {
+      "traceId": "fb54b22c-1bdf-4b85-a1cb-3e9c968c7e3f",
+      "sequences": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        11,
+        12,
+        14,
+        15
+      ],
+      "finding": "Refused live predecessor; restored exact head after termination; retained both receipts; new read and write succeeded; retry reconciled without execution; pinned artifact stayed at version 2 while live source reached version 3."
+    }
+  ],
+  "cleanup": {
+    "date": "2026-10-17",
+    "runs": [
+      {
+        "run": "lobby-lab-bd372772f8",
+        "instancesTerminated": 2,
+        "bucketAbsent": true,
+        "roleAbsent": true,
+        "vpcAbsent": true
+      }
+    ]
+  },
+  "releasePlan": {
+    "publicFamily": "0.66.16",
+    "privateAdapter": "0.1.3",
+    "changeset": "replacement-host-recovery"
+  },
+  "limits": [
+    "No registry publication, default-branch merge or production deployment.",
+    "Scripted recovery proof with real Ablo and two disposable Linux hosts; no model calls or Circle browser acceptance.",
+    "Tested archives retain pre-release-bump versions 0.66.15 and 0.1.2; they are identified by hashes and must not overwrite published assets."
+  ]
+}

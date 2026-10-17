@@ -21,5 +21,8 @@ for (const [name, asset] of [['transaction', 'transaction.tgz'], ['resource-adap
   renameSync(`${destination}/${filename}`, `${destination}/${asset}`);
   manifest[asset] = createHash('sha256').update(readFileSync(`${destination}/${asset}`)).digest('hex');
 }
+execFileSync('python3', [`${root}/packages/ablo/scripts/verify-resource-recovery.py`, `${destination}/adapter.tgz`], {
+  stdio: 'inherit',
+});
 writeFileSync(`${destination}/manifest.json`, JSON.stringify(manifest, null, 2) + '\n');
 console.log(`Resource release assets: ${destination}`);

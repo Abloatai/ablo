@@ -13,9 +13,10 @@ from store import Rejected
 class Filesystem(Operations):
     def __init__(self, store, workers, operation=None):
         self.store, self.workers = store, workers
-        self.operation = operation
-        self.owner_uid = store.db.execute("SELECT uid FROM operations WHERE id=?", (operation,)).fetchone()[0] if operation else 0
+        self.operation = operation["id"] if operation else None
+        self.owner_uid = operation["uid"] if operation else 0
         self.handles, self.next_handle = {}, 0
+        self.released_paths = set()
 
     def context(self, writable=False):
         uid = fuse_get_context()[0]
@@ -46,6 +47,11 @@ class Filesystem(Operations):
                                                  ("file:" + path, time.time())).fetchone()
                     if peer:
                         raise Rejected("claim_conflict", [path])
+                elif (request.get("action") == "run" and path != ".git"
+                      and not self.store.file(path)
+                      and any(claim["resource"].startswith("file:") for claim in request["claims"])):
+                    # New private paths may be scratch; surviving changes are guarded at publication.
+                    self.store.capture(operation, path)
                 else:
                     raise Rejected("claim_required", [path])
             return operation
@@ -60,14 +66,13 @@ class Filesystem(Operations):
                 path = path.lstrip("/")
                 if operation:
                     self.store.capture(operation, path)
-                row = self.store.file(path, operation)
+                row = self.store.metadata(path, operation)
             if not row:
                 raise FuseOSError(errno.ENOENT)
-            revision = self.store.revision(path) + (0 if "revision" in row.keys() else 1)
             kinds = {"file": stat.S_IFREG, "directory": stat.S_IFDIR, "symlink": stat.S_IFLNK}
             return dict(st_mode=kinds[row["kind"]] | row["mode"], st_nlink=2 if row["kind"] == "directory" else 1,
-                        st_size=len(row["content"] or b""), st_uid=self.owner_uid, st_gid=self.owner_uid,
-                        st_mtime=revision, st_ctime=revision)
+                        st_size=row["size"] or 0, st_uid=self.owner_uid, st_gid=self.owner_uid,
+                        st_mtime=row["mtime"], st_ctime=row["mtime"])
 
     def readdir(self, path, fh):
         with self.store.lock, self.store.db:
@@ -75,11 +80,7 @@ class Filesystem(Operations):
             parent = path.lstrip("/")
             if operation:
                 self.store.capture(operation, parent)
-            candidates = {row[0] for row in self.store.db.execute("SELECT path FROM files")}
-            if operation:
-                candidates.update(row[0] for row in self.store.db.execute("SELECT path FROM staging WHERE operation=?", (operation,)))
-            return [".", ".."] + [posixpath.basename(child) for child in sorted(candidates)
-                                    if child and posixpath.dirname(child) == parent and self.store.file(child, operation)]
+            return [".", ".."] + [posixpath.basename(child) for child in self.store.children(parent, operation)]
 
     def open(self, path, flags):
         with self.store.lock:
@@ -162,20 +163,44 @@ class Filesystem(Operations):
             row = self.store.file(old, operation)
             if not row:
                 raise FuseOSError(errno.ENOENT)
-            if row["kind"] == "directory":
-                raise FuseOSError(errno.ENOTSUP)
             if old == new:
                 return
-            self.store.stage(operation, new, row["kind"], row["content"], row["mode"])
-            self.store.stage(operation, old, "deleted", None, 0)
+            if new.startswith(old + "/"):
+                raise FuseOSError(errno.EINVAL)
+            target = self.store.file(new, operation)
+            if target:
+                if (row["kind"] == "directory") != (target["kind"] == "directory"):
+                    raise FuseOSError(errno.ENOTDIR if row["kind"] == "directory" else errno.EISDIR)
+                if target["kind"] == "directory":
+                    self.store.capture(operation, new)
+                    if self.store.children(new, operation):
+                        raise FuseOSError(errno.ENOTEMPTY)
+            paths = [old]
+            for path in paths:
+                self.mutation(path)
+                self.mutation(new + path[len(old):])
+                self.store.capture(operation, path)
+                if self.store.file(path, operation)["kind"] == "directory":
+                    paths.extend(self.store.children(path, operation))
+            # Validate every descendant before staging the move; final publication still checks its net diff.
+            for path in paths:
+                entry = self.store.file(path, operation)
+                self.store.stage(operation, new + path[len(old):], entry["kind"], entry["content"], entry["mode"])
+                self.store.stage(operation, path, "deleted", None, 0)
             for handle in self.handles.values():
-                if handle["operation"] == operation and handle["path"] == old:
-                    handle["path"] = new
+                if handle["operation"] == operation and (handle["path"] == old or handle["path"].startswith(old + "/")):
+                    handle["path"] = new + handle["path"][len(old):]
 
     def unlink(self, path):
         with self.store.lock, self.store.db:
             path = path.lstrip("/")
-            operation = self.mutation(path)
+            # libfuse removes open-unlinked placeholders as root after releasing the handle.
+            if (self.operation and fuse_get_context()[0] == 0 and path in self.released_paths
+                    and not self.store.file(path)):
+                operation = self.operation
+                self.store.validate(operation)
+            else:
+                operation = self.mutation(path)
             row = self.store.file(path, operation)
             if not row:
                 raise FuseOSError(errno.ENOENT)
@@ -207,9 +232,7 @@ class Filesystem(Operations):
                 raise FuseOSError(errno.ENOENT)
             if row["kind"] != "directory":
                 raise FuseOSError(errno.ENOTDIR)
-            children = {child[0] for child in self.store.db.execute("SELECT path FROM files")}
-            children.update(child[0] for child in self.store.db.execute("SELECT path FROM staging WHERE operation=?", (operation,)))
-            if any(posixpath.dirname(child) == path and self.store.file(child, operation) for child in children):
+            if self.store.children(path, operation):
                 raise FuseOSError(errno.ENOTEMPTY)
             self.store.capture(operation, path)
             self.store.stage(operation, path, "deleted", None, 0)
@@ -231,4 +254,6 @@ class Filesystem(Operations):
 
     def release(self, path, fh):
         with self.store.lock:
-            self.handles.pop(fh, None)
+            handle = self.handles.pop(fh, None)
+            if handle and handle["operation"] == self.operation:
+                self.released_paths.add(handle["path"])

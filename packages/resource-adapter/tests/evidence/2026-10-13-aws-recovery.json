@@ -1,0 +1,109 @@
+{
+  "date": "2026-10-13",
+  "environment": {
+    "provider": "AWS EC2",
+    "region": "eu-north-1",
+    "instanceType": "c7g.xlarge",
+    "vcpus": 4,
+    "memoryGiB": 8,
+    "os": "Ubuntu 24.04 host; Debian 12 container",
+    "kernel": "7.0.0-1014-aws aarch64",
+    "node": "24.21.0",
+    "python": "3.11.2",
+    "rust": "1.99.0",
+    "image": "sha256:a5d3e2f3e44fa414f74e08787d061e9f713b0f9f2b973f089f229527d01ccdfb"
+  },
+  "coordinator": {
+    "scope": "1000 persistent logical worker identities; real Rust coordinator and SQLite adapter authority; FUSE and native execution stubbed; local Unix sockets",
+    "connectedMs": 1450.688658,
+    "readP50Ms": 717.163994,
+    "readP95Ms": 1296.333234,
+    "controlMs": 3.381623999999647,
+    "fanoutMs": 39.269586000000345,
+    "errors": [],
+    "workers": 1000,
+    "disjointWrites": 16,
+    "counts": {
+      "change_cursor": 1,
+      "await_changes": 5,
+      "firstLiveCursor": 1,
+      "read": 1001,
+      "run": 8,
+      "changes": 2000,
+      "receipt": 1,
+      "write": 18,
+      "peakExecution": 8
+    },
+    "coordinatorCrashRecovery": true,
+    "authorityCrashRecovery": true,
+    "recovery": true,
+    "lostReplyNotification": true,
+    "fragmentedAndPipelinedFrames": true,
+    "slowReaderDisconnected": true,
+    "idlePollingRequests": 0
+  },
+  "native": {
+    "passed": 26,
+    "failed": 0,
+    "scope": "Real Linux FUSE, kernel UID isolation and native processes; upstream claim service is a test double",
+    "output": [
+      "\u2714 real kernel boundary denies native writes outside an operation (225.332602ms)",
+      "\u2714 kernel peer credentials reject a forged worker identity (189.698833ms)",
+      "\u2714 writable mmap cannot bypass publication checks (221.923776ms)",
+      "\u2714 a second supervisor cannot replace the live claim gateway (183.039399ms)",
+      "\u2714 worker environment is applied only after supervisor privileges are dropped (240.740932ms)",
+      "\u2714 native writes stay private until one durable publication (587.705303ms)",
+      "\u2714 cached API reads cannot overwrite newer content after reacquisition (241.346876ms)",
+      "\u2714 takeover rejects the previous owner\u2019s staged operation and open descriptor (789.382305ms)",
+      "\u2714 a killed native edit never publishes its partial bytes (240.126375ms)",
+      "\u2714 same-owner concurrent native edits have exactly one publication (510.359745ms)",
+      "\u2714 expired ownership rejects old writes before a replacement becomes active (2361.712117ms)",
+      "\u2714 native rename and deletion require every affected file claim (344.41374ms)",
+      "\u2714 native dependency evidence is not replaced by a newer read (822.563888ms)",
+      "\u2714 ordinary native Git commits publish refs and files under their claims (1447.881468ms)",
+      "\u2714 incoming native Git updates respect peer file claims (985.312422ms)",
+      "\u2714 ref-only native Git updates also respect affected file claims (480.662392ms)",
+      "\u2714 obsolete expected Git commits reject without moving the ref (343.822107ms)",
+      "\u2714 lost write replies reconcile through durable receipts across daemon restart (330.811106ms)",
+      "\u2714 adapter process death aborts staged work instead of replaying it (552.574182ms)",
+      "\u2714 notifications identify stale reads and tell the caller to reread (214.259529ms)",
+      "\u2714 duplex native turns publish only after trusted completion and restore owner-bound history (1330.333373ms)",
+      "\u2714 duplex abort and deadline retain evidence and discard staged writes (1004.293229ms)",
+      "\u2714 native claim-free reads return durable evidence without granting writes (475.224411ms)",
+      "\u2714 native evidence rejects stale context after reacquisition without rebasing (390.874536ms)",
+      "\u2714 native scratch directory cleanup publishes no phantom changes and keeps prior reads usable (359.367265ms)",
+      "\u2714 completion kills detached children retaining writable descriptors (968.63852ms)",
+      "\u2139 tests 26",
+      "\u2139 suites 0",
+      "\u2139 pass 26",
+      "\u2139 fail 0",
+      "\u2139 cancelled 0",
+      "\u2139 skipped 0",
+      "\u2139 todo 0",
+      "\u2139 duration_ms 20838.722182"
+    ]
+  },
+  "rustUnitTests": {
+    "passed": 4,
+    "failed": 0
+  },
+  "beforeFix": {
+    "sourceCommit": "2fa22b47d",
+    "result": "Same crash regression failed on coordinator restart",
+    "error": "Error: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" }"
+  },
+  "cleanup": {
+    "instance": "i-071f7c1ac79992ebc",
+    "instanceState": "terminated",
+    "rootVolumeDeleted": true,
+    "securityGroupDeleted": true,
+    "keyPairDeleted": true
+  },
+  "limits": [
+    "Single-host functional acceptance with one timing sample, not a production latency guarantee or a Node comparison.",
+    "The scale suite uses 1000 logical worker identities over supervisor connections, not 1000 Linux sandboxes or live model agents.",
+    "Native execution and claim installation are substituted in the scale fixture; real native enforcement is exercised separately by the 26-test suite.",
+    "Hosted claim-service throughput, multi-host delivery and claim-availability subscriptions remain untested or unimplemented.",
+    "GitHub Actions could not start due account billing/spending restrictions; local and AWS checks were run directly."
+  ]
+}

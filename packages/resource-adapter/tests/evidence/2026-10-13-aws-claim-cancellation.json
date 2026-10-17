@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-13",
+  "task": "ABL-1044",
+  "fixture": "apps/sync-server/scripts/claim-delivery-acceptance.ts",
+  "environment": {
+    "region": "eu-north-1",
+    "instanceType": "c7g.xlarge",
+    "vcpus": 4,
+    "memoryGiB": 8,
+    "node": "24.21.0",
+    "redis": "7.4.11",
+    "details": [
+      "Linux 7.0.0-1014-aws aarch64 GNU/Linux",
+      "4",
+      "Redis server v=7.4.11 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=dc395baf3ab4da8b",
+      "[\"node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20\"]",
+      "[\"redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\"]"
+    ]
+  },
+  "bundleSha256": "df2622694c7fbbc599fa69fc44fa1b190d35f35de472943b7a47a0a7e0fed7c5",
+  "results": {
+    "disconnectedWaiterRemoved": true,
+    "cancellationRaces": 20,
+    "subscriberGapRecoveryMs": 494.6941710000001,
+    "normalHandoffMs": 6.264601999999968,
+    "missedGrantRecoveryMs": 502.47934399999997,
+    "stats": [
+      {
+        "beats": 0,
+        "dropped": 1,
+        "subscriberGaps": 1
+      },
+      {
+        "beats": 2,
+        "dropped": 0,
+        "subscriberGaps": 1
+      }
+    ],
+    "queuedWaiters": 1000,
+    "admissionMs": 5861.670221,
+    "drainMs": 3270.586598000001,
+    "passed": true
+  },
+  "checks": {
+    "unitAndRouteTestsPassed": 96,
+    "serverBuild": "passed",
+    "focusedLint": "passed",
+    "fixtureTypecheck": "passed"
+  },
+  "regression": {
+    "baseline": "31efd2978",
+    "atomicCancellationTest": "failed before the release script removed both held and queued state"
+  },
+  "limits": [
+    "One AWS host, two processes, real Redis and WebSockets; fixture authentication and Redis INCR fences instead of Aurora.",
+    "CLIENT KILL TYPE pubsub disconnects the test Redis subscribers; this is not a cross-host network partition.",
+    "The fixture records subscriber gaps without running the full Hub delta catch-up/reconnect path.",
+    "1000 queued identities admitted sequentially; no Rust/FUSE or native/model-agent workload in this fixture.",
+    "Cancellation races start after queue admission; process death and cancellation before acquisition completes are outside this acceptance."
+  ],
+  "cleanup": {
+    "instance": "i-011c70fb9984575b4",
+    "state": "terminated",
+    "volume": "vol-0bab822d136b11acd",
+    "volumeDeleted": true,
+    "securityGroupDeleted": true,
+    "keyPairDeleted": true,
+    "localPrivateKeyDeleted": true
+  }
+}

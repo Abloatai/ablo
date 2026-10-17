@@ -1,5 +1,7 @@
 # @abloatai/cli
 
+## 0.66.16
+
 ## 0.66.15
 
 ### Quieter project discovery

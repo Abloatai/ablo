@@ -151,6 +151,7 @@ export function createClaimStream(
   // Keyed `type:id`; the value is the FIFO line of queued claims. Powers
   // the reactive `queue(target)` read — who's waiting and what they intend.
   const queueByEntity = new Map<string, readonly Claim[]>();
+  const queueEntries = new Map<string, Map<string, Claim>>();
   const entityKey = (type: string, id: string): string => `${type}:${id}`;
   const EMPTY_QUEUE: readonly Claim[] = Object.freeze([]);
   // Last queue position we logged per own-claim, so advancing in line is traced
@@ -321,33 +322,19 @@ export function createClaimStream(
       }),
     );
 
-    // (2b) Per-entity wait-queue snapshots. The server fans the full line
-    //      out on every queue mutation; we replace our cached line for that
-    //      entity and notify so `queue(target)` reads reactively.
+    const publicQueueClaim = (entry: Claim): Claim => {
+      const { meta, ...target } = entry.target;
+      return { ...entry, target: { ...target, ...(meta !== undefined ? { meta: declaredMeta(meta) } : {}) } };
+    };
+
+    // Full lines seed a target. Subsequent patches change only one entry;
+    // queueFor materializes the public array when it is actually read.
     unsubs.push(
-      t.subscribe('claim_queue', (p) => {
+      t.subscribe('claim_queue_snapshot', (p) => {
         const key = entityKey(p.target.type, p.target.id);
         const line = p.queue;
-        if (line.length === 0) queueByEntity.delete(key);
-        else
-          // The wait line crosses from the wire into the public `Claim` shape
-          // like every other read does, so its meta goes through `declaredMeta`
-          // rather than arriving as the open record the frame was parsed as.
-          queueByEntity.set(
-            key,
-            Object.freeze(
-              line.map((entry) => {
-                const { meta, ...target } = entry.target;
-                return {
-                  ...entry,
-                  target: {
-                    ...target,
-                    ...(meta !== undefined ? { meta: declaredMeta(meta) } : {}),
-                  },
-                };
-              }),
-            ),
-          );
+        queueEntries.set(key, new Map(line.map(entry => [entry.id, publicQueueClaim(entry)])));
+        queueByEntity.delete(key);
         // If we are in this line, trace our position (the "agent queued behind a
         // claim" moment) — once per position change, so advancing is visible.
         const ourIndex = line.findIndex((c) => ownClaims.has(c.id));
@@ -362,6 +349,19 @@ export function createClaimStream(
             );
           }
         }
+        notifyListeners();
+      }),
+      t.subscribe('claim_queue_patch', (patch) => {
+        const key = entityKey(patch.target.type, patch.target.id);
+        const line = queueEntries.get(key);
+        if (!line) return;
+        if (patch.change.kind === 'append') line.set(patch.change.entry.id, publicQueueClaim(patch.change.entry));
+        else if (patch.change.kind === 'append_many') {
+          for (const entry of patch.change.entries) line.set(entry.id, publicQueueClaim(entry));
+        }
+        else if (patch.change.kind === 'remove') line.delete(patch.change.id);
+        else for (const id of patch.change.ids) line.delete(id);
+        queueByEntity.delete(key);
         notifyListeners();
       }),
     );
@@ -403,6 +403,9 @@ export function createClaimStream(
     //     reconnects, re-reads, and takes a fresh handle.
     unsubs.push(
       t.subscribe('disconnected', () => {
+        queueByEntity.clear();
+        queueEntries.clear();
+        notifyListeners();
         const error = new AbloConnectionError(
           'The connection holding this claim ended. Reconnect and acquire a fresh claim before continuing.',
         );
@@ -652,7 +655,14 @@ export function createClaimStream(
     },
     queueFor(target: PresenceTarget): readonly Claim[] {
       const ref = resolveTarget(target);
-      return queueByEntity.get(entityKey(ref.type, ref.id)) ?? EMPTY_QUEUE;
+      const key = entityKey(ref.type, ref.id);
+      const cached = queueByEntity.get(key);
+      if (cached) return cached;
+      const entries = queueEntries.get(key);
+      if (!entries?.size) return EMPTY_QUEUE;
+      const line = Object.freeze([...entries.values()].map((entry, position) => ({ ...entry, position })));
+      queueByEntity.set(key, line);
+      return line;
     },
     reorder(target: PresenceTarget, order: readonly Claim[]): void {
       const ref = resolveTarget(target);
@@ -710,6 +720,7 @@ export function createClaimStream(
       activeByClaimId.clear();
       ownClaims.clear();
       queueByEntity.clear();
+      queueEntries.clear();
       claimsSnapshot = Object.freeze([]);
       attached = null;
     },

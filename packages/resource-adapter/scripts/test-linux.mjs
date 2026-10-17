@@ -10,6 +10,7 @@ const repository = fileURLToPath(new URL('../../..', import.meta.url));
 const context = await mkdtemp(join(tmpdir(), 'ablo-resource-adapter-linux-'));
 try {
   execFileSync('npm', ['run', 'build', '--workspace', '@abloatai/transaction'], { cwd: repository, stdio: 'inherit' });
+  await cp(join(owner, 'runtime'), join(context, 'runtime'), { recursive: true, filter: path => !path.includes('/target') });
   await cp(join(owner, 'Dockerfile'), join(context, 'Dockerfile'));
   await cp(join(owner, 'linux'), join(context, 'linux'), { recursive: true, filter: path => !path.includes('__pycache__') });
   await build({ entryPoints: [join(owner, 'tests/native.ts')], bundle: true, platform: 'node', format: 'esm',

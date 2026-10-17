@@ -21,7 +21,7 @@ def git(directory, arguments, data=None):
 
 
 def export_repository(store, directory, operation=None):
-    paths = {row[0] for row in store.db.execute("SELECT path FROM files WHERE path LIKE '.git/%'")}
+    paths = {row[0] for row in store.source_db(operation).execute("SELECT path FROM files WHERE path LIKE '.git/%'")}
     if operation:
         paths.update(row[0] for row in store.db.execute("SELECT path FROM staging WHERE operation=? AND path LIKE '.git/%'", (operation,)))
     for path in sorted(paths):

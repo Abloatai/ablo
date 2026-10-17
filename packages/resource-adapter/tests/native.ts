@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { mkdtemp, mkdir, writeFile, chmod, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, chmod, rm, access, readFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,8 +18,9 @@ if (process.env.ABLO_ADAPTER_LIVE === '1') for await (const chunk of process.std
 const live = input.trim() ? JSON.parse(input) : null;
 if (live?.caPem) setDefaultCACertificates([...getCACertificates('default'), live.caPem]);
 const schema = defineSchema({});
-const clients = live ? live.apiKeys.map((apiKey: string) => Ablo({ schema, apiKey, baseURL: live.baseURL, transport: 'http' })) : [];
+const clients = live ? live.apiKeys.map((apiKey: string) => Ablo({ schema, apiKey, baseURL: live.baseURL, transport: 'websocket' })) : [];
 let fence = 0;
+const waiters = new Map<string, () => void>();
 const grants = new Map<string, { owner: string; id: string; expires: number }>();
 const identity = (owner: string) => ({ organizationId: 'tenant', projectId: 'project', branchId: 'branch', syncGroups: [],
   operations: [], participantKind: 'agent' as const, participantId: owner, deliveryPartition: null });
@@ -27,11 +28,24 @@ const workers: AdapterWorker[] = [1001, 1002].map((uid, index) => {
   const client = clients[index];
   const owner = `worker-${uid}`;
   return client ? { uid, client } : {
-    uid, client: { ready: async () => {}, identity: identity(owner), claims: {
+    uid, client: { ready: async () => {}, subscribe: () => () => {}, identity: identity(owner), claims: {
     acquireResource: async options => {
       const id = JSON.stringify([options.workspaceId, options.resource]);
       const previous = grants.get(id);
-      if (previous && previous.expires > Date.now() && previous.owner !== owner) throw new ResourceError('claim_conflict');
+      if (previous && previous.expires > Date.now() && previous.owner !== owner) {
+        if (options.contention?.mode !== 'wait') throw new ResourceError('claim_conflict');
+        await new Promise<void>((resolve, reject) => {
+          const signal = options.contention?.signal;
+          const finish = (error?: Error) => {
+            clearTimeout(timer); waiters.delete(id); signal?.removeEventListener('abort', abort);
+            if (error) reject(error); else resolve();
+          };
+          const abort = () => finish(new ResourceError('claim_wait_aborted'));
+          const timer = setTimeout(() => finish(new ResourceError('grant_timeout')), options.contention?.timeoutMs ?? 30000);
+          signal?.addEventListener('abort', abort, { once: true });
+          waiters.set(id, () => finish());
+        });
+      }
       const grant = { owner, id: randomUUID(), expires: Date.now() + Number(options.ttl) * 1000 };
       grants.set(id, grant);
       const held: HeldLease = { object: 'claim', id: grant.id, target: { type: 'records', id }, description: 'test', fenceToken: ++fence,
@@ -40,7 +54,7 @@ const workers: AdapterWorker[] = [1001, 1002].map((uid, index) => {
           grant.expires = Date.now() + (typeof ttl === 'number' ? ttl : 30) * 1000;
           return { expiresAt: grant.expires };
         },
-        release: async () => { if (grants.get(id) === grant) grants.delete(id); }, revoke: () => { if (grants.get(id) === grant) grants.delete(id); },
+        release: async () => { if (grants.get(id) === grant) { grants.delete(id); waiters.get(id)?.(); } }, revoke: () => { if (grants.get(id) === grant) grants.delete(id); },
         async [Symbol.asyncDispose]() { if (grants.get(id) === grant) grants.delete(id); },
       };
       return held;
@@ -61,7 +75,7 @@ async function fixture() {
   const base = git(['rev-parse', 'HEAD']);
   git(['checkout', '-b', 'incoming']); await writeFile(join(seed, 'alpha'), 'INCOMING'); git(['add', 'alpha']); git(['commit', '-m', 'incoming']);
   const incoming = git(['rev-parse', 'HEAD']); git(['checkout', 'main']);
-  const options = { stateDirectory: join(root, 'state'), mountpoint, socketPath, workspaceId: randomUUID(), seedDirectory: seed, workers };
+  const options = { stateDirectory: join(root, 'state'), mountpoint, socketPath, workspaceId: randomUUID(), seedDirectory: seed, workers, clockSkewMs: 1000 };
   let adapter = await startResourceAdapter(options);
   const a = connectResourceWorkspace(socketPath, { workerUid: 1001, timeoutMs: 10000 }), b = connectResourceWorkspace(socketPath, { workerUid: 1002, timeoutMs: 10000 });
   if (live) {
@@ -89,7 +103,7 @@ test('real kernel boundary denies native writes outside an operation', async () 
 test('kernel peer credentials reject a forged worker identity', async () => {
   const f = await fixture();
   try {
-    const program = 'import socket,json,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(json.dumps({"action":"read","resource":"file:alpha","workerUid":1001}).encode()+b"\\n"); print(s.makefile().readline())';
+    const program = 'import socket,json,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(json.dumps({"id":"spoof","request":{"action":"read","resource":"file:alpha","workerUid":1001}}).encode()+b"\\n"); print(s.makefile().readline())';
     const reply = execFileSync('setpriv', ['--reuid', '1002', '--regid', '1002', '--clear-groups', 'python3', '-c', program, join(f.root, 'public', 'workspace.sock')], { encoding: 'utf8' });
     assert.equal(JSON.parse(reply).error.code, 'permission_denied');
   } finally { await f.close(); }
@@ -138,6 +152,71 @@ test('native writes stay private until one durable publication', async () => {
     assert.equal(receipt.status, 'applied');
     assert.equal(receipt.output, 'TOOL-OUTPUT');
     assert.equal((await createResource(f.a, 'alpha').read()).content, 'PARTDONE');
+  } finally { await f.close(); }
+});
+
+test('native atomic saves allow private scratch but reject unclaimed survivors', async () => {
+  const f = await fixture();
+  try {
+    const claim = await f.claim(f.a, 'alpha');
+    const saved = await runResourceOperation(f.a, { claims: [claim], argv: ['sed', '-i', 's/BASE/SAVED/', 'alpha'] });
+    assert.deepEqual(saved.resources, ['alpha']);
+    assert.equal((await createResource(f.b, 'alpha').read()).content, 'SAVED');
+    await assert.rejects(runResourceOperation(f.a, { claims: [claim],
+      argv: ['sh', '-c', 'printf LOST > alpha; printf PRIVATE > leftover'] }), { code: 'claim_required' });
+    assert.equal((await createResource(f.b, 'alpha').read()).content, 'SAVED');
+    assert.equal((await createResource(f.b, 'leftover').read()).content, null);
+  } finally { await f.close(); }
+});
+
+test('Perl in-place saves remove kernel unlink placeholders before publication', async () => {
+  const f = await fixture();
+  try {
+    const claim = await f.claim(f.a, 'alpha');
+    const saved = await runResourceOperation(f.a, {claims: [claim], argv: ['perl', '-0pi', '-e', 's/BASE/PERL/', 'alpha']});
+    assert.deepEqual(saved.resources, ['alpha']);
+    assert.equal((await createResource(f.b, 'alpha').read()).content, 'PERL');
+    await assert.rejects(runResourceOperation(f.a, {claims: [claim], argv: ['sh', '-c', 'printf LOST > alpha; printf PRIVATE > .fuse_hidden_user_file']}), {code: 'claim_required'});
+    assert.equal((await createResource(f.b, 'alpha').read()).content, 'PERL');
+  } finally { await f.close(); }
+});
+
+test('native directory rename moves claimed descendants and rejects partial ownership', async () => {
+  const f = await fixture();
+  try {
+    const paths = ['old', 'old/nested', 'old/nested/file', 'new', 'new/nested', 'new/nested/file'];
+    const claims = [];
+    for (const path of paths) claims.push(await f.claim(f.a, path));
+    await runResourceOperation(f.a, {claims, argv: ['sh', '-c', 'mkdir -p old/nested; printf CONTENT > old/nested/file']});
+    await assert.rejects(runResourceOperation(f.a, {claims: [claims[0], claims[3]], argv: ['mv', 'old', 'new']}));
+    assert.equal((await createResource(f.b, 'old/nested/file').read()).content, 'CONTENT');
+    const moved = await runResourceOperation(f.a, {claims, argv: ['mv', 'old', 'new']});
+    assert.deepEqual(new Set(moved.resources), new Set(paths));
+    assert.equal((await createResource(f.b, 'new/nested/file').read()).content, 'CONTENT');
+    assert.equal((await createResource(f.b, 'old/nested/file').read()).content, null);
+  } finally { await f.close(); }
+});
+
+test('a mounted command pins source until completion and the next command catches up', async () => {
+  const f = await fixture();
+  const output = join(f.root, 'observed');
+  try {
+    await mkdir(output, { mode: 0o777 }); await chmod(output, 0o777);
+    const running = runResourceOperation(f.a, { claims: [], argv: ['sh', '-c',
+      'cat beta > "$1/before"; while [ ! -f "$1/continue" ]; do sleep .01; done; cat beta > "$1/after"', 'sh', output] });
+    const outcome = running.then(() => 'applied', error => error.code);
+    for (let i = 0; i < 500; i++) {
+      if (await readFile(join(output, 'before'), 'utf8').catch(() => '') === 'BASE') break;
+      await delay(10);
+    }
+    assert.equal(await readFile(join(output, 'before'), 'utf8'), 'BASE');
+    const beta = createResource(f.b, 'beta'), claim = await f.claim(f.b, 'beta');
+    await beta.write({ content: 'PEER', claim, reads: [await beta.read()] });
+    await writeFile(join(output, 'continue'), 'go');
+    assert.equal(await outcome, 'stale_context');
+    assert.equal(await readFile(join(output, 'after'), 'utf8'), 'BASE');
+    const next = await runResourceOperation(f.a, { claims: [], argv: ['cat', 'beta'] });
+    assert.equal(next.output, 'PEER');
   } finally { await f.close(); }
 });
 
@@ -194,7 +273,8 @@ test('expired ownership rejects old writes before a replacement becomes active',
     const file = createResource(f.a, 'alpha');
     const old = await file.claim({ ttl: '2s' });
     const before = await file.read();
-    await delay(2100);
+    // The authority may clamp TTL; the adapter subtracts its clock-skew allowance.
+    await delay(Math.max(0, old.expiresAt - Date.now()) + f.options.clockSkewMs + 100);
     const replacement = await f.claim(f.b, 'alpha');
     await assert.rejects(file.write({ claim: old, reads: [before], content: 'LATE' }), { code: 'claim_lost' });
     await createResource(f.b, 'alpha').write({ claim: replacement, reads: [await createResource(f.b, 'alpha').read()], content: 'NEW OWNER' });
@@ -472,4 +552,123 @@ test('completion kills detached children retaining writable descriptors', async 
     assert.equal((await createResource(f.b, 'alpha').read()).content, 'PEER');
     await assert.rejects(access(marker), {code: 'ENOENT'});
   } finally {await f.close(); await rm(marker, {force: true});}
+});
+
+
+test('Rust parks a claim wait until grant, then installs the fence without rebasing stale reads', async () => {
+  const f = await fixture();
+  try {
+    const resourceA = createResource(f.a, 'alpha'), resourceB = createResource(f.b, 'alpha');
+    await assert.rejects(f.b.request({ action: 'claim_install', resource: 'file:alpha', grant: { claim: 'forged', fence: 999, expires: Date.now() } }), { code: 'operation_invalid' });
+    const held = await resourceA.claim();
+    const before = await resourceB.read();
+    let granted = false;
+    const waiting = resourceB.claim({ waitMs: 2000 }).then(claim => { granted = true; return claim; });
+    const deadline = Date.now() + 1000;
+    if (!live) while (!waiters.size) { assert.ok(Date.now() < deadline); await delay(5); }
+    assert.equal(granted, false);
+    await resourceA.write({ claim: held, reads: [await resourceA.read()], content: 'FRESH' });
+    await held.release();
+    const next = await waiting;
+    try {
+      await assert.rejects(resourceB.write({ claim: next, reads: [before], content: 'STALE' }), { code: 'stale_context' });
+      const fresh = await resourceB.read();
+      assert.equal(fresh.content, 'FRESH');
+      await resourceB.write({ claim: next, reads: [fresh], content: 'NEXT' });
+    } finally { await next.release(); }
+  } finally { await f.close(); }
+});
+
+test('disconnecting a queued worker cancels its wait without releasing the current holder', async () => {
+  const f = await fixture();
+  const waitingClient = connectResourceWorkspace(f.options.socketPath, { workerUid: 1002, timeoutMs: 5000 });
+  try {
+    const held = await createResource(f.a, 'alpha').claim();
+    const pending = assert.rejects(createResource(waitingClient, 'alpha').claim({ waitMs: 2000 }), { code: 'connection_lost' });
+    const deadline = Date.now() + 1000;
+    if (!live) while (!waiters.size) { assert.ok(Date.now() < deadline); await delay(5); }
+    else await delay(100);
+    waitingClient.close();
+    await pending;
+    while (true) {
+      try { await createResource(f.b, 'alpha').claim(); assert.fail('current holder was released'); }
+      catch (error) {
+        if (error instanceof ResourceError && error.code === 'claim_pending') { assert.ok(Date.now() < deadline); await delay(5); continue; }
+        assert.ok(error instanceof ResourceError && error.code === 'claim_conflict');
+        break;
+      }
+    }
+    await createResource(f.a, 'alpha').write({ claim: held, reads: [await createResource(f.a, 'alpha').read()], content: 'STILL HELD' });
+    await held.release();
+  } finally { waitingClient.close(); await f.close(); }
+});
+
+test('native sibling content edits preserve directory evidence but membership changes invalidate it', async () => {
+  const f = await fixture();
+  try {
+    const mine = await f.claim(f.a, 'alpha'), peer = await f.claim(f.b, 'beta');
+    const before = await runResourceOperation(f.a, {claims: [], argv: ['sh', '-c', 'ls .; cat alpha']});
+    assert.ok(before.reads?.some(read => read.resource === 'file:'));
+    await runResourceOperation(f.b, {claims: [peer], argv: ['sh', '-c', 'printf PEER > beta']});
+    assert.deepEqual((await getResourceChanges(f.a, {reads: before.reads})).stale, []);
+    await runResourceOperation(f.a, {claims: [mine], reads: before.reads, argv: ['sh', '-c', 'printf MINE > alpha']});
+    assert.equal((await createResource(f.a, 'alpha').read()).content, 'MINE');
+    assert.equal((await createResource(f.a, 'beta').read()).content, 'PEER');
+    const listed = await runResourceOperation(f.a, {claims: [], argv: ['ls', '.']});
+    const added = await f.claim(f.b, 'new-file');
+    await runResourceOperation(f.b, {claims: [added], argv: ['sh', '-c', 'printf NEW > new-file']});
+    await assert.rejects(runResourceOperation(f.a, {claims: [mine], reads: listed.reads,
+      argv: ['sh', '-c', 'printf STALE > alpha']}), {code: 'stale_context'});
+    assert.equal((await createResource(f.a, 'alpha').read()).content, 'MINE');
+  } finally {await f.close();}
+});
+
+
+test('a stale rejection does not replace an older temporary retry script', async () => {
+  const f = await fixture();
+  try {
+    const script = '/tmp/retry-' + randomUUID() + '.sh';
+    await runResourceOperation(f.a, {claims: [], argv: ['sh', '-c', `printf 'printf OLD > alpha' > ${script}`]});
+    const observed = await createResource(f.a, 'alpha').read();
+    const peer = await f.claim(f.b, 'alpha');
+    await runResourceOperation(f.b, {claims: [peer], argv: ['sh', '-c', 'printf PEER > alpha']});
+    await peer.release();
+    const mine = await f.claim(f.a, 'alpha');
+    const command = `printf 'printf NEW > alpha' > ${script}; sh ${script}`;
+    await assert.rejects(runResourceOperation(f.a, {claims: [mine], reads: [observed], argv: ['sh', '-c', command]}), {code: 'stale_context'});
+    const retained = await runResourceOperation(f.a, {claims: [], argv: ['cat', script]});
+    assert.equal(retained.output, 'printf OLD > alpha');
+    assert.equal((await createResource(f.a, 'alpha').read()).content, 'PEER');
+    const fresh = await createResource(f.a, 'alpha').read();
+    const reused = await runResourceOperation(f.a, {claims: [mine], reads: [fresh], argv: ['sh', '-c', command]});
+    assert.match(reused.output!, /Permission denied/);
+    assert.equal((await createResource(f.a, 'alpha').read()).content, 'OLD');
+    const current = await createResource(f.a, 'alpha').read();
+    await runResourceOperation(f.a, {claims: [mine], reads: [current], argv: ['sh', '-ec', 'printf "printf NEW > alpha" > "$TMPDIR/retry.sh"; sh "$TMPDIR/retry.sh"']});
+    assert.equal((await createResource(f.a, 'alpha').read()).content, 'NEW');
+  } finally { await f.close(); }
+});
+
+
+test('failed commands retain bounded diagnostics and never publish staged files', async () => {
+  const f = await fixture();
+  try {
+    const claim = await f.claim(f.a, 'alpha'), operationId = randomUUID();
+    await assert.rejects(runResourceOperation(f.a, {operationId, claims: [claim], argv: ['sh', '-c', 'printf PART > alpha; printf "test output\\n"; printf "expected NEW, got OLD\\n" >&2; exit 7']}), {code: 'command_failed'});
+    const receipt = await getResourceReceipt(f.a, operationId);
+    assert.equal(receipt.status, 'rejected');
+    assert.equal(receipt.code, 'command_failed');
+    assert.equal(receipt.exitCode, 7);
+    assert.equal(receipt.output, 'test output\nexpected NEW, got OLD\n');
+    assert.equal((await createResource(f.a, 'alpha').read()).content, 'BASE');
+    assert.equal((await getResourceReceipt(f.b, operationId)).status, 'absent');
+    await f.restart();
+    assert.deepEqual(await getResourceReceipt(f.a, operationId), receipt);
+    assert.equal((await createResource(f.a, 'alpha').read()).content, 'BASE');
+    const large = randomUUID();
+    await assert.rejects(runResourceOperation(f.a, {operationId: large, claims: [], argv: ['python3', '-c', 'import sys; print("x" * (2 * 1024 * 1024)); sys.exit(2)']}), {code: 'command_failed'});
+    const bounded = await getResourceReceipt(f.a, large);
+    assert.equal(bounded.exitCode, 2);
+    assert.equal(Buffer.byteLength(bounded.output!), 1024 * 1024);
+  } finally { await f.close(); }
 });

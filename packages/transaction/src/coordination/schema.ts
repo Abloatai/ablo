@@ -641,8 +641,23 @@ export type ClaimQueueEntry = z.infer<typeof claimQueueEntrySchema>;
 export const claimQueueSchema = z.object({
   target: streamTargetSchema.pick({ type: true, id: true }),
   queue: z.array(claimQueueEntrySchema),
+  revision: z.number().int().nonnegative().optional(),
 });
 export type ClaimQueue = z.infer<typeof claimQueueSchema>;
+
+/** A single line change after a versioned queue snapshot. */
+export const claimQueuePatchSchema = z.object({
+  target: streamTargetSchema.pick({ type: true, id: true }),
+  baseRevision: z.number().int().nonnegative(),
+  revision: z.number().int().positive(),
+  change: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('append'), entry: claimQueueEntrySchema }),
+    z.object({ kind: z.literal('append_many'), entries: z.array(claimQueueEntrySchema).min(2) }),
+    z.object({ kind: z.literal('remove'), id: z.string() }),
+    z.object({ kind: z.literal('remove_many'), ids: z.array(z.string()).min(2) }),
+  ]),
+});
+export type ClaimQueuePatch = z.infer<typeof claimQueuePatchSchema>;
 
 /**
  * The two states a claim can be observed in while it still exists.
@@ -832,6 +847,8 @@ export const claimBeginPayloadSchema = targetRefSchema.extend({
    * must be ready to handle the grant.
    */
   queue: z.boolean().optional(),
+  /** Reattach to a retained ticket; never acquire a new claim or change FIFO. */
+  resume: z.boolean().optional(),
 });
 export type ClaimBeginPayload = z.infer<typeof claimBeginPayloadSchema>;
 
@@ -942,6 +959,8 @@ export type ClaimHeartbeatPayload = z.infer<typeof claimHeartbeatPayloadSchema>;
  */
 export const claimHeartbeatAckPayloadSchema = z.object({
   claimId: z.string(),
+  /** Current held fence, for recovering a missed grant without polling. */
+  fenceToken: z.number().int().positive().optional(),
   status: z.enum(['held', 'queued', 'lost']),
   expiresAt: z.number().optional(),
   position: z.number().optional(),

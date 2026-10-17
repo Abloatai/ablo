@@ -4,6 +4,7 @@ import {
   AbloSessionError,
   isAccessCredentialExpiryCloseReason,
 } from '../../errors.js';
+import { subTarget, wireTarget } from '../../coordination/index.js';
 import { claimAdmissionError } from '../../claims/admission.js';
 import { classifyCredentialKind } from '../../auth/credentialKind.js';
 import {
@@ -32,6 +33,7 @@ import type {
   OpenCollaborationEvents,
 } from './sessionContract.js';
 import { createPresenceProjection, type PresenceProjection } from '../../presence/store.js';
+import { WS_RECONNECT_QUEUED_CLAIMS } from '../../wire/protocol.js';
 
 interface StoredPosition {
   readonly lastSyncId: number;
@@ -179,6 +181,8 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     this.cursorKey = options.cursorKey ?? 'websocket';
     this.socket = new AgentWebSocket<TEvents>({
       baseUrl: options.baseUrl,
+      // This session exposes claim outcomes, not the reactive peer queue view.
+      claimQueueSnapshots: false,
       kind: classifyCredentialKind(token) === 'ephemeral' ? 'user' : 'agent',
       getAuthToken: () => this.currentToken,
       presenceSession: options.presenceSession,
@@ -332,10 +336,15 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
     return new Promise<import('../../coordination/schema.js').ClaimAcquired | import('../../coordination/schema.js').ClaimGranted>((resolve, reject) => {
       const cleanups: (() => void)[] = [];
       let finished = false;
+      let recovering = false;
+      let queued = false;
+      let resumeOnConnect = false;
+      let recoveryTimeout: ReturnType<typeof setTimeout> | undefined;
       const finish = (outcome: () => void): void => {
         if (finished) return;
         finished = true;
         if (timeout) clearTimeout(timeout);
+        if (recoveryTimeout) clearTimeout(recoveryTimeout);
         for (const cleanup of cleanups) cleanup();
         outcome();
       };
@@ -343,6 +352,7 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
         if (finished) return;
         finished = true;
         if (timeout) clearTimeout(timeout);
+        if (recoveryTimeout) clearTimeout(recoveryTimeout);
         for (const cleanup of cleanups) cleanup();
         void this.release({
           claimId: input.claimId,
@@ -357,8 +367,26 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
       cleanups.push(this.socket.subscribe('claim_granted', (event) => {
         if (matches(event)) finish(() => resolve(event));
       }));
+      cleanups.push(this.socket.subscribe('claim_heartbeat_ack', (event) => {
+        if (!recovering || !matches(event)) return;
+        if (event.status === 'held' && event.fenceToken !== undefined
+          && event.expiresAt !== undefined && event.expiresAt > Date.now()) {
+          finish(() => resolve({
+            claimId: input.claimId,
+            fenceToken: event.fenceToken,
+            target: { ...wireTarget(input), ...subTarget(input) },
+          }));
+        } else {
+          abandonAndReject(new AbloClaimedError(
+            `Claim ${input.claimId} was not confirmed held at the wait deadline.`,
+            { code: event.status === 'lost' ? 'claim_lost' : 'grant_timeout' },
+          ));
+        }
+      }));
       cleanups.push(this.socket.subscribe('claim_queued', (event) => {
         if (!matches(event)) return;
+        queued = true;
+        resumeOnConnect = false;
         const refusal = input.onQueued?.(event);
         if (refusal) {
           abandonAndReject(refusal);
@@ -368,7 +396,27 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
         if (!matches(event)) return;
         finish(() => reject(claimAdmissionError(event)));
       }));
-      cleanups.push(this.socket.subscribe('disconnected', () => {
+      cleanups.push(this.socket.subscribe('claim_lost', (event) => {
+        if (!matches(event)) return;
+        finish(() => reject(new AbloClaimedError(
+          `Claim ${input.claimId} was lost while waiting for its grant.`,
+          { code: 'claim_lost' },
+        )));
+      }));
+      cleanups.push(this.socket.subscribe('connected', () => {
+        if (!resumeOnConnect) return;
+        queued = false;
+        this.socket.send({ type: 'claim_begin', payload: { ...payload, resume: true } });
+      }));
+      cleanups.push(this.onTerminal(error => finish(() => reject(error))));
+      cleanups.push(this.socket.subscribe('disconnected', event => {
+        if (!this.closed && !this.terminalError) {
+          if (queued && event.code === 1001 && event.reason === WS_RECONNECT_QUEUED_CLAIMS) {
+            resumeOnConnect = true;
+            return;
+          }
+          if (resumeOnConnect && (event.code === 1006 || event.code === 1013)) return;
+        }
         finish(() => reject(new AbloConnectionError(
           `WebSocket closed while claim ${input.claimId} was pending.`,
         )));
@@ -383,10 +431,19 @@ class WebSocketSession<TEvents extends EventMap<TEvents>>
       cleanups.push(() => input.signal?.removeEventListener('abort', abort));
       const timeout = input.timeoutMs !== undefined
         ? setTimeout(() => {
-            abandonAndReject(new AbloClaimedError(
-              `claim timed out after ${input.timeoutMs}ms (claimId=${input.claimId})`,
-              { code: 'grant_timeout' },
-            ));
+            // One authoritative reconciliation at the deadline; never poll the queue.
+            recovering = true;
+            recoveryTimeout = setTimeout(() => {
+              abandonAndReject(new AbloClaimedError(
+                `Claim ${input.claimId} could not be confirmed after the wait deadline.`,
+                { code: 'grant_timeout' },
+              ));
+            }, 2_000);
+            this.socket.send({ type: 'claim_heartbeat', payload: {
+              claimId: input.claimId,
+              entityType: input.entityType,
+              entityId: input.entityId,
+            } });
           }, input.timeoutMs)
         : undefined;
       if (input.signal?.aborted) {

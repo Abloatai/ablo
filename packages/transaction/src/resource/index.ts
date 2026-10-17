@@ -23,7 +23,9 @@ export interface ResourceWorkspace {
 
 export class ResourceError extends Error {
   constructor(readonly code: string, readonly resources: readonly string[] = [], readonly operationId?: string) {
-    super(`${code}${resources.length ? `: ${resources.join(', ')}` : ''}`);
+    super(code === 'outcome_unknown' && operationId
+      ? `Operation ${operationId} may have completed; check its receipt before retrying`
+      : `${code}${resources.length ? `: ${resources.join(', ')}` : ''}`);
     this.name = 'ResourceError';
   }
 }
@@ -102,7 +104,7 @@ export function createResource(workspace: ResourceWorkspace, target: ResourceTar
   const resource = `${kind}:${name}`;
   return {
     resource,
-    async claim(options: { readonly ttl?: string } = {}): Promise<ResourceClaim> {
+    async claim(options: { readonly ttl?: string; readonly waitMs?: number } = {}): Promise<ResourceClaim> {
       const held = claimSchema.parse(await workspace.request({ action: 'claim', resource, ...options }));
       return {
         object: 'claim', resource: held.resource, id: held.claim, fenceToken: held.fence,
