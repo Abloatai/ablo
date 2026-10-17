@@ -496,8 +496,14 @@ const validatedFrameHandlers: Record<
     (session, payload) => {
       // Per-entity wait-line snapshot backing the reactive `queue(id)` read.
       // Not logged: the per-claim queued/granted events tell that story.
+      session.emit('claim_queue_snapshot', payload);
       session.emit('claim_queue', payload);
     },
+  ),
+  claim_queue_patch: validating(
+    WS_INBOUND_FRAMES.claim_queue_patch.payload,
+    'claim_queue_patch',
+    (session, payload) => { session.emit('claim_queue_patch', payload); },
   ),
   claim_heartbeat_ack: validating(
     WS_INBOUND_FRAMES.claim_heartbeat_ack.payload,

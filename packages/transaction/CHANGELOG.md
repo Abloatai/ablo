@@ -1,5 +1,21 @@
 # @abloatai/transaction
 
+## 0.66.16
+
+### Missed claim grants can be recovered
+
+A WebSocket claim wait now makes one authoritative heartbeat check at its
+deadline. A held lease with a current fencing token can be returned even if
+its grant notification was lost. Confirmation adds at most two seconds before
+the existing cleanup path; the SDK does not poll while waiting. Recovery
+requires a server that returns the fence in heartbeat acknowledgements.
+
+### Resource claims can decline to wait
+
+Resource lease acquisition accepts contention options. Choosing `skip` rejects
+an occupied resource with `claim_conflict` without joining its queue. Existing
+callers retain the default wait behavior.
+
 ## 0.66.15
 
 ## 0.66.14

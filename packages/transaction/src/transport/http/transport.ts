@@ -1162,9 +1162,11 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   // is a thin cast of its route; the reply schemas are the wire's own, so the
   // surface cannot describe a response the server does not send.
   const claims: HttpClaimsResource = {
-    async acquireResource({ workspaceId, resource, ttl }) {
+    async acquireResource({ workspaceId, resource, ttl, contention }) {
       const id = await resourceClaimId(workspaceId, resource);
-      return model(RESOURCE_CLAIM_MODEL).claim(id, { ttl, contention: { mode: 'wait', timeoutMs: 30000 } });
+      const held = await model(RESOURCE_CLAIM_MODEL).claim(id, { ttl, contention: contention ?? { mode: 'wait', timeoutMs: 30000 } });
+      if (!held) throw new AbloClaimedError('Resource is already claimed', { code: 'claim_conflict' });
+      return held;
     },
     retrieve({ claimId }): Promise<ClaimState> {
       return requestJson(

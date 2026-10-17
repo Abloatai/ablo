@@ -74,6 +74,34 @@ query `getResourceReceipt` with that UUID. Only `applied` confirms publication;
 nothing. Do not launch a replacement operation merely because a reply was lost.
 Use `getResourceChanges` for durable change notifications.
 
+When reopening restored workspace state, the host UID allocator advances beyond
+all retained operation UIDs. Existing receipts remain queryable and new operations
+receive fresh UIDs, including on a replacement host. This does not fence another
+authority: stop the previous authority before activating a restored copy.
+
+Directory enumeration bounds nested listings to the requested path subtree using
+the path index. It merges private staged additions and deletions without changing
+the directory evidence captured by native reads. A bounded 1,024-entry cache keys published names by directory membership
+revision; staged additions and deletions remain private to their operation. Cold
+root listings still scan the path set. Content changes do not evict a valid
+listing, while membership changes force a fresh one. File attribute reads query
+metadata and blob length without loading file content; private staged metadata
+still takes precedence over published metadata. Native mounts use the identity
+from their admitted operation snapshot, avoiding an unlocked identity lookup on
+the shared database connection during concurrent mount startup.
+
+Filesystem modification times are persisted wall-clock values, separate from
+read-evidence revisions. Publication updates file times and membership changes
+update directory times; restart preserves them. This lets watcher startup checks
+recognize an edit accepted while compilation was in progress. Legacy state adds
+`mtime` columns on first open and conservatively initializes existing paths to
+the upgrade time without changing their revisions or receipts. Back up state
+before upgrading; older adapters cannot write the expanded table schema.
+Preview transports may reduce timestamp precision: SFTP v3 carries whole seconds,
+so subsecond same-size edits need revision-based invalidation rather than an
+mtime-only polling guarantee.
+
+
 ## Supported scope
 
 This release supports one trusted Linux supervisor per workspace, regular files,

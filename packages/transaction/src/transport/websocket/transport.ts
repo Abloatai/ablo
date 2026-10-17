@@ -43,6 +43,7 @@ import type {
   ClaimHeartbeatAckPayload,
   ClaimLost,
   ClaimQueue,
+  ClaimQueuePatch,
   ClaimQueued,
   ClaimRejection,
   ReadDependency,
@@ -155,6 +156,10 @@ export interface WsTransportOptions {
    * the window between construction and identity resolution.
    */
   deferConnect?: boolean;
+  /** Receive full peer queue snapshots; claim outcome events are always delivered. */
+  claimQueueSnapshots?: boolean;
+  /** Receive small append/remove updates after the first full queue view. */
+  claimQueuePatches?: boolean;
   /** Where the transport logs. Defaults to silent. */
   logger?: Logger;
   /** Where lifecycle breadcrumbs, socket errors, and coordination outcomes
@@ -239,6 +244,8 @@ export interface CoreSyncEventMap {
    * queue mutation — powers the reactive `ablo.<model>.claim.queue({ id })` read.
    */
   claim_queue: [ClaimQueue];
+  claim_queue_snapshot: [ClaimQueue];
+  claim_queue_patch: [ClaimQueuePatch];
   claim_acquired: [ClaimAcquired];
   claim_abandon_ack: [ClaimAbandonAckPayload];
   claim_queued: [ClaimQueued];
@@ -417,6 +424,7 @@ export class WsTransport<
    * reference. Built in the constructor, after the state it captures exists.
    */
   private readonly frameSession: WsSession;
+  private readonly claimQueues = new Map<string, { revision: number; queue: Map<string, ClaimQueue['queue'][number]> }>();
 
   /**
    * In-flight `commit` mutation requests keyed by clientTxId. Resolved when
@@ -455,6 +463,8 @@ export class WsTransport<
 
     this.options = {
       url: wsUrl,
+      claimQueueSnapshots: true,
+      claimQueuePatches: true,
       reconnectDelay: 1000,
       maxReconnectDelay: MAX_RECONNECT_DELAY_MS,
       collaborationEvents: [],
@@ -513,6 +523,32 @@ export class WsTransport<
         this.completePresenceHandshake();
       },
     };
+    this.on('claim_queue_snapshot', (payload: ClaimQueue) => {
+      this.claimQueues.set(JSON.stringify([payload.target.type, payload.target.id]), {
+        revision: payload.revision ?? 0, queue: new Map(payload.queue.map(entry => [entry.id, entry])),
+      });
+    });
+    this.on('claim_queue_patch', (patch: ClaimQueuePatch) => {
+      const previous = this.claimQueues.get(JSON.stringify([patch.target.type, patch.target.id]));
+      const change = patch.change;
+      if (!previous || previous.revision !== patch.baseRevision
+        || (change.kind === 'remove' && !previous.queue.has(change.id))
+        || (change.kind === 'remove_many' && change.ids.some(id => !previous.queue.has(id)))) {
+        this.observability.captureWebSocketError({ context: 'claim-queue-patch', error: 'Queue revision gap' });
+        this.forceClose('claim_queue_revision_gap');
+        return;
+      }
+      if (change.kind === 'append') previous.queue.set(change.entry.id, change.entry);
+      else if (change.kind === 'append_many') for (const entry of change.entries) previous.queue.set(entry.id, entry);
+      else if (change.kind === 'remove') previous.queue.delete(change.id);
+      else for (const id of change.ids) previous.queue.delete(id);
+      previous.revision = patch.revision;
+      // Only callers of the legacy full-line event pay to materialize it.
+      if (this.listenerCount('claim_queue') > 0) {
+        const queue = [...previous.queue.values()].map((entry, position) => ({ ...entry, position }));
+        this.emit('claim_queue', { target: patch.target, queue, revision: patch.revision });
+      }
+    });
   }
 
   // ── Materialisation hooks ─────────────────────────────────────────────
@@ -689,6 +725,8 @@ export class WsTransport<
       // Intentionally omit lastSyncId, capabilities from URL; these are sent in sync_request
       // and ack messages to avoid stale baselines on reconnect.
       cursor: this.resumeCursor(),
+      ...(this.options.claimQueueSnapshots === false ? { claimQueueSnapshots: 'false' } : {}),
+      ...(this.options.claimQueuePatches ? { claimQueuePatches: 'true' } : {}),
     });
 
     // Participant kind — defaults to `user` for session connections. Agent
@@ -752,7 +790,7 @@ export class WsTransport<
       const errorMessage = error instanceof Error ? error.message : 'Failed to create WebSocket';
       this.observability.captureWebSocketError({ context: 'create-websocket', error: errorMessage });
       this.isConnecting = false;
-      this.emit('error', new AbloConnectionError(errorMessage, { cause: error }));
+      if (this.listenerCount('error') > 0) this.emit('error', new AbloConnectionError(errorMessage, { cause: error }));
       this.scheduleReconnect();
     }
   }
@@ -822,7 +860,7 @@ export class WsTransport<
           'sync.websocket',
           'warning'
         );
-        this.emit('error', new AbloConnectionError('Network is offline', { code: 'bootstrap_offline' }));
+        if (this.listenerCount('error') > 0) this.emit('error', new AbloConnectionError('Network is offline', { code: 'bootstrap_offline' }));
         return;
       }
 
@@ -835,7 +873,7 @@ export class WsTransport<
           error: error.message,
         });
       }
-      this.emit('error', error);
+      if (this.listenerCount('error') > 0) this.emit('error', error);
     };
 
     socket.onclose = (event) => {
@@ -864,6 +902,7 @@ export class WsTransport<
       });
       this.isConnecting = false;
       this.ws = null;
+      this.claimQueues.clear();
       this.onClosed();
       this.heartbeat.stop();
 

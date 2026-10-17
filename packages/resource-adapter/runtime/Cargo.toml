@@ -1,0 +1,13 @@
+[package]
+name = "ablo-resource-coordinator"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

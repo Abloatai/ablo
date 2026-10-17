@@ -34,6 +34,7 @@ import {
   claimLostSchema,
   claimQueuedSchema,
   claimQueueSchema,
+  claimQueuePatchSchema,
   claimRejectionSchema,
   subscriptionAckPayloadSchema,
 } from '../coordination/schema.js';
@@ -152,6 +153,7 @@ export const WS_INBOUND_FRAMES = {
   claim_granted: { validation: 'schema', payload: claimGrantedSchema },
   claim_lost: { validation: 'schema', payload: claimLostSchema },
   claim_queue: { validation: 'schema', payload: claimQueueSchema },
+  claim_queue_patch: { validation: 'schema', payload: claimQueuePatchSchema },
   claim_heartbeat_ack: {
     validation: 'schema',
     payload: claimHeartbeatAckPayloadSchema,

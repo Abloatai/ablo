@@ -23,6 +23,9 @@
 export const PING_INTERVAL_MS = 30_000;
 export const LEASE_TTL_MS = 3 * PING_INTERVAL_MS;
 
+/** Close 1001 permits queued requests to resume under fresh authentication. */
+export const WS_RECONNECT_QUEUED_CLAIMS = 'Fan-out recovered; queued claims retained';
+
 /**
  * The WebSocket subprotocols that carry the bearer credential out of the URL.
  *

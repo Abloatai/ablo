@@ -26,6 +26,15 @@ class Identities:
                     raise RuntimeError("A worker UID is already bound to another authenticated identity")
                 self.db.execute("INSERT OR IGNORE INTO workers VALUES (?,?)", (uid, owner))
 
+    def reserve_through(self, uid):
+        if uid is None:
+            return
+        # Restored receipts retain UIDs allocated on a different host.
+        with self.lock, self.db:
+            updated = self.db.execute("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='operations'", (uid - 10000,))
+            if not updated.rowcount:
+                self.db.execute("INSERT INTO sqlite_sequence(name,seq) VALUES ('operations',?)", (uid - 10000,))
+
     def allocate(self, workspace, owner):
         with self.lock, self.db:
             inserted = self.db.execute("INSERT INTO operations(workspace,owner) VALUES (?,?)", (workspace, owner))

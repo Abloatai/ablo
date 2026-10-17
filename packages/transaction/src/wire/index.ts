@@ -228,6 +228,7 @@ export type { ErrorCode, WireErrorCode, RequiredCapability } from '../errors.js'
 export {
   PING_INTERVAL_MS,
   LEASE_TTL_MS,
+  WS_RECONNECT_QUEUED_CLAIMS,
   WS_BEARER_SUBPROTOCOL_PREFIX,
   WS_SYNC_SUBPROTOCOL,
 } from './protocol.js';

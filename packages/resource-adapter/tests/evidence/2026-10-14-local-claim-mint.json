@@ -1,0 +1,168 @@
+{
+  "date": "2026-10-14",
+  "task": "ABL-1044",
+  "baselineCommit": "7ceaeff34",
+  "fixture": "apps/sync-server/src/hub/Hub.claimQueuePatch.realws.test.ts",
+  "environment": {
+    "host": "Darwin arm64",
+    "placement": "Hub, 1000 SDK clients and test runner in one process; disposable local Redis, no persistence",
+    "indexedQueueEnabled": true,
+    "fenceMint": "Redis INCR fixture; not Aurora"
+  },
+  "runs": {
+    "worker-before": {
+      "count": 1000,
+      "viewers": false,
+      "connectionsMs": 1078.6753750000003,
+      "queueMs": 677.0204999999996,
+      "stages": {
+        "queueMs": 167.38521699999092,
+        "listMs": 0,
+        "queueCalls": 1000,
+        "listCalls": 0
+      },
+      "wire": {
+        "snapshots": 0,
+        "patches": 0,
+        "bytes": 0
+      },
+      "fenceMintsDuringAdmission": 1000,
+      "cpu": {
+        "user": 305155,
+        "system": 60610
+      },
+      "memory": {
+        "rss": 362512384,
+        "heapTotal": 343392256,
+        "heapUsed": 254262424,
+        "external": 6245770,
+        "arrayBuffers": 2149977
+      }
+    },
+    "worker-after": {
+      "count": 1000,
+      "viewers": false,
+      "connectionsMs": 1458.1340000000005,
+      "queueMs": 658.8773329999995,
+      "stages": {
+        "queueMs": 205.8009639999973,
+        "listMs": 0,
+        "queueCalls": 1000,
+        "listCalls": 0
+      },
+      "wire": {
+        "snapshots": 0,
+        "patches": 0,
+        "bytes": 0
+      },
+      "fenceMintsDuringAdmission": 0,
+      "cpu": {
+        "user": 344088,
+        "system": 66670
+      },
+      "memory": {
+        "rss": 374308864,
+        "heapTotal": 342605824,
+        "heapUsed": 251199200,
+        "external": 6227136,
+        "arrayBuffers": 2131343
+      }
+    },
+    "viewers-before": {
+      "count": 1000,
+      "viewers": true,
+      "connectionsMs": 1480.8130419999998,
+      "queueMs": 38614.09425,
+      "stages": {
+        "queueMs": 22602.014872999946,
+        "listMs": 27772.40875199999,
+        "queueCalls": 1000,
+        "listCalls": 757
+      },
+      "wire": {
+        "snapshots": 1000,
+        "patches": 745000,
+        "bytes": 327039000
+      },
+      "fenceMintsDuringAdmission": 1000,
+      "cpu": {
+        "user": 24805379,
+        "system": 10656154
+      },
+      "memory": {
+        "rss": 1068974080,
+        "heapTotal": 1250770944,
+        "heapUsed": 1167990112,
+        "external": 6022941,
+        "arrayBuffers": 1897506
+      }
+    },
+    "viewers-after": {
+      "count": 1000,
+      "viewers": true,
+      "connectionsMs": 1610.4721249999998,
+      "queueMs": 32165.001166,
+      "stages": {
+        "queueMs": 18496.640957000036,
+        "listMs": 23843.819517000014,
+        "queueCalls": 1000,
+        "listCalls": 750
+      },
+      "wire": {
+        "snapshots": 1000,
+        "patches": 743000,
+        "bytes": 326681000
+      },
+      "fenceMintsDuringAdmission": 0,
+      "cpu": {
+        "user": 22803095,
+        "system": 8867977
+      },
+      "memory": {
+        "rss": 1055293440,
+        "heapTotal": 1263878144,
+        "heapUsed": 1133932792,
+        "external": 5944115,
+        "arrayBuffers": 1818680
+      }
+    },
+    "viewers-batched": {
+      "count": 1000,
+      "viewers": true,
+      "connectionsMs": 845.424583,
+      "queueMs": 46051.644542,
+      "stages": {
+        "queueMs": 18154.70363400005,
+        "listMs": 10374.684532999945,
+        "queueCalls": 1000,
+        "listCalls": 759
+      },
+      "wire": {
+        "snapshots": 1000,
+        "patches": 757000,
+        "bytes": 328791000
+      },
+      "fenceMintsDuringAdmission": 0,
+      "cpu": {
+        "user": 29929649,
+        "system": 11992455
+      },
+      "memory": {
+        "rss": 858472448,
+        "heapTotal": 1252868096,
+        "heapUsed": 1148928712,
+        "external": 6175236,
+        "arrayBuffers": 2049801
+      }
+    }
+  },
+  "interpretation": [
+    "Blocked sequential admissions eliminate 1000 fence mint calls; no queue snapshots or patches for worker sessions.",
+    "Worker wall time 677.02 ms versus 658.88 ms is a single local comparison, not proof of a latency improvement.",
+    "Full-viewer baseline 38.61 s versus 32.17 s has high run-to-run variability and measures client work too; no production speedup claim.",
+    "The additional per-refresh batching candidate took 46.05 s and was removed.",
+    "Fresh fenced grants now require an extra Redis check before minting. The authoritative retry rechecks ownership, preserves existing tokens and never publishes a provisional unfenced lease.",
+    "Snapshot JSON is generated only if a recipient needs a full snapshot, at most once per broadcast.",
+    "No production deployment or fresh AWS run in this iteration."
+  ]
+}

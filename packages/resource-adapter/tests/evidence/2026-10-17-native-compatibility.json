@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-17",
+  "issues": [
+    "ABL-1103",
+    "ABL-1106"
+  ],
+  "sourceBase": "58d73802acced38abdab65d121e1e5594c22641b",
+  "implementationFiles": {
+    "packages/resource-adapter/linux/filesystem.py": "d30bd24f4192e7aa3ae3dd4994142cfe4a53545b2d2f8f8067e20f941614c146",
+    "packages/resource-adapter/tests/native.ts": "171f9f77269d0c216fab5255178a78736d1af0ea3e1e1d7627fa15e54c8838a8",
+    "packages/resource-adapter/tests/test_scratch.py": "dfe055ca0cf41fcdc537b389698da2c64cb1ddb8c93bcdeac87ea978c5182fdf",
+    "packages/resource-adapter/tests/test_directory_rename.py": "f843dcf7be639d91ed793708114748b1c42dfe76058640d1ec8838ee6d82d5dc"
+  },
+  "runtimeArchiveHashes": {
+    "adapter": "88e2da5ecc02aad5dfd645ee66d6dae9f911eb972a87d09215ab3f3bf0cbf225",
+    "transaction": "a236935527aba3ca883fc4be4945780aa8cea61a58a097ab8860aa185f8d6bcc"
+  },
+  "environment": "Disposable AWS t4g.medium Ubuntu ARM64; real FUSE and Rust coordinator; synthetic claim backend",
+  "native": {
+    "passed": 35,
+    "failed": 0,
+    "durationMs": 29593.4598,
+    "logSha256": "9d2964a3b4d325bf1a07f8c86b09ed9c6c3288be5a22c5f224c9a196cf224410"
+  },
+  "python": {
+    "passed": 55,
+    "failed": 0
+  },
+  "typecheck": "npm run typecheck --workspace @ablo/resource-adapter -- --lib ES2022,DOM",
+  "redRegression": {
+    "result": "Perl -0pi rejected claim_required for kernel .fuse_hidden path before the fix",
+    "operationId": "04901263-7293-4a8d-85c9-e339e909ad25",
+    "logSha256": "c96af2bbaf086880dd397ab3bf343f079c89e56ba0295987b44df34af7ad9a3c"
+  },
+  "checks": [
+    "Perl and sed in-place writes publish only claimed destination",
+    "User-created .fuse_hidden_user_file remains rejected",
+    "Native mv requires ownership of every affected subtree path",
+    "Unclaimed destination descendant fails final net-diff validation",
+    "Nonempty and self-descendant moves rejected; empty target replacement allowed",
+    "Moved open handles retain content; peer membership invalidates publication"
+  ],
+  "limits": [
+    "Synthetic claim backend, no model agents or Circle application workload",
+    "Initial mixed-runtime run passed 34/35; matching source-built SDK and adapter passed 35/35",
+    "Source runtime archives, not a published release",
+    "No production merge or deployment"
+  ]
+}

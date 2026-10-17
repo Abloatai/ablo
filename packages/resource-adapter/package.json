@@ -1,6 +1,6 @@
 {
   "name": "@ablo/resource-adapter",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "exports": {
@@ -13,19 +13,25 @@
   "files": [
     "dist/*.js",
     "dist/*.d.ts",
-    "linux/*.py"
+    "linux/*.py",
+    "runtime/Cargo.toml",
+    "runtime/Cargo.lock",
+    "runtime/src/*.rs",
+    "scripts/build-runtime.mjs"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build && node ../ablo/scripts/strip-source-condition.mjs",
-    "test": "python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test": "python3 -m unittest discover -s tests -p 'test_*.py' && node --conditions=@ablo/source --import tsx --test tests/gateway.ts",
     "typecheck": "tsc --noEmit",
     "test:linux": "node scripts/test-linux.mjs",
     "postpack": "node ../ablo/scripts/restore-source-condition.mjs",
-    "pack:check": "node ../ablo/scripts/pack-check.mjs"
+    "pack:check": "node ../ablo/scripts/pack-check.mjs",
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "test:coordinator": "node --conditions=@ablo/source --import tsx --test tests/coordinator.ts"
   },
   "dependencies": {
-    "@abloatai/transaction": "0.66.15"
+    "@abloatai/transaction": "0.66.16"
   },
   "devDependencies": {
     "@ablo/tsconfig": "*",

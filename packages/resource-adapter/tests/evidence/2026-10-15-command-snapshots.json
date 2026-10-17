@@ -1,0 +1,38 @@
+{
+  "task": "ABL-1098",
+  "date": "2026-10-15",
+  "implementationMainCommit": "9a5f99b08",
+  "testBarrierCommit": "0df49be01",
+  "environment": "Disposable AWS m7g.large, Ubuntu ARM64, real FUSE mount, synthetic claims",
+  "native": {
+    "passed": 33,
+    "failed": 0,
+    "sequence": [
+      "Mounted command reads beta=BASE",
+      "Peer publishes beta=PEER",
+      "Same mounted command reads beta=BASE again",
+      "Command rejects with stale_context",
+      "Fresh command reads beta=PEER"
+    ]
+  },
+  "python": 48,
+  "rust": 5,
+  "typecheck": "Main adapter check passed; review source check passed with --lib es2022,dom and local SDK source linked",
+  "firstRun": {
+    "nativePassed": 32,
+    "nativeFailed": 1,
+    "reason": "Test barrier waited for output file creation rather than completed bytes; before-read assertion saw empty file",
+    "implementationChanged": false
+  },
+  "logSha256": {
+    "native.log": "74df75e2b5d0a638cdb2ba9bb4b36ea3d5fd499637c3481e83dbbf97da35bb3f",
+    "store.log": "e227e04811045d02e641553e5a9bdbf59d606dd1bd110c0f0af3bc8c1017a2a7",
+    "rust.log": "45f11a90133e6cfa2a194fb3b0d098bd150c73f5b4a47a408541f987f1595ebf"
+  },
+  "limits": [
+    "No model agents, application workload or remote source delivery",
+    "Long-lived read snapshots retain WAL pages until finalized; command lifetime remains bounded",
+    "No persistent multi-command overlays or live preview topology notifications",
+    "No release or production deployment"
+  ]
+}

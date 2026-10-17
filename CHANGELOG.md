@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.66.16
+
+### Managed workspaces recover on replacement hosts
+
+Restoring durable receipts now reserves their operation identities before new
+commands run. A replacement host can continue accepted work without colliding
+with its recovered history. Release archives are checked against this recovery
+case before their checksums are published.
+
+Native commands retain a stable source view while peers publish changes. Perl
+in-place editing and directory moves preserve final ownership checks, and failed
+commands retain their diagnostics in rejected receipts. Claim waits can recover
+a missed grant notification with an authoritative check at their deadline.
+
+The managed adapter now uses a Rust coordinator and persistent worker connections.
+Its public socket protocol has changed: upgrade the adapter and connection helper
+together and build the shipped Rust runtime on Linux before starting it. Existing
+application SDK calls remain compatible. The adapter remains opt-in; installing
+these packages does not enable it or deploy server-side claim changes. See the
+[adapter guide](https://github.com/Abloatai/ablo/blob/v0.66.16/packages/resource-adapter/README.md)
+for setup and runtime limits.
+
 ## 0.66.15
 
 ### Quieter project discovery

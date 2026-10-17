@@ -1,0 +1,41 @@
+{
+  "scope": "1000 persistent logical worker identities; real Rust coordinator and SQLite adapter authority; FUSE and native execution stubbed; local Unix sockets",
+  "connectedMs": 629.5160839999999,
+  "readP50Ms": 321.87633300000005,
+  "readP95Ms": 574.335584,
+  "controlMs": 1.3630419999999503,
+  "fanoutMs": 12.333166999999776,
+  "errors": [],
+  "workers": 1000,
+  "disjointWrites": 16,
+  "counts": {
+    "change_cursor": 1,
+    "await_changes": 5,
+    "firstLiveCursor": 1,
+    "read": 1001,
+    "run": 8,
+    "changes": 2000,
+    "receipt": 1,
+    "write": 18,
+    "peakExecution": 8
+  },
+  "recovery": true,
+  "lostReplyNotification": true,
+  "fragmentedAndPipelinedFrames": true,
+  "slowReaderDisconnected": true,
+  "idlePollingRequests": 0,
+  "environment": {
+    "os": "macOS",
+    "architecture": "arm64",
+    "transport": "same-host Unix sockets",
+    "build": "Rust release, thin LTO, one codegen unit",
+    "concurrentWork": "Clippy ran on the same host during the recorded test"
+  },
+  "limits": [
+    "One recorded run; timings are observations, not a service guarantee or Node comparison",
+    "Workers are logical identities forwarded by the trusted supervisor; Linux kernel UID isolation was not exercised",
+    "Native execution and FUSE are test doubles; real SQLite authority, signed evidence and durable publication are exercised",
+    "No hosted Ablo claim service or network latency in this fixture",
+    "Zero idle requests checked over 250 ms after the workload; no endurance test"
+  ]
+}
