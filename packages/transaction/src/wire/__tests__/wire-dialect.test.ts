@@ -32,6 +32,32 @@ const schemas: [string, z.ZodType][] = Object.entries(
   .sort(([a], [b]) => a.localeCompare(b));
 
 describe('wire schemas derive to a publishable contract', () => {
+  it('represents and validates the reviewed onboarding contract envelope', () => {
+    const contract = wire.postgresOnboardingPlanSchema.shape.contract;
+    const envelope = { v: 3, models: {}, identityRoles: [] };
+    expect(contract.parse(envelope)).toEqual(envelope);
+    expect(contract.safeParse({ ...envelope, v: 2 }).success).toBe(false);
+    expect(contract.safeParse({ ...envelope, models: null }).success).toBe(false);
+    const schema = z.toJSONSchema(contract);
+    expect(schema.properties).toHaveProperty('models');
+    expect(schema.properties).toHaveProperty('identityRoles');
+  });
+
+  it('retains migration step payloads and rejects an unknown operation', () => {
+    const operations = wire.postgresOnboardingPlanSchema.shape.deployment.shape.operations;
+    const sourceToActive = [
+      { kind: 'create_model', model: 'records', tableName: 'records' },
+      { kind: 'drop_model', model: 'records', tableName: 'records' },
+      { kind: 'rename_model', from: 'old', to: 'records' },
+      { kind: 'add_field', model: 'records', field: 'title', meta: { type: 'string', isOptional: false, isIndexed: false } },
+      { kind: 'drop_field', model: 'records', field: 'title' },
+      { kind: 'rename_field', model: 'records', from: 'old', to: 'title' },
+      { kind: 'alter_field', model: 'records', field: 'title', changes: { nullability: { from: true, to: false } } },
+    ];
+    expect(operations.parse({ sourceToActive, provision: [] })).toEqual({ sourceToActive, provision: [] });
+    expect(operations.safeParse({ sourceToActive: [{ kind: 'execute_sql' }], provision: [] }).success).toBe(false);
+  });
+
   it('finds the exported schemas to check', () => {
     // A guard on the guard: if the barrel stops exporting schemas, the loop
     // below would pass vacuously and this file would read as coverage.

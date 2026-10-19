@@ -1,0 +1,115 @@
+{
+  "date": "2026-10-14",
+  "task": "ABL-1044",
+  "fixture": "apps/sync-server/src/hub/Hub.claimReconnect.realws.test.ts",
+  "baselineCommit": "1996fee16",
+  "environment": {
+    "region": "eu-north-1",
+    "instanceType": "c7g.xlarge",
+    "hosts": 1,
+    "vcpus": 4,
+    "memoryGiB": 8,
+    "placement": "Hub, 1000 SDK clients, and Redis on one host. WebSockets and Redis use loopback.",
+    "redisPersistence": "AOF disabled; snapshots disabled",
+    "runtime": [
+      "Linux 7.0.0-1014-aws aarch64 GNU/Linux",
+      "4",
+      "v24.21.0",
+      "Redis server v=7.4.11 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=dc395baf3ab4da8b",
+      "[\"node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20\"]",
+      "[\"redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\"]",
+      "{",
+      "  \"dependencies\": {",
+      "    \"@sentry/node-cpu-profiler\": \"^2.4.4\",",
+      "    \"@sentry/node-native-stacktrace\": \"^0.5.1\",",
+      "    \"@sentry/profiling-node\": \"^10.69.0\",",
+      "    \"vitest\": \"^4.1.11\"",
+      "  }",
+      "}"
+    ]
+  },
+  "bundleSha256": "cb7b61ca80bcc4c3233f1eb99e83c6b9f9283317b32aea091ec5dc1cf434bec0",
+  "baseline": {
+    "result": "Test exceeded 300000ms before reaching reconnect phase. Last connection log was waiter_674. No successful 1000-client baseline.",
+    "observedContainerMemory": "1.764 GiB at approximately 450 connected clients; includes Hub, clients and test runner.",
+    "bottleneck": "Every queue mutation sends the complete growing queue to group peers, including worker sessions without a queue-view API."
+  },
+  "change": "Worker WebSocket sessions request claimQueueSnapshots=false on every upgrade. Full-Hub group delivery omits claim_queue only for explicit opt-out. Legacy and reactive queue transports retain snapshots; claim outcomes remain delivered.",
+  "runs": [
+    {
+      "waiters": 1000,
+      "admissionMs": 10019.499251000001,
+      "recoveryMs": [
+        4778.811028999999,
+        4774.824533000003
+      ],
+      "drainMs": 5829.645462999997,
+      "grants": 1000,
+      "authentications": 3000,
+      "memory": {
+        "rss": 975253504,
+        "heapTotal": 665448448,
+        "heapUsed": 281926888,
+        "external": 17895692,
+        "arrayBuffers": 13582305
+      }
+    },
+    {
+      "waiters": 1000,
+      "admissionMs": 10020.537559999999,
+      "recoveryMs": [
+        4774.196854999998,
+        4850.667771
+      ],
+      "drainMs": 5829.132052000001,
+      "grants": 1000,
+      "authentications": 3000,
+      "memory": {
+        "rss": 1002246144,
+        "heapTotal": 711323648,
+        "heapUsed": 307508104,
+        "external": 16879914,
+        "arrayBuffers": 12565283
+      }
+    }
+  ],
+  "assertions": [
+    "1000 sequentially admitted queued identities",
+    "Two Redis pubsub disconnects, each triggering all connected clients to reauthenticate and resume",
+    "Exact claim IDs and enqueue timestamps unchanged after each interruption",
+    "No grants before holder release",
+    "Exactly three authentications per identity",
+    "All 1000 claims granted with positive fences in original FIFO order"
+  ],
+  "limits": [
+    "Synthetic authentication and Redis INCR fence minting; SQL delta replay is mocked.",
+    "Not Rust/FUSE execution or live model agents. One Hub process only; no cross-host latency or production database.",
+    "Admission is sequential. Reconnect waves involve all 1000 clients. Test retries use 1\u20135ms delay.",
+    "Memory samples are end-of-run combined process RSS, not peak server memory.",
+    "Full queue snapshots are still reconstructed and published for interested peers. This does not establish 1000 reactive queue observers.",
+    "Two runs; no latency percentiles or prolonged outage/failover guarantee."
+  ],
+  "cleanup": {
+    "instances": [
+      "i-0f76c68a183834664"
+    ],
+    "state": "terminated",
+    "volumes": [
+      "vol-0c67609ab4fc19ad9"
+    ],
+    "volumesDeleted": true,
+    "securityGroupDeleted": true,
+    "keyPairDeleted": true,
+    "localPrivateKeyDeleted": true
+  },
+  "checks": {
+    "focusedServerTests": 26,
+    "sdkSessionTests": 37,
+    "awsSmokeTests": 1,
+    "aws1000ClientRuns": 2,
+    "serverBuild": "passed",
+    "sdkBuild": "passed",
+    "serverTypecheckIncludingTests": "passed",
+    "focusedServerLint": "passed (existing unpruned suppressions allowed)"
+  }
+}

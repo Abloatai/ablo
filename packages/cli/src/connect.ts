@@ -42,7 +42,7 @@ import {
   AbloValidationError,
 } from '@abloatai/transaction/errors';
 import pc from 'picocolors';
-import { detectProvider, replicationGrantRole } from './dbProvider';
+import { detectProvider, replicationGrantRole } from '@abloatai/transaction/server/postgresSetup';
 import postgres from 'postgres';
 import {
   ABLO_FOOTPRINT,
@@ -73,18 +73,8 @@ import {
 // probe, DataSource registration) live in ./connectSetup so the `--apply` path
 // (./connectApply) shares them without importing this command module back — a
 // runtime edge in that direction would close an import cycle.
-import {
-  ABLO_PUBLICATION,
-  ABLO_REPLICATION_ROLE,
-  ABLO_WRITE_ROLE,
-  connectSetupSql,
-  DIRECT_DATA_SOURCE_ROUTES,
-  probeReadiness,
-  quoteIdent,
-  registerDirectDataSource,
-  type CheckItem,
-  type DirectDataSourceRoute,
-} from './connectSetup';
+import { DIRECT_DATA_SOURCE_ROUTES, probeReadiness, registerDirectDataSource, type CheckItem, type DirectDataSourceRoute } from './connectSetup';
+import { ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE, connectSetupSql, quoteIdent } from '@abloatai/transaction/server/postgresSetup';
 
 export interface ConnectArgs {
   /** `check`: verify the registered database's readiness from Ablo's side (needs only `ABLO_API_KEY`; no printing of SQL). */

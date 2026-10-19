@@ -320,7 +320,7 @@ describe('SyncClient echo detection (architectural)', () => {
 
     // Optimistic local update bumps zIndex to 5. Pool reflects it.
     const live = pool.get(layerId)!;
-    (live as unknown as { zIndex: number }).zIndex = 5;
+    live.applyChanges({ zIndex: 5 });
 
     // Mark the local update as pending; echo will arrive.
     client.markTransactionPending(txUpdate1);
@@ -331,7 +331,7 @@ describe('SyncClient echo detection (architectural)', () => {
     // (zIndex=10), an echo of the EARLIER update would clobber it.
     // Simulate that ordering: the second optimistic update bumps to 10
     // BEFORE the first echo arrives.
-    (live as unknown as { zIndex: number }).zIndex = 10;
+    live.applyChanges({ zIndex: 10 });
 
     // Echo of update 1 arrives with zIndex=5 (the value the client sent
     // when staging tx-update-1). Without echo detection this would
@@ -341,8 +341,7 @@ describe('SyncClient echo detection (architectural)', () => {
       ENRICH_NOOP,
     );
 
-    // With echo detection, the update is recognized as the user's
-    // already-applied mutation and skipped — zIndex stays at 10.
+    // Reconciliation keeps the newer tracked local edit — zIndex stays at 10.
     const after = pool.get(layerId)!;
     expect((after as unknown as { zIndex: number }).zIndex).toBe(10);
   });

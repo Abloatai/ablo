@@ -1,0 +1,396 @@
+{
+  "issue": "ABL-1094",
+  "date": "2026-10-15",
+  "adapterCommit": "8343beb29",
+  "lobbyCommit": "f25a048",
+  "fixture": {
+    "originalCircleFiles": 589,
+    "addedAssertionFiles": 1,
+    "snapshotSha256": "b8ba4bd7f9297e2cffd57be59349074965c90a9a6788ee4727420fea5cbdd347",
+    "task": "Ten agents in pairs edit five selector Button attributes and all edit one shared New issue Button; repeat with resumed sessions. Each starts and ends with standalone assertions."
+  },
+  "environment": {
+    "instance": "m7g.large",
+    "hosts": 1,
+    "os": "Ubuntu 24.04 ARM64",
+    "node": "24.18.0",
+    "claudeCli": "2.1.299",
+    "model": "claude-sonnet-5-5",
+    "claims": "synthetic in-memory",
+    "runtime": "real Rust coordinator, Python authority and kernel FUSE"
+  },
+  "nativeChecks": {
+    "passed": 31,
+    "pythonPassed": 29,
+    "rustPassed": 5
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "elapsedMs": 80436.947958,
+      "stale": 35,
+      "conflicts": 3,
+      "failedCommands": 25,
+      "diagnosticActors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "errors": []
+    },
+    {
+      "round": 2,
+      "elapsedMs": 77362.43318,
+      "stale": 39,
+      "conflicts": 4,
+      "failedCommands": 10,
+      "diagnosticActors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "errors": []
+    }
+  ],
+  "modelRequests": 263,
+  "sourceVerification": {
+    "exactChangedFiles": [
+      "components/layout/sidebar/create-new-issue/assignee-selector.tsx",
+      "components/layout/sidebar/create-new-issue/create-issue-button.tsx",
+      "components/layout/sidebar/create-new-issue/label-selector.tsx",
+      "components/layout/sidebar/create-new-issue/priority-selector.tsx",
+      "components/layout/sidebar/create-new-issue/project-selector.tsx",
+      "components/layout/sidebar/create-new-issue/status-selector.tsx"
+    ],
+    "totalFiles": 590,
+    "unchangedFiles": 584,
+    "emptyStaging": true,
+    "hashes": {
+      "components/layout/sidebar/create-new-issue/assignee-selector.tsx": "92c21839626441181211815edde6870563f000c0e444d5aa3568e0147a3dae9b",
+      "components/layout/sidebar/create-new-issue/status-selector.tsx": "b13ffe0a95ad8a39de6d8b6658a705c8b7ab8ca9c74d029f442f4f1b96d92c3b",
+      "components/layout/sidebar/create-new-issue/project-selector.tsx": "4112de3b9fd11008c5c367866fa6d316c4aecb5e5a7c2ee3ff02a384d6b87967",
+      "components/layout/sidebar/create-new-issue/label-selector.tsx": "f48248267df816d964d72ff9caa6af98cc06d5da6c65da30920082c65905a077",
+      "components/layout/sidebar/create-new-issue/priority-selector.tsx": "d50ee404063f8b5dc170b96ec8c38d801468ea56d2c987c5f3f6671ea9018e57",
+      "components/layout/sidebar/create-new-issue/create-issue-button.tsx": "d76b9a8c9d7dbe81ab34fdfbb6eb19336ac8613b0a5659813cd043742bf336d3"
+    }
+  },
+  "syntax": "All six changed TSX files parsed through esbuild without warnings; all final diffs manually inspected. No application build or typecheck.",
+  "interactionReview": {
+    "actors": [
+      {
+        "actor": 0,
+        "traceId": "8a7ae728-8794-4476-8085-2219e13bc715",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 45,
+            "followingReread": 50,
+            "passingCheck": 63,
+            "final": 69
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 77,
+            "modelContext": 83,
+            "firstStale": 86,
+            "followingReread": 91,
+            "passingCheck": 147,
+            "final": 153
+          }
+        ],
+        "sedFailureResults": [
+          38
+        ]
+      },
+      {
+        "actor": 1,
+        "traceId": "679726b0-37a9-4ed7-87b4-7d7bc9b8a07f",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 26,
+            "followingReread": 36,
+            "passingCheck": 88,
+            "final": 94
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 102,
+            "modelContext": 108,
+            "firstStale": 112,
+            "followingReread": 117,
+            "passingCheck": 223,
+            "final": 229
+          }
+        ],
+        "sedFailureResults": []
+      },
+      {
+        "actor": 2,
+        "traceId": "70f2ca88-2ace-4cb9-98f8-9aa2aef4dd30",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 47,
+            "followingReread": 52,
+            "passingCheck": 140,
+            "final": 146
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 153,
+            "modelContext": 160,
+            "firstStale": 163,
+            "followingReread": 169,
+            "passingCheck": 230,
+            "final": 236
+          }
+        ],
+        "sedFailureResults": [
+          40
+        ]
+      },
+      {
+        "actor": 3,
+        "traceId": "5de53446-bf6f-4046-b13b-4b14d95eb5ba",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 26,
+            "followingReread": 31,
+            "passingCheck": 118,
+            "final": 124
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 132,
+            "modelContext": 138,
+            "firstStale": 142,
+            "followingReread": 151,
+            "passingCheck": 188,
+            "final": 194
+          }
+        ],
+        "sedFailureResults": [
+          19
+        ]
+      },
+      {
+        "actor": 4,
+        "traceId": "3c844cea-c868-4e87-b7d2-cb57dfc426ab",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 30,
+            "followingReread": 35,
+            "passingCheck": 107,
+            "final": 113
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 121,
+            "modelContext": 127,
+            "firstStale": 130,
+            "followingReread": 135,
+            "passingCheck": 160,
+            "final": 166
+          }
+        ],
+        "sedFailureResults": [
+          19
+        ]
+      },
+      {
+        "actor": 5,
+        "traceId": "e0f855d4-7b2d-4fa9-8aa8-d5d352ee6508",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 26,
+            "followingReread": 36,
+            "passingCheck": 124,
+            "final": 130
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 137,
+            "modelContext": 144,
+            "firstStale": 163,
+            "followingReread": 168,
+            "passingCheck": 256,
+            "final": 262
+          }
+        ],
+        "sedFailureResults": [
+          19
+        ]
+      },
+      {
+        "actor": 6,
+        "traceId": "a36bdba0-b623-47c5-9a78-c3a17719bba7",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 26,
+            "followingReread": 31,
+            "passingCheck": 74,
+            "final": 80
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 87,
+            "modelContext": 94,
+            "firstStale": 97,
+            "followingReread": 102,
+            "passingCheck": 184,
+            "final": 190
+          }
+        ],
+        "sedFailureResults": [
+          19
+        ]
+      },
+      {
+        "actor": 7,
+        "traceId": "994a26f8-8242-4d6a-a896-007f78ed0581",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 26,
+            "followingReread": 31,
+            "passingCheck": 43,
+            "final": 49
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 57,
+            "modelContext": 63,
+            "firstStale": 66,
+            "followingReread": 71,
+            "passingCheck": 84,
+            "final": 90
+          }
+        ],
+        "sedFailureResults": [
+          19
+        ]
+      },
+      {
+        "actor": 8,
+        "traceId": "a1bab792-4307-4c61-b4ca-0ca00d0b801c",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": 26,
+            "followingReread": 31,
+            "passingCheck": 74,
+            "final": 80
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 87,
+            "modelContext": 94,
+            "firstStale": null,
+            "followingReread": null,
+            "passingCheck": 103,
+            "final": 109
+          }
+        ],
+        "sedFailureResults": [
+          19
+        ]
+      },
+      {
+        "actor": 9,
+        "traceId": "5b357e16-8666-45f4-9a3d-ce4cdb4de9e9",
+        "rounds": [
+          {
+            "round": 1,
+            "diagnosticResult": 7,
+            "modelContext": 10,
+            "firstStale": null,
+            "followingReread": null,
+            "passingCheck": 30,
+            "final": 36
+          },
+          {
+            "round": 2,
+            "diagnosticResult": 44,
+            "modelContext": 50,
+            "firstStale": 73,
+            "followingReread": 78,
+            "passingCheck": 138,
+            "final": 144
+          }
+        ],
+        "sedFailureResults": [
+          19
+        ]
+      }
+    ],
+    "commandFailureCategories": {
+      "assertion": 25,
+      "sedTemporaryFile": 9,
+      "braceExpansion": 1
+    }
+  },
+  "maskedFailure": {
+    "traceId": "679726b0-37a9-4ed7-87b4-7d7bc9b8a07f",
+    "request": 18,
+    "result": 19,
+    "finding": "sed -i failed to create an unclaimed adjacent temporary file, but trailing grep returned zero. The standalone assertion later still failed (event 30); final state was independently verified."
+  },
+  "findings": [
+    "All twenty agent-rounds received initial rejected assertion diagnostics and eventually passed their standalone check.",
+    "All ten agents attempted sed -i. Nine received command_failed permission diagnostics; one masked the error with a trailing successful grep. Agents switched to direct Node writes or same-command TMPDIR copies.",
+    "74 stale-context rejections and 7 claim conflicts remain substantial coordination overhead.",
+    "One further command_failed came from brace expansion unsupported by /bin/sh."
+  ],
+  "limits": [
+    "Single repository copy and shared authority; no browser, dev server, S3 source publication, cross-host propagation, production claim service, reconnect or released-package test.",
+    "Attribute assertions and TSX parsing do not establish full application correctness.",
+    "Two consecutive rounds, not latency percentiles or controlled before/after comparison. Native regression bootstrap was finishing during model startup.",
+    "The 589-file snapshot is unmodified except six intended files; total fixture has 590 files including its additional assertion.",
+    "Real-time state reaches models through tool reads and retries, not direct context injection."
+  ],
+  "cleanup": {
+    "instanceTerminated": true,
+    "bucketAbsent": true,
+    "temporarySecretAbsent": true,
+    "roleAbsent": true,
+    "vpcAbsent": true
+  },
+  "reportSha256": "ece875f2dc0665bcd3d3974b7ddf2f115a716a0af1a7214230d25063982ff102"
+}

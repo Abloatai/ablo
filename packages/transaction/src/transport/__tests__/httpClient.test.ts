@@ -1515,6 +1515,22 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     expect(calls).toEqual(['POST /api/v1/models/items/item-1/claim']);
   });
 
+  it('resource claims can reject contention in one request without queuing', async () => {
+    let requests = 0;
+    const c = Ablo({
+      schema, apiKey: 'sk_test_resource', baseURL: 'https://api.example.test', transport: 'http',
+      fetch: (_input, init) => {
+        requests++;
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body)).queue).toBe(false);
+        return Promise.resolve(jsonResponse({ error: { code: 'entity_claimed', message: 'Held' } }, 409));
+      },
+    });
+    await expect(c.claims.acquireResource({ workspaceId: 'workspace', resource: 'file:source',
+      contention: { mode: 'skip' } })).rejects.toMatchObject({ code: 'claim_conflict' });
+    expect(requests).toBe(1);
+  });
+
   it('claims a key by id alone: no read after the grant, a lease without data, given back on release', async () => {
     const calls: string[] = [];
     const c = Ablo({

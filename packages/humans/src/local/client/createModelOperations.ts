@@ -609,9 +609,14 @@ export function createModelOperations<T, C>(
     // create/update calls syncNow() alone, defeating the queue's microtask
     // coalescer and producing one SQL transaction per delta.
     await Promise.resolve();
-    await syncClient.syncNow();
-    if (exactConfirmation) await exactConfirmation;
-    else await syncClient.waitForConfirmation(model.getModelName(), model.id);
+    const drain = syncClient.syncNow();
+    if (exactConfirmation) {
+      // A journal failure must surface even if another offline write holds the drain.
+      await Promise.all([drain, exactConfirmation]);
+    } else {
+      await drain;
+      await syncClient.waitForConfirmation(model.getModelName(), model.id);
+    }
   };
 
   // Claims this model surface currently holds, keyed by the exact grant id.

@@ -80,6 +80,7 @@ import type {
   CoreSyncEventMap,
 } from '../websocket/transport.js';
 import { createPresenceSessionSource } from '../../presence/session.js';
+import { createResource, type ResourceTarget, type ResourceWorkspace } from '../../resource/index.js';
 
 export interface AbloHttpClientOptions<S extends SchemaRecord>
   extends HttpClientConfig<S> {
@@ -242,6 +243,8 @@ export type AbloHttpClient<S extends SchemaRecord> = {
    * `error.claims`.
    */
   readonly claims: HttpClaimsResource;
+  /** Files and refs enforced by a worker-bound external resource adapter. */
+  resource(workspace: ResourceWorkspace, target: ResourceTarget): ReturnType<typeof createResource>;
   /** Durable, credential-scoped authoritative event pages. */
   readonly logs: HttpLogsResource;
   /** Server-confirmed authority of the credential, populated by `ready()`. */
@@ -722,6 +725,16 @@ export function createAbloHttpClient<S extends SchemaRecord>(
       if (prop === 'commits') return commits;
       if (prop === 'ready') return ready;
       if (prop === 'dispose') return dispose;
+      if (prop === 'resource') {
+        const factory = (workspace: ResourceWorkspace, target: ResourceTarget) => createResource({
+          async request(request) {
+            await ready();
+            return workspace.request({ ...request, authority: transport.identity });
+          },
+        }, target);
+        // Keep an existing schema model named resource accessible on the callable.
+        return schemaModels.has('resource') ? Object.assign(factory, model('resource')) : factory;
+      }
       if (usesWebSocket && prop === 'observe') {
         return async function* (observeOptions?: { signal?: AbortSignal }) {
           yield* (await webSocketSession()).observe(observeOptions);

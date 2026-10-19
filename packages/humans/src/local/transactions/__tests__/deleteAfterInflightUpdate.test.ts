@@ -73,7 +73,7 @@ function memoryDatabase(): Database {
   return db as Database;
 }
 
-function scriptedExecutor(holdFirst: boolean) {
+function scriptedExecutor(holdFirst: boolean, queuedFirst = false) {
   const calls: { ops: { type: string; id: string }[] }[] = [];
   let syncId = 0;
   let releaseFirst: (() => void) | undefined;
@@ -85,9 +85,10 @@ function scriptedExecutor(holdFirst: boolean) {
       calls.push({ ops: operations.map((op) => ({ type: op.type, id: op.id })) });
       syncId += 1;
       const result = {
-        lastSyncId: syncId,
-        status: 'confirmed' as const,
+        lastSyncId: queuedFirst && index === 0 ? 0 : syncId,
+        status: queuedFirst && index === 0 ? 'queued' as const : 'confirmed' as const,
         statusAt: '2026-08-05T10:00:00.058Z',
+        ...(queuedFirst && index === 0 ? { correlationId: 'create-echo' } : {}),
       };
       if (holdFirst && index === 0) {
         // Held in flight until the test releases it — the window in which the
@@ -125,7 +126,7 @@ async function eventually(
   return predicate();
 }
 
-describe('delete after an in-flight update on the same row', () => {
+describe('delete after a pending write on the same row', () => {
   let harness: TestHarness;
   let syncClient: SyncClient;
   let outbox: ReturnType<typeof memoryOutbox>;
@@ -140,6 +141,59 @@ describe('delete after an in-flight update on the same row', () => {
   afterEach(() => {
     syncClient.dispose();
     harness.cleanup();
+  });
+
+  it('cancels an unsent create and delete locally without sending either', async () => {
+    const { calls, executor } = scriptedExecutor(false);
+    const queue = syncClient.getMutationQueue();
+    queue.setMutationExecutor(executor);
+    queue.setConnectionChecker(() => false);
+    const item = createItemFixture({ title: 'short-lived' });
+    const created = syncClient.add(item);
+    expect(await eventually(() => queue.getOutstandingTransactions().some(tx => tx.status === 'pending' && tx.type === 'create'), 3_000)).toBe(true);
+
+    const deleted = syncClient.delete(item);
+    expect(harness.pool.get(item.id)).toBeUndefined();
+    await deleted;
+    await created;
+    queue.setConnectionChecker(() => true);
+    await queue.processBatch();
+
+    expect(calls).toEqual([]);
+    expect(queue.getOutstandingTransactions().filter(tx => tx.status === 'pending')).toEqual([]);
+  });
+
+  it('keeps an executing create as a barrier until its confirming delta', async () => {
+    const { calls, executor, releaseFirst } = scriptedExecutor(true, true);
+    const queue = syncClient.getMutationQueue();
+    queue.setMutationExecutor(executor);
+    const item = createItemFixture({ title: 'short-lived' });
+    const created = syncClient.add(item);
+    expect(await eventually(() => calls.length === 1, 3_000)).toBe(true);
+    expect(calls[0]?.ops.map(op => op.type)).toEqual(['CREATE']);
+
+    let deleteStaged = false;
+    queue.on('transaction:created', (tx: { type?: string }) => {
+      if (tx.type === 'delete') deleteStaged = true;
+    });
+    const deleted = syncClient.delete(item);
+    expect(harness.pool.get(item.id)).toBeUndefined();
+    expect(await eventually(() => deleteStaged, 3_000)).toBe(true);
+    expect(queue.getOutstandingTransactions().some(tx => tx.status === 'executing' && tx.type === 'create')).toBe(true);
+
+    releaseFirst();
+    expect(await eventually(() => queue.getDebugInfo().awaitingDeltaTransactions.some(tx => tx.type === 'create'), 3_000)).toBe(true);
+    await queue.processBatch();
+    expect(calls).toHaveLength(1);
+
+    queue.onDeltaReceived(1, undefined, 'unrelated-echo');
+    await queue.processBatch();
+    expect(calls).toHaveLength(1);
+    queue.onDeltaReceived(2, undefined, 'create-echo');
+    await created;
+    expect(await eventually(() => calls.length === 2, 3_000)).toBe(true);
+    expect(calls[1]?.ops.map(op => op.type)).toEqual(['DELETE']);
+    await deleted;
   });
 
   it("the delete's envelope never lists sources a sealed update already consumed", async () => {

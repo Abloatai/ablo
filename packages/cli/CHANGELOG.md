@@ -1,5 +1,33 @@
 # @abloatai/cli
 
+## 0.66.16
+
+## 0.66.15
+
+### Quieter project discovery
+
+Project discovery now reports missing management credentials locally instead
+of sending requests with runtime keys. Valid management credentials continue
+to use the server's project permissions.
+
+## 0.66.14
+
+## 0.66.13
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.13
+- @abloatai/humans@0.66.13
+
+## 0.66.12
+
+## 0.66.11
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.11
+- @abloatai/humans@0.66.11
+
 ## 0.66.10
 
 ### Patch Changes

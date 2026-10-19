@@ -28,17 +28,8 @@ import {
   AbloValidationError,
 } from '@abloatai/transaction/errors';
 import { footprintNamesFor } from '@abloatai/transaction/footprint';
-import {
-  ABLO_PUBLICATION,
-  ABLO_REPLICATION_ROLE,
-  ABLO_WRITE_ROLE,
-  probeReadiness,
-  reconcilePublicationPlan,
-  readPublicationState,
-  registerDirectDataSource,
-  type CheckItem,
-  type PublicationState,
-} from './connectSetup';
+import { probeReadiness, registerDirectDataSource, type CheckItem } from './connectSetup';
+import { ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE, reconcilePublicationPlan, readPublicationState, type PublicationState } from '@abloatai/transaction/server/postgresSetup';
 import {
   ledgerBlocker,
   publishedTableBlockers,
@@ -46,13 +37,9 @@ import {
   formatUnresolvedOwnership,
 } from './connectOwnership';
 import { probeDirectWriteReadiness, type ConnectArgs } from './connect';
-import {
-  detectPooler,
-  detectProvider,
-  logicalReplicationGuidance,
-  replicationGrantRole,
-} from './dbProvider';
-import { generateRolePassword, rewriteDatabaseUrl, readProjectAdminDatabaseUrl } from './dbRole';
+import { detectPooler, detectProvider, logicalReplicationGuidance, replicationGrantRole } from '@abloatai/transaction/server/postgresSetup';
+import { readProjectAdminDatabaseUrl } from './dbRole';
+import { generateRolePassword, rewriteDatabaseUrl } from '@abloatai/transaction/server/postgresSetup';
 import { ambientEnvKeyNote, resolveMutationApiKey, resolveManagementKey } from './config';
 import { fetchDataSourceState } from './readiness';
 import { requestRemoteValidation } from './remoteValidation';
@@ -66,13 +53,8 @@ import { DEFAULT_SCHEMA_PATH } from './push';
 import { apiBaseUrl } from './controlPlane';
 import { brand } from './theme';
 import { resolveTarget, describeMismatches } from './target';
-import {
-  connectApplyPlan,
-  passwordClause,
-  printPlan,
-  type ApplyStep,
-  type PasswordMode,
-} from './connectPlan';
+import { printPlan } from './connectPlan';
+import { connectApplyPlan, passwordClause, type ApplyStep, type PasswordMode } from '@abloatai/transaction/server/postgresSetup';
 import {
   adminCanCreateRoles,
   currentWalLevel,

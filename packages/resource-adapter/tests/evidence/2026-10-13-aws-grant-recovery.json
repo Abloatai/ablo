@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-13",
+  "task": "ABL-1044",
+  "environment": {
+    "region": "eu-north-1",
+    "instanceType": "c7g.xlarge",
+    "vcpus": 4,
+    "memoryGiB": 8,
+    "node": "24.21.0",
+    "redis": "7.4.11",
+    "details": [
+      "Linux 7.0.0-1014-aws aarch64 GNU/Linux",
+      "4",
+      "Redis server v=7.4.11 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=dc395baf3ab4da8b",
+      "[\"node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20\"]",
+      "[\"redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\"]"
+    ]
+  },
+  "fixture": "apps/sync-server/scripts/claim-delivery-acceptance.ts",
+  "bundleSha256": "916fd9e20bf409f6399ea71195e85dfe6fd0cdcec39ff7848308b45b883478bc",
+  "results": {
+    "normalHandoffMs": 7.0865909999999985,
+    "missedGrantRecoveryMs": 501.6402129999999,
+    "stats": [
+      {
+        "beats": 0,
+        "dropped": 1
+      },
+      {
+        "beats": 1,
+        "dropped": 0
+      }
+    ],
+    "queuedWaiters": 1000,
+    "admissionMs": 6237.879723,
+    "drainMs": 3543.9059419999994,
+    "passed": true
+  },
+  "before": {
+    "sdkCommit": "b923ece6e",
+    "sameLostPublicationScenario": "failed with grant_timeout"
+  },
+  "checks": {
+    "sdkTestsPassed": 38,
+    "serverTestsPassed": 33,
+    "serverBuild": "passed",
+    "sdkBuild": "passed",
+    "fixtureTypecheck": "passed with DOM libraries and SDK-compatible compiler options"
+  },
+  "limits": [
+    "One AWS host with two separate claim coordinator processes; not a multi-host network test.",
+    "Real Redis Lua authority, real WebSocket transport and SDK; fixture authentication and Redis INCR fencing replace production authentication and Aurora minting.",
+    "1000 identities admitted sequentially, then all queued before releasing the holder; not simultaneous connection admission.",
+    "No Rust/FUSE execution or model agents in this fixture.",
+    "Deliberately drops one grant publication; does not simulate all Redis partitions or authority crashes.",
+    "Recovery starts at the wait deadline and allows two additional seconds before existing confirmed cleanup."
+  ],
+  "cleanup": {
+    "instance": "i-0f6483a0c41351c4d",
+    "state": "terminated",
+    "volume": "vol-00cd2199012ecfa81",
+    "volumeDeleted": true,
+    "securityGroupDeleted": true,
+    "keyPairDeleted": true,
+    "localPrivateKeyDeleted": true
+  }
+}

@@ -95,6 +95,21 @@ function createItemsClient(
 }
 
 describe('schema model write confirmation', () => {
+  it('reports a journal rejection even while an unrelated drain is waiting offline', async () => {
+    const storageError = new Error('journal storage unavailable');
+    const { items, pool } = createItemsClient({
+      syncNow: () => new Promise(() => undefined),
+      update: () => Promise.reject(storageError),
+    });
+    pool.add(new ItemModel({ id: 'storage-failure', title: 'before' }), ModelScope.live);
+    try {
+      await expect(items.update({ id: 'storage-failure', data: { title: 'unsaved' } }))
+        .rejects.toMatchObject({ message: storageError.message });
+    } finally {
+      pool.stopGC();
+    }
+  });
+
   it('applies locally immediately and settles its promise only after confirmation', async () => {
     let releaseSync!: () => void;
     const syncGate = new Promise<void>((resolve) => {

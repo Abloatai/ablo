@@ -1,15 +1,6 @@
-import {
-  connectApplyPlan,
-  passwordClause,
-  effectsOnOthers,
-} from '../connectPlan';
-import { detectProvider, detectPooler, logicalReplicationGuidance } from '../dbProvider';
-import {
-  connectSetupSql,
-  ABLO_PUBLICATION,
-  ABLO_REPLICATION_ROLE,
-  ABLO_WRITE_ROLE,
-} from '../connectSetup';
+import { connectApplyPlan, passwordClause, effectsOnOthers } from '@abloatai/transaction/server/postgresSetup';
+import { detectProvider, detectPooler, logicalReplicationGuidance } from '@abloatai/transaction/server/postgresSetup';
+import { connectSetupSql, ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE } from '@abloatai/transaction/server/postgresSetup';
 
 const CREDS = { replicationClause: 'REPL_PW', writeClause: 'WRITE_PW' } as const;
 

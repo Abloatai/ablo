@@ -1,0 +1,153 @@
+{
+  "date": "2026-10-13",
+  "environment": {
+    "provider": "AWS EC2",
+    "region": "eu-north-1",
+    "instanceType": "c7g.xlarge",
+    "vcpus": 4,
+    "memoryGiB": 8,
+    "os": "Ubuntu 24.04 host; Debian 12 ARM64 container",
+    "rust": "1.99.0"
+  },
+  "claimWaitContract": {
+    "waitMs": [
+      1,
+      30000
+    ],
+    "parkedWaitLimit": 1024,
+    "gatewayHandshakeLimit": 16,
+    "delivery": "Existing WebSocket claim_granted; no claim-state polling",
+    "install": "Granted fence passes through private claim_install; workers cannot call this action",
+    "disconnect": "Ungranted waits cancel with the worker connection; already installed grants may survive a lost reply until release or expiry"
+  },
+  "rust": {
+    "passed": 5,
+    "failed": 0,
+    "output": [
+      "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "   Compiling ablo-resource-coordinator v0.1.0 (/runtime)",
+      "    Finished `release` profile [optimized] target(s) in 6.20s",
+      "     Running unittests src/main.rs (target/release/deps/ablo_resource_coordinator-1067d0d0857b2c47)",
+      "",
+      "running 5 tests",
+      "test backend::tests::a_full_waiting_queue_does_not_consume_reserved_urgent_capacity ... ok",
+      "test tests::peer_identity_cannot_be_overridden_by_a_worker ... ok",
+      "test wire::tests::frames_release_the_shared_budget_and_reject_truncation_and_overflow ... ok",
+      "test listener::tests::recovers_only_stale_sockets_and_keeps_live_owners ... ok",
+      "test backend::tests::a_thousand_parked_claims_leave_authority_lanes_free ... ok",
+      "",
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+      ""
+    ]
+  },
+  "native": {
+    "passed": 28,
+    "failed": 0,
+    "scope": "Real Linux FUSE and processes, simulated upstream claim service",
+    "output": [
+      "\u2714 real kernel boundary denies native writes outside an operation (257.024604ms)",
+      "\u2714 kernel peer credentials reject a forged worker identity (219.374066ms)",
+      "\u2714 writable mmap cannot bypass publication checks (262.806041ms)",
+      "\u2714 a second supervisor cannot replace the live claim gateway (221.822421ms)",
+      "\u2714 worker environment is applied only after supervisor privileges are dropped (250.038682ms)",
+      "\u2714 native writes stay private until one durable publication (597.003796ms)",
+      "\u2714 cached API reads cannot overwrite newer content after reacquisition (249.042851ms)",
+      "\u2714 takeover rejects the previous owner\u2019s staged operation and open descriptor (796.31927ms)",
+      "\u2714 a killed native edit never publishes its partial bytes (244.563391ms)",
+      "\u2714 same-owner concurrent native edits have exactly one publication (505.634727ms)",
+      "\u2714 expired ownership rejects old writes before a replacement becomes active (2331.262495ms)",
+      "\u2714 native rename and deletion require every affected file claim (312.239607ms)",
+      "\u2714 native dependency evidence is not replaced by a newer read (796.318545ms)",
+      "\u2714 ordinary native Git commits publish refs and files under their claims (1303.293335ms)",
+      "\u2714 incoming native Git updates respect peer file claims (949.190582ms)",
+      "\u2714 ref-only native Git updates also respect affected file claims (485.955905ms)",
+      "\u2714 obsolete expected Git commits reject without moving the ref (347.125134ms)",
+      "\u2714 lost write replies reconcile through durable receipts across daemon restart (338.09786ms)",
+      "\u2714 adapter process death aborts staged work instead of replaying it (560.489735ms)",
+      "\u2714 notifications identify stale reads and tell the caller to reread (220.875224ms)",
+      "\u2714 duplex native turns publish only after trusted completion and restore owner-bound history (1336.468214ms)",
+      "\u2714 duplex abort and deadline retain evidence and discard staged writes (1008.497841ms)",
+      "\u2714 native claim-free reads return durable evidence without granting writes (488.42423ms)",
+      "\u2714 native evidence rejects stale context after reacquisition without rebasing (403.011627ms)",
+      "\u2714 native scratch directory cleanup publishes no phantom changes and keeps prior reads usable (343.600784ms)",
+      "\u2714 completion kills detached children retaining writable descriptors (968.871209ms)",
+      "\u2714 Rust parks a claim wait until grant, then installs the fence without rebasing stale reads (264.767477ms)",
+      "\u2714 disconnecting a queued worker cancels its wait without releasing the current holder (229.186947ms)",
+      "\u2139 tests 28",
+      "\u2139 suites 0",
+      "\u2139 pass 28",
+      "\u2139 fail 0",
+      "\u2139 cancelled 0",
+      "\u2139 skipped 0",
+      "\u2139 todo 0",
+      "\u2139 duration_ms 21279.798239"
+    ]
+  },
+  "gateway": {
+    "passed": 2,
+    "failed": 0,
+    "output": [
+      "\u2714 contention returns promptly without queuing; unavailable errors stay distinct (23.044649ms)",
+      "\u2714 realtime claim waits wake on authoritative grant, cancel on disconnect, and keep immediate acquisition free (22.65193ms)",
+      "\u2139 tests 2",
+      "\u2139 suites 0",
+      "\u2139 pass 2",
+      "\u2139 fail 0",
+      "\u2139 cancelled 0",
+      "\u2139 skipped 0",
+      "\u2139 todo 0",
+      "\u2139 duration_ms 200.207421"
+    ]
+  },
+  "coordinator": {
+    "scope": "1000 persistent logical worker identities; real Rust coordinator and SQLite adapter authority; FUSE and native execution stubbed; local Unix sockets",
+    "connectedMs": 1779.8405349999998,
+    "readP50Ms": 1043.005799,
+    "readP95Ms": 1618.8335869999999,
+    "controlMs": 2.7561359999999695,
+    "fanoutMs": 43.14627699999983,
+    "errors": [],
+    "workers": 1000,
+    "disjointWrites": 16,
+    "counts": {
+      "change_cursor": 1,
+      "await_changes": 5,
+      "firstLiveCursor": 1,
+      "read": 1000,
+      "run": 8,
+      "changes": 2000,
+      "receipt": 1,
+      "write": 18,
+      "peakExecution": 8
+    },
+    "coordinatorCrashRecovery": true,
+    "authorityCrashRecovery": true,
+    "recovery": true,
+    "lostReplyNotification": true,
+    "fragmentedAndPipelinedFrames": true,
+    "slowReaderDisconnected": true,
+    "idlePollingRequests": 0
+  },
+  "localChecks": {
+    "pythonTests": 22,
+    "sdkResourceTests": 10,
+    "sdkWebSocketTests": 21,
+    "rustClippy": "passed with warnings denied",
+    "adapterBuildAndTypecheck": "passed",
+    "transactionBuild": "passed"
+  },
+  "cleanup": {
+    "instance": "i-0c60ef25cc1781e13",
+    "state": "terminated",
+    "rootVolumeDeleted": true,
+    "securityGroupDeleted": true,
+    "keyRegistrationDeleted": true
+  },
+  "limits": [
+    "The 1024-wait saturation unit test uses a simulated gateway and authority; it proves lane isolation and bounded admission, not hosted claim capacity.",
+    "The Linux handoff and cancellation tests use a simulated upstream claim service; real fencing, signed evidence, Rust transport, gateway and SQLite installation are exercised.",
+    "The 1000-worker suite uses logical identities and substitutes native execution. It ran alongside Rust test compilation; timings are diagnostic, not controlled performance comparisons.",
+    "Live upstream grants across claim-server replicas, 1000 concurrent sandboxes and multi-host capacity remain unverified.",
+    "No deployment or release."
+  ]
+}

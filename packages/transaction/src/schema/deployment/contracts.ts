@@ -2,6 +2,17 @@ import { z } from 'zod';
 import type { SchemaJSON } from '../serialize.js';
 import type { BackfillValue, RenameHints } from '../diff.js';
 import type { MigrationStep } from '../diff.js';
+import { fieldMetaSchema } from '../../wire/modelShape.js';
+
+const migrationStep: z.ZodType<MigrationStep> = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('create_model'), model: z.string(), tableName: z.string() }),
+  z.object({ kind: z.literal('drop_model'), model: z.string(), tableName: z.string() }),
+  z.object({ kind: z.literal('rename_model'), from: z.string(), to: z.string() }),
+  z.object({ kind: z.literal('add_field'), model: z.string(), field: z.string(), meta: fieldMetaSchema }),
+  z.object({ kind: z.literal('drop_field'), model: z.string(), field: z.string() }),
+  z.object({ kind: z.literal('rename_field'), model: z.string(), from: z.string(), to: z.string() }),
+  z.object({ kind: z.literal('alter_field'), model: z.string(), field: z.string(), changes: z.any() }),
+]);
 
 export const deploymentPhaseSchema = z.enum(['intent', 'expand', 'dual_write', 'backfill', 'verify', 'switch', 'contract', 'recover']);
 export type DeploymentPhase = z.infer<typeof deploymentPhaseSchema>;
@@ -111,8 +122,8 @@ export const schemaDeploymentPlanSchema = z.object({
   // server-built plan; this field is retained only to validate the full plan
   // envelope and obtain its fingerprint.
   operations: z.object({
-    sourceToActive: z.array(z.custom<MigrationStep>()).readonly(),
-    provision: z.array(z.custom<MigrationStep>()).readonly(),
+    sourceToActive: z.array(migrationStep).readonly(),
+    provision: z.array(migrationStep).readonly(),
   }),
   rollbackTarget: z.object({ schemaId: z.string(), version: z.number(), hash: z.string(), strategy: z.literal('reactivate_artifact') }).nullable(),
   recovery: z.enum(['rollback', 'forward_only']),

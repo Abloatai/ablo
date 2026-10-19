@@ -1,0 +1,28 @@
+{
+  "task": "ABL-1097",
+  "date": "2026-10-15",
+  "environment": "One disposable AWS m7g.large, Ubuntu ARM64, real FUSE mount",
+  "implementationMainCommit": "a07d5088a",
+  "native": {
+    "passed": 32,
+    "failed": 0,
+    "durationMs": 24137.786199,
+    "atomicSave": "Real sed -i published only claimed alpha; subsequent unclaimed leftover rejected with alpha unchanged and leftover absent"
+  },
+  "pythonAws": 42,
+  "pythonIntegratedMain": 43,
+  "pythonReviewBranch": 35,
+  "rust": 5,
+  "typecheck": "passed",
+  "logSha256": {
+    "native.log": "f79b781007391f3908001a97aef4fc55a06bd3be1ca5c1740cda379c4aa860a2",
+    "store.log": "09ab091d8a4f3929d4737e08fa1b66e326b45fe496798e30f46fa3216db5beb2",
+    "rust.log": "0b48d58dfdf04c6226c568e4eaaa77f5a73bea28cdef131235eb969ca4d0a04a"
+  },
+  "limits": [
+    "Synthetic claim backend; no model agents or application workload",
+    "AWS used main implementation; existing review branch has an older runtime baseline and was checked locally",
+    "Additional revocation unit test and fixture-only admission adjustment were verified locally after worker packaging",
+    "No package release or deployment"
+  ]
+}

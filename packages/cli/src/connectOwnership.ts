@@ -20,7 +20,7 @@
 import { z } from 'zod';
 import pc from 'picocolors';
 import type postgres from 'postgres';
-import { quoteIdent } from './connectSetup.js';
+import { quoteIdent } from '@abloatai/transaction/server/postgresSetup';
 
 /**
  * A relation's ownership as seen from the connected admin. Parsed at the query

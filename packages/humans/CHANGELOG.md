@@ -1,5 +1,36 @@
 # @abloatai/humans
 
+## 0.66.16
+
+## 0.66.15
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.15
+
+## 0.66.14
+
+## 0.66.13
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.13
+
+## 0.66.12
+
+### Browser edits converge after reconnect
+
+Reconnect reconciliation preserves fields owned by queued updates and applies
+confirming update echoes to resident rows. A drained queue and journal no longer
+leave the live cache with an older text value after offline replay. Unrelated
+remote edits and protection against resurrecting deleted rows are preserved.
+
+## 0.66.11
+
+### Patch Changes
+
+- @abloatai/transaction@0.66.11
+
 ## 0.66.10
 
 ### Patch Changes

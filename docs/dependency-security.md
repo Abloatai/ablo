@@ -50,7 +50,7 @@ and fail with the current js-yaml 4 override.
 
 ## Remaining finding
 
-The October 6 root audit still reports
+The October 19 root audit still reports
 [GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)
 in sprintf-js 1.1.3, reached through Jest reporting/configuration dependencies.
 No patched sprintf-js release was published when checked. The affected path is
@@ -83,3 +83,21 @@ Do not enable the quickstart's live push tier for dependency verification.
 A clean audit describes the checked source tree and advisory data at scan
 time. An unmerged PR does not prove production remediation or closure in an
 external compliance scanner.
+
+## October 19 integration verification
+
+The dependency branch was merged with current public main without changing
+runtime code. The docs conflict keeps Blume pinned at 1.0.4. A fresh audit also
+found newly disclosed Handlebars findings; the lockfile now selects a compatible
+patched release. Root audit has no high or critical findings and retains the
+20 moderate Jest/sprintf-js entries described above. The docs audit is clean.
+
+Transaction, reactive-client, CLI and SDK builds, CLI typechecking, and all
+50 CLI suites (513 tests) pass on Node 24 after building the SDK. Building it
+first is required for the installed-documentation check.
+
+The static docs build is currently blocked by a pre-existing public-mirror
+boundary error: `SiteFooter.astro` imports the unmirrored
+`packages/marketing/src/ablo-footer/index`. The same import exists on main;
+this dependency change does not establish a successful current docs build or
+production docs deployment. Correct the source mirror before releasing docs.

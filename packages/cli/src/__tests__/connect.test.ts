@@ -2,15 +2,8 @@ import { connect, parseConnectArgs, auditTenantSyncInfra } from '../connect';
 import * as config from '../config';
 import * as remote from '../remoteValidation';
 import { installCliExitObservationBoundary, restoreCliExitObservationBoundary } from '../observeCliError';
-import {
-  connectSetupSql as buildConnectSetupSql,
-  reconcilePublicationPlan as buildPublicationPlan,
-  registerDirectDataSource,
-  ABLO_PUBLICATION,
-  ABLO_REPLICATION_ROLE,
-  ABLO_WRITE_ROLE,
-  type PublicationState,
-} from '../connectSetup';
+import { registerDirectDataSource } from '../connectSetup';
+import { connectSetupSql as buildConnectSetupSql, reconcilePublicationPlan as buildPublicationPlan, ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE, type PublicationState } from '@abloatai/transaction/server/postgresSetup';
 import {
   ABLO_REPLICATION_SLOT,
   ABLO_IDEMPOTENCY_TABLE,

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { checkReleaseFamily } from './release-family.mjs';
 
 const root = new URL('../../../../', import.meta.url);
@@ -22,20 +23,41 @@ try {
   mkdirSync(modules);
   // Only third-party dependencies are shared. Every Ablo declaration comes from a tarball.
   for (const name of readdirSync(new URL('node_modules/', root))) {
-    if (name !== '@abloatai' && name !== '.bin') symlinkSync(fileURLToPath(new URL(`node_modules/${name}`, root)), join(modules, name));
+    if (name !== '@abloatai' && name !== '@ablo' && name !== '.bin') symlinkSync(fileURLToPath(new URL(`node_modules/${name}`, root)), join(modules, name));
   }
   mkdirSync(join(modules, '@abloatai'));
-  for (const name of ['transaction', 'humans', 'ablo']) {
-    const output = execFileSync('npm', ['pack', '--json', '--pack-destination', work], {
+  mkdirSync(join(modules, '@ablo'));
+  execFileSync(process.execPath, [fileURLToPath(new URL('../pack-resource-assets.mjs', import.meta.url)), work], { stdio: 'inherit' });
+  const manifest = JSON.parse(readFileSync(join(work, 'manifest.json'), 'utf8'));
+  for (const asset of ['transaction.tgz', 'adapter.tgz']) {
+    assert.equal(manifest[asset], createHash('sha256').update(readFileSync(join(work, asset))).digest('hex'));
+  }
+  for (const name of ['transaction', 'humans', 'ablo', 'resource-adapter']) {
+    const asset = name === 'transaction' ? 'transaction.tgz' : name === 'resource-adapter' ? 'adapter.tgz' : undefined;
+    const output = asset ? JSON.stringify([{ filename: asset }]) : execFileSync('npm', ['pack', '--json', '--pack-destination', work], {
       cwd: new URL(`packages/${name}/`, root), encoding: 'utf8',
       env: { ...process.env, npm_config_cache: join(work, 'cache') },
     });
     const [{ filename }] = JSON.parse(output);
-    const destination = join(modules, '@abloatai', name);
+    const destination = join(modules, name === 'resource-adapter' ? '@ablo' : '@abloatai', name);
     mkdirSync(destination);
     execFileSync('tar', ['-xzf', join(work, filename), '--strip-components=1', '-C', destination]);
   }
   write('package.json', { private: true, type: 'module' });
+  write('resource.mjs', `
+    import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+    import { existsSync } from 'node:fs';
+    import * as adapter from '@ablo/resource-adapter';
+    import { runResourceOperation, getResourceReceipt } from '@abloatai/ablo';
+    for (const name of ['startResourceAdapter', 'startResourceProcess', 'connectResourceWorkspace']) {
+      assert.equal(typeof adapter[name], 'function', name);
+    }
+    assert.equal(typeof runResourceOperation, 'function');
+    assert.equal(adapter.getResourceReceipt, getResourceReceipt);
+    assert(existsSync(new URL('../linux/daemon.py', import.meta.resolve('@ablo/resource-adapter'))));
+  `);
+  execFileSync(process.execPath, [join(work, 'resource.mjs')], { stdio: 'inherit' });
   mkdirSync(join(modules, '@fixture'));
   for (const name of ['schema', 'binding']) {
     mkdirSync(join(modules, '@fixture', name));

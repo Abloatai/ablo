@@ -40,15 +40,15 @@ export default defineConfig({
 
   logo: {
     image: { light: "/logo/light.svg", dark: "/logo/dark.svg", alt: "Ablo" },
+    text: "Ablo",
     href: "https://www.abloatai.com",
   },
 
   theme: {
-    accent: "#1a1a1a",
+    accent: "#782719",
     radius: "sm",
     mode: "light",
-    background: { light: "#fafafa", dark: "#262522" },
-    fonts: { display: "inter", body: "inter" },
+    background: { light: "#f4d783", dark: "#782719" },
   },
 
   markdown: {
@@ -157,6 +157,8 @@ export default defineConfig({
           icon: "blocks",
           items: [
             "/integrations",
+            "/managed-filesystems",
+            "/guarded-acceptance",
             "/integrations/temporal",
             "/integrations/inngest",
             "/integrations/sandbox-runtime",

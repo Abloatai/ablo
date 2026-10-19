@@ -1,12 +1,18 @@
 {
   "name": "@abloatai/transaction",
-  "version": "0.66.10",
+  "version": "0.66.16",
   "description": "The headless Ablo transaction client and canonical contracts for reads, commits, confirmation, claims, and durable observation.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./resource": {
+      "@ablo/source": "./src/resource/index.ts",
+      "types": "./dist/resource/index.d.ts",
+      "import": "./dist/resource/index.js",
+      "default": "./dist/resource/index.js"
+    },
     ".": {
       "@ablo/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
@@ -336,6 +342,12 @@
       "types": "./dist/observability.d.ts",
       "import": "./dist/observability.js",
       "default": "./dist/observability.js"
+    },
+    "./server/postgresSetup": {
+      "@ablo/source": "./src/server/postgresSetup/index.ts",
+      "types": "./dist/server/postgresSetup/index.d.ts",
+      "import": "./dist/server/postgresSetup/index.js",
+      "default": "./dist/server/postgresSetup/index.js"
     }
   },
   "files": [

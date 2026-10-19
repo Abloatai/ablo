@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.66.16
+
+### Managed workspaces recover on replacement hosts
+
+Restoring durable receipts now reserves their operation identities before new
+commands run. A replacement host can continue accepted work without colliding
+with its recovered history. Release archives are checked against this recovery
+case before their checksums are published.
+
+Native commands retain a stable source view while peers publish changes. Perl
+in-place editing and directory moves preserve final ownership checks, and failed
+commands retain their diagnostics in rejected receipts. Claim waits can recover
+a missed grant notification with an authoritative check at their deadline.
+
+The managed adapter now uses a Rust coordinator and persistent worker connections.
+Its public socket protocol has changed: upgrade the adapter and connection helper
+together and build the shipped Rust runtime on Linux before starting it. Existing
+application SDK calls remain compatible. The adapter remains opt-in; installing
+these packages does not enable it or deploy server-side claim changes. See the
+[adapter guide](https://github.com/Abloatai/ablo/blob/v0.66.16/packages/resource-adapter/README.md)
+for setup and runtime limits.
+
+## 0.66.15
+
+### Quieter project discovery
+
+The CLI now reports a missing management credential locally when naming a
+project. Runtime keys no longer generate project-list requests that the server
+must reject. Project management permissions remain unchanged.
+
+## 0.66.14
+
+### Ownership extends to files and Git
+
+Ablo now coordinates files and Git refs through a managed Linux adapter. Native
+commands keep their usual interfaces while edits remain private until ownership
+and the versions read by the worker are validated. Successful publication writes
+files, refs and a durable receipt together; interrupted work can be reconciled
+without blindly repeating a write.
+
+The SDK adds resource claims, versioned reads and receipt recovery. The matching
+adapter is supplied as an installable GitHub release archive. It requires a
+trusted Linux supervisor, FUSE and persistent state, and must be explicitly
+integrated into the runner. Existing applications remain unchanged. The release
+introduces no breaking SDK changes; scoped resource credentials require server
+support for the resource claim namespace. See the
+[filesystem guide](https://github.com/Abloatai/ablo/blob/v0.66.14/packages/ablo/docs/managed-filesystems.md)
+for installation, supported operations and deployment requirements.
+
+## 0.66.13
+
+### Guarded acceptance for collaborative agents
+
+The package now includes a copyable acceptance module that prepares immutable
+proposals, reconciles durable Git receipts, and lists pending work for recovery.
+The accompanying guide explains client-bound read evidence, ownership changes,
+and the boundary between Ablo acknowledgement and external application.
+
+Applications supply their own trusted verification and protected Git broker.
+This release adds example source and documentation; it requires no Ablo server
+deployment and introduces no breaking SDK changes. See the
+[integration example](https://github.com/Abloatai/ablo/tree/v0.66.13/packages/ablo/examples/guarded-acceptance)
+and [acceptance guide](https://github.com/Abloatai/ablo/blob/v0.66.13/packages/ablo/docs/guarded-acceptance.md).
+
+## 0.66.12
+
+### Browser edits converge after reconnect
+
+Browser clients now reconcile their live cache after replaying offline updates.
+Previously, reconnect catch-up could replace a staged text edit with an older
+server value, and the confirming update was then skipped even though the queue
+and IndexedDB journal had drained. The cache now preserves fields still owned
+by queued patches and applies confirming updates while retaining unrelated
+remote edits. Applications receive the fix when they update the SDK.
+
+## 0.66.11
+
+### Offline writes retain their journal
+
+Browser clients configured for IndexedDB now retain sealed writes when their
+socket disconnects. Previously, a connection failure could be mistaken for a
+server refusal and remove the stored request before confirmation, leaving an
+offline edit vulnerable to a process crash. Reconnection replays the same
+request and its original field patch.
+
+Journal storage failures now reject promptly, report through the mutation
+failure callback and roll back the unsaved local value. Later patches remain
+separate from retries whose requests have already been sealed. Write promises
+still wait for authoritative confirmation, and stale-context and claim checks
+continue to reject unsafe writes.
+
 ## 0.66.10
 
 ### Fewer round trips for parallel reads

@@ -24,7 +24,7 @@ import {
   type SchemaReadResponse,
 } from '@abloatai/transaction/wire';
 import { loadSchema, DEFAULT_SCHEMA_PATH, DEFAULT_EXPORT } from './push';
-import { detectPooler } from './dbProvider';
+import { detectPooler } from '@abloatai/transaction/server/postgresSetup';
 import { requestRemoteValidation, type RemoteValidation } from './remoteValidation';
 import { schemaHash } from '@abloatai/transaction/schema';
 

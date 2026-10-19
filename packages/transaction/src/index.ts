@@ -66,3 +66,5 @@ export * from './pricing.js';
 export * from './errorCodes.js';
 export * from './environment.js';
 export * from './branches.js';
+export { RESOURCE_CLAIM_MODEL, createResource, runResourceOperation, getResourceReceipt, getResourceChanges, ResourceError } from './resource/index.js';
+export type { Resource, ResourceClaim, ResourceEvidence, ResourceRead, ResourceReceipt, ResourceTarget, ResourceWorkspace, NativeResourceOperation } from './resource/index.js';

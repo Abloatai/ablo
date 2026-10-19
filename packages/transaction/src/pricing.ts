@@ -46,7 +46,7 @@ export type { MeterEvent, PlanTier, RateBracket };
  * could observe the difference. It is emitted into the generated pricing
  * documentation so a stale copy is identifiable on sight.
  */
-export const PRICING_VERSION = '2026-08-28';
+export const PRICING_VERSION = '2026-10-07';
 
 /**
  * Resolve a stored plan string (`stripe_subscription.plan`) to a tier.
@@ -109,7 +109,7 @@ export const METER_EVENT_COUNTS: Record<MeterEvent, string> = {
   'api.commit_ops':
     'One every time someone changes something. Adding, editing, and removing all count the same, and changing 500 things is 500 operations however they are sent.',
   'api.model_reads':
-    'One every time someone reads something the engine answers. Reads a client already has locally never reach us and never count.',
+    'One every time an authenticated agent reads something the engine answers. Human and system loads, and reads a client already has locally, never count.',
   'api.claim_creates':
     'One every time someone takes ownership of a row so others wait their turn. Holding it and releasing it are free.',
   'api.bootstraps': 'Recorded, never charged. Connecting a client is free.',

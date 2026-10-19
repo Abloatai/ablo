@@ -1,0 +1,167 @@
+{
+  "date": "2026-10-13",
+  "task": "ABL-1044",
+  "fixture": "apps/sync-server/scripts/claim-delivery-acceptance.ts",
+  "environment": {
+    "region": "eu-north-1",
+    "instanceType": "c7g.xlarge",
+    "hostCount": 2,
+    "vcpusPerHost": 4,
+    "memoryGiBPerHost": 8,
+    "serverPlacement": "One coordinator per host; Redis on the peer host; SDK clients on the first host. Private IPv4 between hosts.",
+    "hosts": [
+      {
+        "instance": "i-0c81d9cde01928a98",
+        "details": [
+          "Linux 7.0.0-1014-aws aarch64 GNU/Linux",
+          "4",
+          "Redis server v=7.4.11 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=dc395baf3ab4da8b",
+          "[\"node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20\"]",
+          "[\"redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\"]"
+        ]
+      },
+      {
+        "instance": "i-0bf7fc1b3e6a1df02",
+        "details": [
+          "Linux 7.0.0-1014-aws aarch64 GNU/Linux",
+          "4",
+          "Redis server v=7.4.11 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=dc395baf3ab4da8b",
+          "[\"node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20\"]",
+          "[\"redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\"]"
+        ]
+      }
+    ]
+  },
+  "bundleSha256": "2c45b05822eb861a980511d67537bc7a2a48b6670163d67fca6716a752a76fa3",
+  "faultRun": {
+    "redisPersistence": "appendonly yes; appendfsync always",
+    "redisClient": "Production command options: maxRetriesPerRequest 3, enableOfflineQueue false, retry delay min(attempt*100ms,3000ms), reconnect on READONLY.",
+    "isolationMs": 4000,
+    "initialHolderLeaseMs": 3000,
+    "waitsPerFault": 16,
+    "recoveryMeasurement": "Restoration request through all 16 pushed grants and releases; includes SSH control time.",
+    "faults": {
+      "reset": "iptables OUTPUT TCP destination port 6379 rejected with tcp-reset on both hosts.",
+      "drop": "iptables OUTPUT TCP destination port 6379 silently dropped on both hosts.",
+      "restart": "Redis container stopped then restarted with its AOF data retained."
+    },
+    "results": {
+      "faultResults": [
+        {
+          "fault": "reset",
+          "waits": 16,
+          "recoveryMs": 2123.0356610000017,
+          "probes": 0
+        },
+        {
+          "fault": "drop",
+          "waits": 16,
+          "recoveryMs": 1769.766168999995,
+          "probes": 0
+        },
+        {
+          "fault": "restart",
+          "waits": 16,
+          "recoveryMs": 2352.245839000003,
+          "probes": 0
+        }
+      ],
+      "separateServerHosts": true,
+      "remoteRenewalSurvivedStaleTimer": true,
+      "killedHolderRecoveryMs": 1009.0178860000015,
+      "killedPromoterRecoveryMs": 1009.1222229999985,
+      "recoveryProbeCount": 0,
+      "disconnectedWaiterRemoved": true,
+      "cancellationRaces": 20,
+      "subscriberGapRecoveryMs": 494.1982230000001,
+      "normalHandoffMs": 9.76558799999998,
+      "missedGrantRecoveryMs": 501.9226100000001,
+      "stats": [
+        {
+          "beats": 0,
+          "dropped": 1,
+          "subscriberGaps": 1,
+          "redisErrors": 0
+        },
+        {
+          "beats": 2,
+          "dropped": 0,
+          "subscriberGaps": 1,
+          "redisErrors": 0
+        }
+      ],
+      "queuedWaiters": 1000,
+      "admissionMs": 12035.283016000001,
+      "drainMs": 11618.191310000002,
+      "passed": true
+    }
+  },
+  "controlRun": {
+    "redisPersistence": "AOF disabled (default Redis container configuration).",
+    "results": {
+      "faultResults": [],
+      "separateServerHosts": true,
+      "remoteRenewalSurvivedStaleTimer": true,
+      "killedHolderRecoveryMs": 1068.2130549999983,
+      "killedPromoterRecoveryMs": 1068.3429189999988,
+      "recoveryProbeCount": 0,
+      "disconnectedWaiterRemoved": true,
+      "cancellationRaces": 20,
+      "subscriberGapRecoveryMs": 493.8008090000001,
+      "normalHandoffMs": 7.066228000000024,
+      "missedGrantRecoveryMs": 503.16796999999997,
+      "stats": [
+        {
+          "beats": 0,
+          "dropped": 1,
+          "subscriberGaps": 1,
+          "redisErrors": 0
+        },
+        {
+          "beats": 2,
+          "dropped": 0,
+          "subscriberGaps": 1,
+          "redisErrors": 0
+        }
+      ],
+      "queuedWaiters": 1000,
+      "admissionMs": 6120.500942000001,
+      "drainMs": 3027.6589409999997,
+      "passed": true
+    }
+  },
+  "checks": {
+    "unitAndRouteTestsPassed": 109,
+    "serverBuild": "passed",
+    "focusedLint": "passed",
+    "fixtureTypecheck": "passed"
+  },
+  "regression": {
+    "baseline": "599408b83",
+    "failedExpiry": "New recovery regression fails on baseline: no waiter promoted after authority failure. Passes with retry fix.",
+    "backoff": "250, 500, 1000, 2000, 4000, then 5000 ms; release/dispose stop retries; healthy claims are not polled."
+  },
+  "limits": [
+    "Fixture identities and Redis INCR fence minting; no production authentication, Aurora, full Hub catch-up, Rust/FUSE, or model agents.",
+    "Each outage has 16 independent targets, spread across two server connections. The 1000-identity sequential queue benchmark runs separately before the faults.",
+    "Four-second interruptions only. Redis restart retains AOF data; replica failover, loss of acknowledged state and prolonged partitions are not tested.",
+    "The fixture gap callback records Redis subscriber interruption; production Hub reconnect/catch-up behavior is not exercised.",
+    "The stats field in each result records pre-fault notification tests, not post-outage connection-error totals.",
+    "These are single sequential runs, not latency distributions or a controlled production throughput comparison. Persistence settings differ between fault and control runs."
+  ],
+  "cleanup": {
+    "instances": [
+      "i-0bf7fc1b3e6a1df02",
+      "i-0c81d9cde01928a98"
+    ],
+    "state": "terminated",
+    "volumes": [
+      "vol-0c2752b87a0266d9f",
+      "vol-00e7da2720d63ade9"
+    ],
+    "volumesDeleted": true,
+    "securityGroupDeleted": true,
+    "keyPairDeleted": true,
+    "localPrivateKeyDeleted": true
+  }
+}

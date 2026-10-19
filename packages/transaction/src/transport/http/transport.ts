@@ -18,6 +18,7 @@ import {
   translateHttpError,
 } from '../../errors.js';
 import { z } from 'zod';
+import { RESOURCE_CLAIM_MODEL, resourceClaimId } from '../../resource/claimTarget.js';
 import {
   reconcileFunctionalUpdate,
   type ModelUpdater,
@@ -1161,6 +1162,12 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   // is a thin cast of its route; the reply schemas are the wire's own, so the
   // surface cannot describe a response the server does not send.
   const claims: HttpClaimsResource = {
+    async acquireResource({ workspaceId, resource, ttl, contention }) {
+      const id = await resourceClaimId(workspaceId, resource);
+      const held = await model(RESOURCE_CLAIM_MODEL).claim(id, { ttl, contention: contention ?? { mode: 'wait', timeoutMs: 30000 } });
+      if (!held) throw new AbloClaimedError('Resource is already claimed', { code: 'claim_conflict' });
+      return held;
+    },
     retrieve({ claimId }): Promise<ClaimState> {
       return requestJson(
         `/v1/claims/${encodeURIComponent(claimId)}`,

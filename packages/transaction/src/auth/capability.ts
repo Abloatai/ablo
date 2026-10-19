@@ -28,6 +28,7 @@ import { participantKindSchema } from '../coordination/schema.js';
 import { syncGroupInputSchema } from '../schema/roles.js';
 import { authTokenSchema } from './token.js';
 import { deliveryPartitionRouteSchema } from './deliveryPartition.js';
+import { RESOURCE_CLAIM_MODEL } from '../resource/claimTarget.js';
 
 /**
  * The verbs a grant can name — the whole vocabulary, in one place. Every other
@@ -79,15 +80,16 @@ export type NonEmptyCapabilityOperations = readonly [
  * domain is the schema's models, so `can: { items: ['update'] }` fails to
  * compile against a schema with no `items` model.
  */
+type CapabilityModelNames<S> = (keyof S & string) | typeof RESOURCE_CLAIM_MODEL;
 export type CapabilityCan<S> = {
-  [K in keyof S & string]: Readonly<Record<K, NonEmptyCapabilityOperations>> &
+  [K in CapabilityModelNames<S>]: Readonly<Record<K, NonEmptyCapabilityOperations>> &
     Partial<
       Record<
-        Exclude<keyof S & string, K>,
+        Exclude<CapabilityModelNames<S>, K>,
         NonEmptyCapabilityOperations
       >
     >;
-}[keyof S & string];
+}[CapabilityModelNames<S>];
 
 /**
  * Public authoring type for a reusable grant. It accepts the `Schema` itself,
@@ -108,7 +110,7 @@ export type CapabilityGrant<
 export function capabilityCanSchemaFor<
   const S extends Readonly<Record<string, unknown>>,
 >(models: S) {
-  const modelNames = new Set(Object.keys(models));
+  const modelNames = new Set([...Object.keys(models), RESOURCE_CLAIM_MODEL]);
   return capabilityCanSchema.superRefine((can, ctx) => {
     for (const model of Object.keys(can)) {
       if (!modelNames.has(model)) {
@@ -185,7 +187,7 @@ export function modelWireNames(
 export function capabilityModelAliases(
   models: Readonly<Record<string, CapabilityModelShape>>,
 ): Set<string> {
-  const aliases = new Set<string>();
+  const aliases = new Set<string>([RESOURCE_CLAIM_MODEL]);
   for (const [key, def] of Object.entries(models)) {
     aliases.add(key.toLowerCase());
     if (def.typename) aliases.add(def.typename.toLowerCase());

@@ -8,16 +8,8 @@
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import {
-  persistDatabaseUrl,
-  scopedRoleStatements,
-  rewriteDatabaseUrl,
-  generateRolePassword,
-  readProjectAdminDatabaseUrl,
-  readProjectReplicationUrlWithSource,
-  readProjectWriteDatabaseUrl,
-  DEFAULT_SCOPED_ROLE,
-} from '../dbRole';
+import { persistDatabaseUrl, scopedRoleStatements, readProjectAdminDatabaseUrl, readProjectReplicationUrlWithSource, readProjectWriteDatabaseUrl, DEFAULT_SCOPED_ROLE } from '../dbRole';
+import { rewriteDatabaseUrl, generateRolePassword } from '@abloatai/transaction/server/postgresSetup';
 
 describe('scopedRoleStatements', () => {
   it('emits the documented recipe: scoped role + database/schema grants', () => {

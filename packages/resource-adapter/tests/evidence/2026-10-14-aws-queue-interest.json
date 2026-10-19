@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-14",
+  "task": "ABL-1044",
+  "fixture": "apps/sync-server/src/hub/Hub.claimQueuePatch.realws.test.ts",
+  "environment": {
+    "region": "eu-north-1",
+    "instanceType": "c7g.2xlarge",
+    "vcpus": 8,
+    "memoryGiB": 16,
+    "placement": "One Node 24 process hosted the Hub, 1000 SDK clients and Vitest; Redis 7.4.11 ran on the same host over loopback.",
+    "redisPersistence": "AOF and snapshots disabled",
+    "containerImageDigests": {
+      "node": "sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20",
+      "redis": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499"
+    }
+  },
+  "baseline": {
+    "firstPatchPrototype": "Timed out after 300 seconds with 1000 reactive observers; no successful result.",
+    "fullObserverRunBeforeInterestAndCoalescing": {
+      "queueAdmissionMs": 66284.33,
+      "queueCalls": 1000,
+      "queueCallAggregateMs": 36589.21,
+      "listQueuedCalls": 1000,
+      "listQueuedAggregateMs": 2631.28,
+      "snapshotFrames": 1000,
+      "patchFrames": 999000,
+      "queueWireBytes": 365405000,
+      "endOfRunCombinedRssBytes": 1733283840
+    }
+  },
+  "finalRuns": [
+    {
+      "mode": "1000 reactive full-line observers",
+      "bundleSha256": "623ff6b296070d99901a68b595d9f509198836a32330937a071d2d1ed23e480a",
+      "queueAdmissionMs": 9901.97,
+      "connectionsMs": 1638.52,
+      "queueCalls": 1000,
+      "queueCallAggregateMs": 3491.88,
+      "listQueuedCalls": 122,
+      "listQueuedAggregateMs": 2140.33,
+      "snapshotFrames": 1000,
+      "patchFrames": 99000,
+      "queueWireBytes": 229387000,
+      "endOfRunCombinedRssBytes": 1564897280,
+      "assertions": [
+        "Each observer reconstructed the same exact 1000-entry FIFO line",
+        "Every enqueue received claim_queued",
+        "Initial snapshots and subsequent batched changes converged"
+      ]
+    },
+    {
+      "mode": "1000 queued workers without full-line interest",
+      "bundleSha256": "950df0b95dee34dec898da5af4d4b52c2224d94231ee54a681bf28b8309976d9",
+      "queueAdmissionMs": 881.9,
+      "connectionsMs": 1695.14,
+      "queueCalls": 1000,
+      "queueCallAggregateMs": 155.73,
+      "listQueuedCallsDuringAdmission": 0,
+      "snapshotFrames": 0,
+      "patchFrames": 0,
+      "queueWireBytes": 0,
+      "endOfRunCombinedRssBytes": 508203008,
+      "assertions": [
+        "Every enqueue received claim_queued",
+        "One post-measurement authority read verified the exact 1000-entry FIFO line",
+        "No full queue read or queue frame was used during admission"
+      ]
+    }
+  ],
+  "implementation": "The server broadcasts a small queue invalidation across Hub instances and reads the full line only on a Hub with interested viewers. Refreshes coalesce, duplicate lines are suppressed, and append/remove batches use versioned patches. The SDK stores patches incrementally and materializes a public array only when queueFor is read. The measured Redis path uses an expiry index and a strictly increasing score for same-millisecond FIFO admissions. The final code gates the indexed path behind CLAIM_QUEUE_INCREMENTAL_READY=1 so the first mixed-version deployment repairs old writers' entries before enabling fast admission.",
+  "limits": [
+    "One synthetic run per final mode; these are not latency percentiles.",
+    "Sequential admissions, one Hub process, loopback WebSockets and Redis, synthetic authentication and fence minting; no production database or cross-host network latency.",
+    "End-of-run RSS combines the Hub, all SDK clients and the test runner; it is not peak server-only memory.",
+    "A full line requested by every observer still requires substantial fanout: 229 MB of queue frames and 1.56 GB combined RSS in this fixture. A full 1000-entry array is materialized when each observer reads queueFor.",
+    "The benchmark does not execute Rust/FUSE or live model agents. The Rust authority and production deployment were not changed."
+  ],
+  "cleanup": {
+    "instanceIds": [
+      "i-055301ed35723aa75"
+    ],
+    "instancesTerminated": true,
+    "volumeIds": [
+      "vol-0355480ffd0aca889"
+    ],
+    "volumesDeleted": true,
+    "securityGroupDeleted": true,
+    "keyPairDeleted": true,
+    "localPrivateKeyDeleted": true
+  }
+}

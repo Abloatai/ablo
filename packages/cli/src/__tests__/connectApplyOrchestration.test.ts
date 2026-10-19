@@ -9,6 +9,7 @@ import * as target from '../target';
 import * as preflight from '../connectPreflight';
 import * as ownership from '../connectOwnership';
 import * as setup from '../connectSetup';
+import * as postgresSetup from '@abloatai/transaction/server/postgresSetup';
 import * as connect from '../connect/index';
 import postgres from 'postgres';
 
@@ -47,7 +48,7 @@ beforeEach(() => {
   jest.spyOn(ownership, 'publishedTableBlockers').mockResolvedValue([]);
   jest.spyOn(preflight, 'currentWalLevel').mockResolvedValue('logical');
   jest.spyOn(preflight, 'presentRoles').mockImplementation(async (_sql, roles) => [...roles]);
-  jest.spyOn(setup, 'readPublicationState').mockResolvedValue({ exists: true, allTables: false, tables: ['items'] });
+  jest.spyOn(postgresSetup, 'readPublicationState').mockResolvedValue({ exists: true, allTables: false, tables: ['items'] });
   jest.spyOn(setup, 'registerDirectDataSource').mockResolvedValue(true);
   jest.spyOn(connect, 'requestInitialSnapshot').mockResolvedValue({ object: 'datasource_resnapshot', initial_snapshot: { status: 'loading' } });
 });

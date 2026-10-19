@@ -1,0 +1,97 @@
+{
+  "date": "2026-10-13",
+  "task": "ABL-1044",
+  "fixture": "apps/sync-server/scripts/claim-delivery-acceptance.ts",
+  "environment": {
+    "region": "eu-north-1",
+    "instanceType": "c7g.xlarge",
+    "hostCount": 2,
+    "vcpusPerHost": 4,
+    "memoryGiBPerHost": 8,
+    "serverPlacement": "One coordinator per host; Redis on the peer host; SDK clients on the first host. Private IPv4 between hosts.",
+    "hosts": [
+      {
+        "instance": "i-0fc47a3f5a65053dd",
+        "details": [
+          "Linux 7.0.0-1014-aws aarch64 GNU/Linux",
+          "4",
+          "Redis server v=7.4.11 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=dc395baf3ab4da8b",
+          "[\"node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20\"]",
+          "[\"redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\"]"
+        ]
+      },
+      {
+        "instance": "i-0f4ccfc879eb4a266",
+        "details": [
+          "Linux 7.0.0-1014-aws aarch64 GNU/Linux",
+          "4",
+          "Redis server v=7.4.11 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=dc395baf3ab4da8b",
+          "[\"node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20\"]",
+          "[\"redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\"]"
+        ]
+      }
+    ]
+  },
+  "bundleSha256": "e6a7d0ba33ca0a7dc12883d177fd843004fd5dbf341ee6ada5f0aa4aab89c475",
+  "results": {
+    "separateServerHosts": true,
+    "remoteRenewalSurvivedStaleTimer": true,
+    "killedHolderRecoveryMs": 1030.0776370000003,
+    "killedPromoterRecoveryMs": 1030.171934,
+    "recoveryProbeCount": 0,
+    "disconnectedWaiterRemoved": true,
+    "cancellationRaces": 20,
+    "subscriberGapRecoveryMs": 494.2067129999998,
+    "normalHandoffMs": 6.637115000000108,
+    "missedGrantRecoveryMs": 502.0460139999999,
+    "stats": [
+      {
+        "beats": 0,
+        "dropped": 1,
+        "subscriberGaps": 1
+      },
+      {
+        "beats": 2,
+        "dropped": 0,
+        "subscriberGaps": 1
+      }
+    ],
+    "queuedWaiters": 1000,
+    "admissionMs": 5738.10359,
+    "drainMs": 2911.3152069999996,
+    "passed": true
+  },
+  "checks": {
+    "unitAndRouteTestsPassed": 105,
+    "sdkSessionTestsPassed": 28,
+    "serverBuild": "passed",
+    "focusedLint": "passed",
+    "fixtureTypecheck": "passed"
+  },
+  "regression": {
+    "sdkReconnect": "The existing reconnect test fails with an unhandled error after adding a real onerror event; passes after guarding optional error listeners."
+  },
+  "limits": [
+    "Fixture identities and Redis INCR fence minting; no production authentication, Aurora, full Hub catch-up, Rust/FUSE, or running model agents.",
+    "1000 queued identities admitted sequentially, not a simultaneous connection burst.",
+    "One second fixture lease for killed-holder recovery; production crash recovery waits for the actual lease deadline.",
+    "Cancellation before/after acquisition and during authorization is covered by deterministic in-process tests; AWS cancellation races start after queue admission.",
+    "Subscriber disconnection uses CLIENT KILL TYPE pubsub, not a full network partition or Redis failover.",
+    "A single server SIGKILL covers initial-holder loss and expiry after promotion. Repeated server failures, Redis failover, and prolonged authority outages remain unverified."
+  ],
+  "cleanup": {
+    "instances": [
+      "i-0f4ccfc879eb4a266",
+      "i-0fc47a3f5a65053dd"
+    ],
+    "state": "terminated",
+    "volumes": [
+      "vol-0fefa25a2787a5aaf",
+      "vol-0f7742b5c86bc2d69"
+    ],
+    "volumesDeleted": true,
+    "securityGroupDeleted": true,
+    "keyPairDeleted": true,
+    "localPrivateKeyDeleted": true
+  }
+}

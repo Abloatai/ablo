@@ -1,0 +1,217 @@
+{
+  "date": "2026-10-15",
+  "task": "ABL-1091",
+  "runtimeBase": "823920b75ee6744be22e335a7f53fd35089d0646",
+  "lobbyBase": "9036b60",
+  "model": "claude-sonnet-5-5",
+  "cli": "2.1.299",
+  "hosts": {
+    "count": 2,
+    "type": "m7g.large",
+    "architecture": "arm64",
+    "os": "Ubuntu 24.04",
+    "node": "24.18.0",
+    "nofile": 8192
+  },
+  "scope": {
+    "real": [
+      "Rust coordinator",
+      "Python authority",
+      "Linux FUSE",
+      "native shell commands",
+      "ten concurrent Claude CLI sessions per arm",
+      "two rounds including resumed sessions",
+      "copied Circle source"
+    ],
+    "synthetic": [
+      "claim service identities and fences"
+    ],
+    "excluded": [
+      "authenticated application/browser flows",
+      "S3 source publication",
+      "cross-VM source propagation",
+      "production deployment",
+      "released-runtime reproduction"
+    ]
+  },
+  "runtimeChecks": {
+    "twoHostReplicates": {
+      "native": 29,
+      "python": 27,
+      "rust": 5
+    },
+    "finalNativeWithTemporaryScriptRegression": 30,
+    "initialBootstrapFailure": "Rust waiter test hit TooManyOpenFiles before the documented nofile setting was applied"
+  },
+  "source": {
+    "files": 589,
+    "changedFiles": 6,
+    "otherFilesUnchanged": true,
+    "modesUnchanged": true
+  },
+  "arms": [
+    {
+      "arm": "broad-directory / original guidance",
+      "rounds": [
+        {
+          "round": 1,
+          "elapsedMs": 106315.961639,
+          "stale": 29,
+          "conflicts": 4,
+          "errors": []
+        },
+        {
+          "round": 2,
+          "elapsedMs": 88574.79391300002,
+          "stale": 39,
+          "conflicts": 2,
+          "errors": []
+        }
+      ],
+      "modelRequests": 256,
+      "providerFailures": 0,
+      "toolOutcomes": {
+        "read_files": 101,
+        "command_failed": 15,
+        "project_activity": 20,
+        "applied": 44,
+        "stale_context": 68,
+        "claim_conflict": 6
+      }
+    },
+    {
+      "arm": "membership-only / original guidance",
+      "rounds": [
+        {
+          "round": 1,
+          "elapsedMs": 86650.687761,
+          "stale": 35,
+          "conflicts": 9,
+          "errors": []
+        },
+        {
+          "round": 2,
+          "elapsedMs": 60702.14377899999,
+          "stale": 33,
+          "conflicts": 2,
+          "errors": [
+            {
+              "actor": 5,
+              "error": "Expected attributes missing"
+            }
+          ]
+        }
+      ],
+      "modelRequests": 262,
+      "providerFailures": 0,
+      "toolOutcomes": {
+        "read_files": 105,
+        "command_failed": 18,
+        "stale_context": 68,
+        "claim_conflict": 11,
+        "project_activity": 14,
+        "applied": 42,
+        "Error: Invalid command": 1
+      }
+    },
+    {
+      "arm": "membership-only / complete-command retry guidance",
+      "rounds": [
+        {
+          "round": 1,
+          "elapsedMs": 86718.16726,
+          "stale": 29,
+          "conflicts": 5,
+          "errors": []
+        },
+        {
+          "round": 2,
+          "elapsedMs": 69945.051884,
+          "stale": 40,
+          "conflicts": 4,
+          "errors": []
+        }
+      ],
+      "modelRequests": 268,
+      "providerFailures": 0,
+      "toolOutcomes": {
+        "read_files": 104,
+        "command_failed": 16,
+        "project_activity": 18,
+        "applied": 42,
+        "stale_context": 69,
+        "claim_conflict": 9
+      }
+    },
+    {
+      "arm": "membership-only / final TMPDIR guidance",
+      "rounds": [
+        {
+          "round": 1,
+          "elapsedMs": 106264.921111,
+          "stale": 29,
+          "conflicts": 7,
+          "errors": []
+        },
+        {
+          "round": 2,
+          "elapsedMs": 78308.948699,
+          "stale": 42,
+          "conflicts": 4,
+          "errors": []
+        }
+      ],
+      "modelRequests": 298,
+      "providerFailures": 0,
+      "toolOutcomes": {
+        "read_files": 115,
+        "stale_context": 71,
+        "command_failed": 24,
+        "applied": 52,
+        "claim_conflict": 11,
+        "project_activity": 17
+      }
+    }
+  ],
+  "traceReview": {
+    "failed": {
+      "traceId": "0aaaca6e-f733-47fe-9693-5119f0310f45",
+      "events": [
+        108,
+        109,
+        127,
+        128,
+        139,
+        140,
+        151,
+        152,
+        159
+      ],
+      "finding": "Previous-round script was accepted at 109; its replacement was stale at 128. Bare script retries at 139 and 151 reused the old script; 152 returned ok and the CLI completed, but the final requested attributes were missing."
+    },
+    "finalRecovery": {
+      "traceId": "57c5df53-2c9b-45a4-b064-55118b1a4236",
+      "events": [
+        31,
+        32,
+        37,
+        38,
+        43,
+        44,
+        102,
+        103,
+        108,
+        109,
+        116
+      ],
+      "finding": "The model reread stale source and resubmitted a complete inline edit, preserving peer fields; event 109 applied and independent end-of-round source checks passed."
+    }
+  },
+  "interpretation": "Correctness and recovery evidence, not a causal latency improvement. Initial arms each had 68 stale rejections; final guidance passed both rounds but still had shared-file contention. The failed arm remains a failure.",
+  "artifacts": {
+    "abl1091-runtime-01/fixture.tar.gz": "9405290e16a8488e45eedfbff7fc4780346270f604773f6986f0fdbd14da9b13",
+    "abl1091-runtime-01/worker.cjs": "370d3bb5dcd0d2922a0cf303c525ced71ebecb674992fe67dd0beb995632b488",
+    "abl1091-models-01/worker.cjs": "7af996b25d84aa11e21c1a1f6957a5c3c788e60c59c9c65e1d45c13a0908ced6",
+    "abl1091-models-01/agents-v3.mjs": "5f085b91608d7addffa8847c169ff8d5daaa1adadc7a3c05a0fa6e8165d7d75d"
+  }
+}

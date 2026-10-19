@@ -1,4 +1,5 @@
 import { createWebSocketSession } from '../websocket/session.js';
+import { WsTransport } from '../websocket/transport.js';
 import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, z } from '../../schema/index.js';
 import { PROTOCOL_VERSION } from '../../wire/protocolVersion.js';
@@ -138,6 +139,32 @@ describe('agent WebSocket transport', () => {
       value: originalWebSocket,
     });
     jest.useRealTimers();
+  });
+
+  it('reconstructs the queue from versioned append/remove frames and resets on a full snapshot', () => {
+    const transport = new WsTransport({ baseUrl: 'http://localhost', kind: 'agent', getAuthToken: () => 'rk_test' });
+    const lines: string[][] = [];
+    transport.subscribe('claim_queue', payload => { lines.push(payload.queue.map(entry => entry.id)); });
+    transport.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) throw new Error('Missing test socket');
+    expect(new URL(socket.url).searchParams.get('claimQueuePatches')).toBe('true');
+    socket.open();
+    const target = { type: 'SyncRecord', id: 'one' };
+    const entry = (id: string, position: number) => ({ object: 'claim', id, status: 'queued',
+      target, description: 'editing', position, expiresAt: 99_999 });
+    socket.receive({ type: 'claim_queue', payload: { target, queue: [entry('a', 0)], revision: 1 } });
+    socket.receive({ type: 'claim_queue_patch', payload: { target, baseRevision: 1, revision: 2,
+      change: { kind: 'append', entry: entry('b', 1) } } });
+    socket.receive({ type: 'claim_queue_patch', payload: { target, baseRevision: 2, revision: 3,
+      change: { kind: 'append_many', entries: [entry('c', 2), entry('d', 3)] } } });
+    socket.receive({ type: 'claim_queue_patch', payload: { target, baseRevision: 3, revision: 4,
+      change: { kind: 'remove', id: 'a' } } });
+    socket.receive({ type: 'claim_queue_patch', payload: { target, baseRevision: 4, revision: 5,
+      change: { kind: 'remove_many', ids: ['b', 'c'] } } });
+    socket.receive({ type: 'claim_queue', payload: { target, queue: [entry('e', 0)], revision: 6 } });
+    expect(lines).toEqual([['a'], ['a', 'b'], ['a', 'b', 'c', 'd'], ['b', 'c', 'd'], ['d'], ['e']]);
+    transport.disconnect();
   });
 
   it('defaults a session client to one WebSocket for commits and claims', async () => {
@@ -456,6 +483,173 @@ describe('agent WebSocket transport', () => {
       },
     });
     await expect(claimed).resolves.toMatchObject({ claimId: 'claim-indefinite' });
+    await session.close();
+  });
+
+  it.each([undefined, 100])('rejects a lost queued claim immediately with timeout %s', async timeoutMs => {
+    const opening = createWebSocketSession({ access: access('rk_agent_1') });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    const session = await opening;
+    jest.useFakeTimers();
+    const claimed = session.claim({
+      claimId: 'lost-waiter', entityType: 'items', entityId: 'one', queue: true,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+    let failure: unknown;
+    void claimed.catch(error => { failure = error; });
+    await flush();
+    const lost = (claimId: string): void => socket.receive({ type: 'claim_lost', payload: {
+      claimId, reason: 'expired', target: { entityType: 'items', entityId: 'one' },
+    } });
+    lost('unrelated');
+    await flush();
+    expect(failure).toBeUndefined();
+    lost('lost-waiter');
+    await flush();
+    expect(failure).toMatchObject({ code: 'claim_lost' });
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(socket.sent.filter(frame => frame.type === 'claim_heartbeat' || frame.type === 'claim_abandon')).toHaveLength(0);
+    await session.close();
+  });
+
+  it('resubmits a queued claim after a retained-claims reconnect and waits for a fresh grant', async () => {
+    const opening = createWebSocketSession({ access: access('rk_agent_1'), reconnectDelay: 1, maxReconnectDelay: 1 });
+    await flush();
+    const first = FakeWebSocket.instances[0]!;
+    expect(new URL(first.url).searchParams.get('claimQueueSnapshots')).toBe('false');
+    first.open();
+    const session = await opening;
+    jest.useFakeTimers();
+    try {
+      const input = { claimId: 'resume', entityType: 'items', entityId: 'one', queue: true, timeoutMs: 1_000 };
+      const claimed = session.claim(input);
+      let result: unknown;
+      void claimed.then(value => { result = value; }, error => { result = error; });
+      await flush();
+      first.receive({ type: 'claim_queued', payload: { claimId: 'resume', position: 0, target: { entityType: 'items', entityId: 'one' } } });
+      first.serverClose(1001, 'Fan-out recovered; queued claims retained');
+      await jest.advanceTimersByTimeAsync(10);
+      expect(result).toBeUndefined();
+      const unavailable = FakeWebSocket.instances[1]!;
+      unavailable.open();
+      unavailable.serverClose(1013, 'instance_unavailable');
+      await jest.advanceTimersByTimeAsync(10);
+      expect(result).toBeUndefined();
+      const second = FakeWebSocket.instances[2]!;
+      expect(new URL(second.url).searchParams.get('claimQueueSnapshots')).toBe('false');
+      second.open();
+      await flush();
+      expect(second.sent.filter(frame => frame.type === 'claim_begin')).toEqual([{ type: 'claim_begin', payload: { claimId: 'resume', entityType: 'items', entityId: 'one', queue: true, resume: true } }]);
+      expect(result).toBeUndefined();
+      second.receive({ type: 'claim_acquired', payload: { claimId: 'resume', fenceToken: 73, target: { entityType: 'items', entityId: 'one' } } });
+      await expect(claimed).resolves.toMatchObject({ claimId: 'resume', fenceToken: 73 });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it.each(['deadline', 'offline-deadline', 'abort', 'lost', 'rejected', 'ordinary'])('keeps claim recovery bounded by %s', async mode => {
+    const opening = createWebSocketSession({ access: access('rk_agent_1'), reconnectDelay: 1, maxReconnectDelay: 1 });
+    await flush();
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    const session = await opening;
+    jest.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const claimed = session.claim({ claimId: 'resume', entityType: 'items', entityId: 'one', queue: true, timeoutMs: 100, signal: controller.signal });
+      const failure = claimed.catch((error: unknown) => error);
+      await flush();
+      first.receive({ type: 'claim_queued', payload: { claimId: 'resume', position: 0, target: { entityType: 'items', entityId: 'one' } } });
+      first.serverClose(mode === 'ordinary' ? 1006 : 1001, mode === 'ordinary' ? 'network lost' : 'Fan-out recovered; queued claims retained');
+      if (mode === 'ordinary') {
+        expect(await failure).toMatchObject({ name: 'AbloConnectionError' });
+        return;
+      }
+      await jest.advanceTimersByTimeAsync(mode === 'offline-deadline' ? 110 : 10);
+      if (mode === 'abort') controller.abort();
+      const second = FakeWebSocket.instances[1]!;
+      second.open();
+      await flush();
+      if (mode === 'deadline') {
+        await jest.advanceTimersByTimeAsync(90);
+        expect(second.sent.filter(frame => frame.type === 'claim_heartbeat')).toHaveLength(1);
+        second.receive({ type: 'claim_heartbeat_ack', payload: { claimId: 'resume', status: 'queued', position: 0 } });
+      } else if (mode === 'offline-deadline') {
+        expect(second.sent.filter(frame => frame.type === 'claim_begin')).toHaveLength(1);
+        expect(second.sent.filter(frame => frame.type === 'claim_heartbeat')).toHaveLength(0);
+        second.receive({ type: 'claim_queued', payload: { claimId: 'resume', position: 0, target: { entityType: 'items', entityId: 'one' } } });
+        await jest.advanceTimersByTimeAsync(1_990);
+      } else if (mode === 'lost') {
+        second.receive({ type: 'claim_lost', payload: { claimId: 'resume', reason: 'expired', target: { entityType: 'items', entityId: 'one' } } });
+      } else if (mode === 'rejected') {
+        second.receive({ type: 'claim_rejected', payload: { claimId: 'resume', reason: 'capability_denied', target: { entityType: 'items', entityId: 'one' } } });
+      }
+      if (mode === 'abort' || mode === 'deadline' || mode === 'offline-deadline') {
+        await flush();
+        const abandon = second.sent.find(frame => frame.type === 'claim_abandon');
+        expect(abandon).toBeDefined();
+        second.receive({ type: 'claim_abandon_ack', payload: abandon!.payload });
+      }
+      expect(await failure).toMatchObject({ code: mode === 'abort' ? 'claim_wait_aborted' : mode.endsWith('deadline') ? 'grant_timeout' : mode === 'lost' ? 'claim_lost' : 'capability_scope_denied' });
+      if (mode === 'abort') expect(second.sent.filter(frame => frame.type === 'claim_begin')).toHaveLength(0);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('recovers a missed grant with one deadline heartbeat and the authoritative fence', async () => {
+    const opening = createWebSocketSession({ access: access('rk_agent_1') });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    const session = await opening;
+    jest.useFakeTimers();
+    const claimed = session.claim({ claimId: 'recover', entityType: 'items', entityId: 'one', queue: true, timeoutMs: 100 });
+    await jest.advanceTimersByTimeAsync(99);
+    expect(socket.sent.filter(frame => frame.type === 'claim_heartbeat')).toHaveLength(0);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(socket.sent.filter(frame => frame.type === 'claim_heartbeat')).toHaveLength(1);
+    socket.receive({ type: 'claim_heartbeat_ack', payload: {
+      claimId: 'recover', status: 'held', expiresAt: Date.now() + 60_000, fenceToken: 42,
+    } });
+    await expect(claimed).resolves.toMatchObject({ claimId: 'recover', fenceToken: 42 });
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(socket.sent.filter(frame => frame.type === 'claim_heartbeat')).toHaveLength(1);
+    expect(socket.sent.filter(frame => frame.type === 'claim_abandon')).toHaveLength(0);
+    await session.close();
+  });
+
+  it.each(['queued', 'lost', 'unfenced', 'expired', 'silent', 'aborted'])('does not recover an unsafe deadline result: %s', async mode => {
+    const opening = createWebSocketSession({ access: access('rk_agent_1') });
+    await flush();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    const session = await opening;
+    jest.useFakeTimers();
+    const controller = new AbortController();
+    const claimed = session.claim({ claimId: 'recover', entityType: 'items', entityId: 'one', queue: true, timeoutMs: 100, signal: controller.signal });
+    const rejection = expect(claimed).rejects.toMatchObject({ code:
+      mode === 'aborted' ? 'claim_wait_aborted' : mode === 'lost' ? 'claim_lost' : 'grant_timeout',
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    if (mode === 'silent') await jest.advanceTimersByTimeAsync(2_000);
+    else {
+      if (mode === 'aborted') controller.abort();
+      socket.receive({ type: 'claim_heartbeat_ack', payload: {
+        claimId: 'recover', status: mode === 'queued' || mode === 'lost' ? mode : 'held',
+        expiresAt: Date.now() + (mode === 'expired' ? -1 : 60_000),
+        ...(mode === 'unfenced' ? {} : { fenceToken: 42 }),
+      } });
+    }
+    await flush();
+    const abandon = socket.sent.find(frame => frame.type === 'claim_abandon');
+    expect(abandon).toBeDefined();
+    socket.receive({ type: 'claim_abandon_ack', payload: abandon!.payload });
+    await rejection;
+    expect(socket.sent.filter(frame => frame.type === 'claim_heartbeat')).toHaveLength(1);
     await session.close();
   });
 
@@ -816,6 +1010,7 @@ describe('agent WebSocket transport', () => {
 
     first.serverClose(1006, 'network_lost');
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(() => FakeWebSocket.instances[1]!.onerror?.()).not.toThrow();
     FakeWebSocket.instances[1]!.serverClose(1006, 'replacement_handshake_failed');
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(3));
 
