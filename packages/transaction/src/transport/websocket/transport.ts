@@ -970,8 +970,9 @@ export class WsTransport<
       // 1008 = Policy Violation (often auth)
       // 4001 = Unauthorized (custom)
       // 4003 = Forbidden (custom)
+      // A rejected replay acknowledgement is a protocol failure, not login revocation.
       const isSessionClose =
-        event.code === 1008 ||
+        (event.code === 1008 && event.reason !== 'invalid_ack') ||
         event.code === 4001 ||
         event.code === 4003 ||
         AbloSessionError.isSessionError(event.reason || '');

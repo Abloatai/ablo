@@ -171,6 +171,19 @@ describe('4001 credential_expired close', () => {
     expect(ws.getConnectionDiagnostics().sessionErrorDetected).toBe(true);
   });
 
+  it('keeps invalid_ack recoverable without reporting an expired login', () => {
+    const { ws, socket } = openSyncWebSocket();
+    active = ws;
+    const sessionErrors: Error[] = [];
+    ws.subscribe('session_error', error => sessionErrors.push(error));
+    socket.readyState = FakeWebSocket.CLOSED;
+    fireClose(socket, {code: 1008, reason: 'invalid_ack', wasClean: true});
+    expect(sessionErrors).toEqual([]);
+    expect(ws.getConnectionDiagnostics().sessionErrorDetected).toBe(false);
+    ws.connect();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
   it('clearSessionError() un-latches so a post-re-mint reconnect works', () => {
     const { ws, socket } = openSyncWebSocket();
     active = ws;
