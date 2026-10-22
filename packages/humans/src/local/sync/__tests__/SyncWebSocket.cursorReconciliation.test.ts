@@ -129,6 +129,17 @@ describe('SyncWebSocket cursor reconciliation on an empty sync_response', () => 
     return { ws, fake };
   }
 
+  it('resumes a persisted cursor without acknowledging undelivered data on the new socket', () => {
+    const { ws, fake } = connectFake(40);
+    const frames = fake.sent.map(raw => JSON.parse(raw) as {type: string; payload: {lastSyncId?: number}});
+    expect(frames.filter(frame => frame.type === 'ack')).toEqual([]);
+    expect(frames.find(frame => frame.type === 'sync_request')?.payload.lastSyncId).toBe(40);
+    // Acknowledgements remain available after the store has durably applied delivery.
+    ws.acknowledge(45);
+    expect(JSON.parse(fake.sent.at(-1)!)).toEqual({type: 'ack', payload: {lastSyncId: 45}});
+    ws.disconnect();
+  });
+
   it('adopts a head ABOVE the local cursor when the server sends nothing', async () => {
     const { ws, fake } = connectFake(10);
     deliver(fake, 'sync_response', { deltas: [], currentSyncId: 40 });

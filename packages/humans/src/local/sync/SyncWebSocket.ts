@@ -148,14 +148,7 @@ export class SyncWebSocket<
         }
       );
     };
-    try {
-      if (this.cursor.lastSyncId && this.cursor.lastSyncId > 0) {
-        // Let server know where we left off before requesting deltas
-        this.sendAck(this.cursor.lastSyncId);
-      }
-    } catch (e) {
-      reportSyncRequestFailure(e);
-    }
+    // A persisted cursor requests replay; it cannot acknowledge delivery on a new socket.
     this.requestIncrementalSync().catch(reportSyncRequestFailure);
 
     // Start periodic catchup — polls for missed deltas every

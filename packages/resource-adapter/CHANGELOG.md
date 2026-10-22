@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+This release uses the matching 0.66.17 browser and transaction packages.
+
 ## 0.1.3
 
 ### Replacement hosts keep operation identities unique
