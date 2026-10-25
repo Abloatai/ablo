@@ -1,0 +1,16 @@
+---
+title: "v0.66.17"
+type: changelog
+date: 2026-10-22T13:25:44.843Z
+changelog:
+  version: "0.66.17"
+  category: "Fixes"
+---
+
+### Browser reloads preserve the active session
+
+Browser clients now request replay from their saved position before acknowledging
+new socket delivery. Reloading a workspace with persisted data no longer triggers
+a premature acknowledgement that the native backend rejects. A rejected
+acknowledgement is handled as a connection failure rather than login expiry;
+authentication, revocation and server acknowledgement validation remain unchanged.

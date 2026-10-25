@@ -44,6 +44,8 @@ export const fieldMetaSchema = z.object({
   isOptional: z.boolean(),
   /** Whether the field was marked indexed via `.indexed()`. */
   isIndexed: z.boolean(),
+  /** Explicit opt-in to versioned plain-text operations. Ordinary strings replace values. */
+  merge: z.enum(['text', 'counter']).optional(),
   /**
    * Physical database column name override. When absent, SQL layers derive the
    * column from the field name using the active casing convention.
@@ -56,6 +58,8 @@ export const fieldMetaSchema = z.object({
    * protocol has no opinion about what a caller's statuses are called.
    */
   enumValues: z.array(z.string()).readonly().optional(),
+}).refine((meta) => meta.merge === undefined || (!meta.isOptional && (meta.merge === 'text' ? meta.type === 'string' : meta.type === 'number')), {
+  message: 'Operation merge requires a required, non-null field of the matching type', path: ['merge'],
 });
 export type FieldMeta = z.infer<typeof fieldMetaSchema>;
 

@@ -184,7 +184,7 @@ describe('OnDemandLoader — network rows meet the pool by log position', () => 
     expect((await store.get('r1'))?.title).toBe('newer');
   });
 
-  it('keeps an optimistic delete absent across local reads and stale network answers', async () => {
+  it.each(['before', 'during'] as const)('keeps a read started %s deletion from restoring the row', async (timing) => {
     const store = new InMemoryObjectStore('Item', 'Item');
     await store.put({ id: 'gone', title: 'durable row' });
     await store.put({ id: 'other', title: 'unrelated row' });
@@ -194,21 +194,24 @@ describe('OnDemandLoader — network rows meet the pool by log position', () => 
 
     let answer!: (value: Awaited<ReturnType<typeof queryClient.postQuery>>) => void;
     postQueryMock.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
-    const staleRead = loader.fetch('items', { type: 'complete' });
+    const staleRead = timing === 'before' ? loader.fetch('items', { type: 'complete' }) : undefined;
     await Promise.resolve();
 
     pending.add(deleted.id);
     loader.markDeleted(deleted.id);
     pool.remove(deleted.id);
+    const read = staleRead ?? loader.fetch('items', { type: 'complete' });
+    await Promise.resolve();
     postQueryMock.mockImplementationOnce(() => new Promise(() => undefined));
     expect(await loader.fetch('items', { where: { id: deleted.id } })).toEqual([]);
     expect(pool.get(deleted.id)).toBeUndefined();
 
     // The server confirms while the older request is still in flight.
+    loader.markDeleted(deleted.id); // sync:delete, including reads begun while pending
     pending.delete(deleted.id);
     await store.delete(deleted.id);
     answer({ results: [[{ id: deleted.id, title: 'stale row' }]] });
-    expect(await staleRead).toEqual([]);
+    expect(await read).toEqual([]);
     expect(pool.get(deleted.id)).toBeUndefined();
     expect(await store.get(deleted.id)).toBeUndefined();
     postQueryMock.mockResolvedValueOnce({ results: [[]] });

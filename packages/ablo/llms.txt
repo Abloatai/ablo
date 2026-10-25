@@ -312,6 +312,8 @@ Canonical docs to read before integrating, in this order. Read each with `npx ab
 - [Quickstart](https://docs.abloatai.com/quickstart)
 - [Branch-first development](https://docs.abloatai.com/branch-development)
 - [Schema Contract](https://docs.abloatai.com/schema-contract)
+- [Operation fields](https://docs.abloatai.com/operation-fields): versioned text and counter updates, persistence, undo and atomic composition.
+- [Versioned text fields](https://docs.abloatai.com/text-fields): plain-text editing and recovery limits.
 - [Integration Guide](https://docs.abloatai.com/integration-guide)
 - [Deployment](https://docs.abloatai.com/deployment)
 - [Guarantees](https://docs.abloatai.com/guarantees)

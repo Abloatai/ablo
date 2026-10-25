@@ -63,6 +63,8 @@ Each schema model becomes a typed model on the client:
 
 - `ablo.weatherReports.get({ id })` fetches one row without declaring a decision dependency.
 - `ablo.weatherReports.read({ id })` fetches one guardable decision input.
+- `ablo.documents.text({ id, field: 'body' })` opens a [versioned text buffer](/text-fields) for a `field.text()` field on Ablo-owned storage.
+- `counter({ id, field, state?, persist? })` opens an optimistic safe integer buffer; see [Operation fields](/operation-fields).
 - `ablo.weatherReports.list({ where })` fetches an observational collection.
 - `ablo.weatherReports.listAll({ where })` explicitly reads every matching page.
 - `ablo.weatherReports.local.get(id)` reads one row synchronously from the local graph.

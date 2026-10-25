@@ -10,14 +10,12 @@
  *     {@link releaseDeferredDeletesForCreate}): once a create has been sent, a
  *     delete must wait for it to settle, or the server could receive the delete
  *     before the create.
- *   - Update-payload merging ({@link mergeUpdateData}): collapses rapid updates
- *     to the same row into one wire operation.
  *
  * The queue keeps the `enqueue` and `delete` methods that orchestrate optimistic
  * state and events; these functions hold only the coalescing rules.
  */
 
-import type { MutationInput, QueuedMutation } from './commitPayload.js';
+import type { QueuedMutation } from './commitPayload.js';
 
 /** The subset of {@link MutationStore} that the coalescing rules read. */
 export interface MutationStoreLike {
@@ -130,63 +128,4 @@ export function releaseDeferredDeletesForCreate(
     if (store.get(deleteTransaction.id)?.status !== 'pending') continue;
     enqueue(deleteTransaction);
   }
-}
-
-/**
- * Merges two update payloads for the same row into one. Later values win, with
- * one exception: a `metadata` field is deep-merged as an object — parsing it
- * first when it arrives as a JSON string — rather than replaced, so partial
- * metadata updates accumulate instead of overwriting each other.
- */
-export function mergeUpdateData(
-  left: MutationInput | undefined,
-  right: MutationInput | undefined,
-  _modelName?: string
-): MutationInput {
-  const out: MutationInput = { ...(left || {}) };
-  const src = right || {};
-
-  for (const key of Object.keys(src)) {
-    // Special case: metadata payloads may be JSON strings; merge objects instead of clobbering
-    if (key === 'metadata') {
-      const l = out.metadata;
-      const r = src.metadata;
-
-      // If both sides undefined/null, continue
-      if (l == null && r == null) {
-        continue;
-      }
-
-      // Normalize to objects
-      const toObj = (v: unknown): Record<string, unknown> => {
-        if (v == null) return {};
-        if (typeof v === 'string') {
-          try {
-            return JSON.parse(v);
-          } catch {
-            return {};
-          }
-        }
-        if (typeof v === 'object') return v as Record<string, unknown>;
-        return {};
-      };
-
-      const lobj = toObj(l);
-      const robj = toObj(r);
-      const merged = { ...lobj, ...robj };
-      // Re-stringify to match schema input type
-      try {
-        out.metadata = JSON.stringify(merged);
-      } catch {
-        // Fallback to right-hand side if stringify fails
-        out.metadata = typeof r === 'string' ? r : JSON.stringify(robj || {});
-      }
-      continue;
-    }
-
-    // Default: shallow overwrite with right-hand value
-    out[key] = src[key];
-  }
-
-  return out;
 }

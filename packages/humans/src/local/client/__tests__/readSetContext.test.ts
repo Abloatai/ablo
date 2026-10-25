@@ -144,6 +144,8 @@ describe('reactive/WebSocket ReadSet context', () => {
       getReadEvidence: jest.fn(() => 42),
     };
     const collaboration: ModelCollaboration = {
+      openText: jest.fn(() => Promise.reject(new Error('not used'))),
+      openCounter: jest.fn(() => Promise.reject(new Error('not used'))),
       readPoint: jest.fn((_model: string, id: string) => Promise.resolve(id === 'item-2'
         ? {
             data: { id: 'item-2', title: 'Run dependency', status: 'ready' },

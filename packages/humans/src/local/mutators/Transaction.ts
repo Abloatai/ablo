@@ -19,6 +19,7 @@ import type { SyncStoreContract } from '../storeContract.js';
 import { createMutateActions, type MutateActions } from './mutateActions.js';
 import { createReaderActions, type ReaderActions, type ReaderFindOptions } from './readerActions.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
+import type { MutationOrigin } from '../transactions/mutations/commitPayload.js';
 
 /**
  * The full transaction surface: `tx.mutations.<key>.*` for writes and
@@ -46,6 +47,7 @@ export function createTransaction<S extends Schema>(
   schema: S,
   store: SyncStoreContract,
   organizationId: string,
+  origin?: MutationOrigin,
 ): Transaction<S> {
   const mutateCache = new Map<string, MutateActions<S, keyof S['models'] & string>>();
   const readCache = new Map<string, ReaderActions<S, keyof S['models'] & string>>();
@@ -66,6 +68,7 @@ export function createTransaction<S extends Schema>(
         prop as keyof S['models'] & string,
         store,
         organizationId,
+        origin,
       );
       mutateCache.set(prop, actions);
       return actions;

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { AbloValidationError } from '../../errors.js';
+import { memoryDataSource } from '../adapters/memory.js';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import {
@@ -724,5 +726,37 @@ describe('dataSource', () => {
         ],
       },
     });
+  });
+});
+
+describe('adapter error responses', () => {
+  it.each([undefined, 422])('preserves a registered error with HTTP status %s', async (httpStatus) => {
+    const handler = dataSource({
+      schema,
+      apiKey: TEST_API_KEY,
+      adapter: {
+        ...memoryDataSource(),
+        async commit() {
+          throw new AbloValidationError('condition did not match', {
+            code: 'precondition_failed',
+            ...(httpStatus === undefined ? {} : { httpStatus }),
+          });
+        },
+      },
+    });
+    await expect(post(handler, {
+      type: 'commit', correlationId: 'typed-error',
+      operations: [{ type: 'UPDATE', model: 'files', id: 'a', input: { content: 'next' } }],
+    })).resolves.toEqual({ status: httpStatus ?? 409, body: { error: 'precondition_failed', message: 'condition did not match' } });
+  });
+
+  it('leaves unknown failures to the customer host', async () => {
+    const error = new Error('customer failure');
+    const handler = dataSource({ schema, apiKey: TEST_API_KEY, adapter: {
+      ...memoryDataSource(), async commit() { throw error; },
+    } });
+    await expect(post(handler, { type: 'commit', correlationId: 'unknown-error',
+      operations: [{ type: 'CREATE', model: 'files', id: 'a' }],
+    })).rejects.toBe(error);
   });
 });

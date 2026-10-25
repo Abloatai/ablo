@@ -64,6 +64,8 @@ export interface SugarOptions<
    * {@link ModelOptions.policy}.
    */
   policy?: ModelOptions['policy'];
+  /** Credential-bound row authorization, preserved in pushed artifacts. */
+  subject?: ModelOptions['subject'];
   /**
    * Sync-group routing — which delta *channels* a row fans into
    * (`root` / `grants` / `roles`). See {@link ModelOptions.groups}.
@@ -99,6 +101,7 @@ function build<
     typename: opts?.typename,
     tableName: opts?.tableName,
     policy: opts?.policy,
+    subject: opts?.subject,
     groups: opts?.groups,
     bootstrapLimit: opts?.bootstrapLimit,
     bootstrapOrderBy: opts?.bootstrapOrderBy,

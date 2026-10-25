@@ -71,6 +71,8 @@ import {
 import { modelReadResponseSchema, modelListResponseSchema,
   modelReadBatchRequestSchema, modelReadBatchResponseSchema } from '../wire/modelResponses.js';
 import { modelMutationRequestSchema } from '../wire/modelMutations.js';
+import { counterHistorySchema, counterEditValueSchema } from '../commit/counter/index.js';
+import { textHistorySchema, textEditValueSchema } from '../commit/text/contract.js';
 import { logListResponseSchema, logQuerySchema } from '../observation/feedContract.js';
 import { logDeliveryResponseSchema } from '../observation/deliveryContract.js';
 import { schemaReadResponseSchema } from '../wire/accountResponses.js';
@@ -154,6 +156,8 @@ const ABLO_OPERATION_IDS: Readonly<Record<string, string>> = {
   'GET /v1/models/{model}': 'listModelRows',
   'POST /v1/models/{model}': 'createModelRow',
   'GET /v1/models/{model}/{id}': 'getModelRow',
+  'GET /v1/models/{model}/{id}/text/{field}': 'getModelTextHistory',
+  'GET /v1/models/{model}/{id}/counter/{field}': 'getModelCounterHistory',
   'PATCH /v1/models/{model}/{id}': 'updateModelRow',
   'DELETE /v1/models/{model}/{id}': 'deleteModelRow',
   'POST /v1/models/{model}/{id}/claim': 'acquireModelClaim',
@@ -188,7 +192,7 @@ const ABLO_OPERATION_IDS: Readonly<Record<string, string>> = {
 function fieldSchema(f: FieldMeta): Json {
   switch (f.type) {
     case 'number':
-      return { type: 'number' };
+      return f.merge === 'counter' ? { type: 'integer', minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER } : { type: 'number' };
     case 'boolean':
       return { type: 'boolean' };
     case 'date':
@@ -647,6 +651,10 @@ function abloComponentSchemas(): Record<string, Json> {
     ClaimReorder: derive(claimReorderReplySchema, 'output'),
     CommitReceipt: commitReceiptSchemaJson,
     ModelRead: withGenericRows(derive(modelReadResponseSchema, 'output')),
+    CounterHistory: derive(counterHistorySchema, 'output'),
+    CounterEditValue: derive(counterEditValueSchema, 'input'),
+    TextHistory: derive(textHistorySchema, 'output'),
+    TextEditValue: derive(textEditValueSchema, 'input'),
     ModelPage: withGenericRows(derive(modelListResponseSchema, 'output')),
     ModelReadBatch: derive(modelReadBatchResponseSchema, 'output'),
     LogPage: derive(logListResponseSchema, 'output'),
@@ -743,6 +751,22 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         parameters: [modelParam(), idParam()],
         requestBody: { ...mutationBody(), required: false },
         responses: { '200': commitReceipt() },
+      },
+    },
+    '/v1/models/{model}/{id}/text/{field}': {
+      get: {
+        tags, summary: 'Read versioned plain-text edit history',
+        description: 'Requires a field.text() declaration and read access to the row. Text transforms support Ablo-owned storage; connected-source writes are rejected. Submit a versioned {$text: ...} field value through the existing update or commit endpoint.',
+        parameters: [modelParam(), idParam(), { name: 'field', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': namedResp('A bounded text base and its contiguous accepted operations.', 'TextHistory') },
+      },
+    },
+    '/v1/models/{model}/{id}/counter/{field}': {
+      get: {
+        tags, summary: 'Read versioned integer increment history',
+        description: 'Requires a field.counter() declaration and read access to the row. Integer operations support Ablo-owned storage; connected-source writes are rejected. Submit a versioned {$increment: ...} field value through the existing update or commit endpoint.',
+        parameters: [modelParam(), idParam(), { name: 'field', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': namedResp('A bounded text base and its contiguous accepted operations.', 'CounterHistory') },
       },
     },
     '/v1/models/{model}/{id}/claim': {
@@ -1154,14 +1178,17 @@ export function schemaToOpenApi<S extends SchemaRecord>(
     const properties: Record<string, Json> = { id: { type: 'string' } };
     const required: string[] = ['id'];
     const createProps: Record<string, Json> = {};
+    const updateProps: Record<string, Json> = {};
     for (const [fname, fmeta] of Object.entries(def.fields)) {
       const fs = fieldSchema(fmeta);
       properties[fname] = fs;
       createProps[fname] = fs;
+      updateProps[fname] = fmeta.merge === 'text' ? schemaRef('TextEditValue') : fmeta.merge === 'counter' ? { oneOf: [fs, schemaRef('CounterEditValue')] } : fs;
       if (!fmeta.isOptional) required.push(fname);
     }
     schemas[pascal(key)] = { type: 'object', properties, required };
     const createBody = jsonBody({ type: 'object', properties: createProps });
+    const updateBody = jsonBody({ type: 'object', properties: updateProps });
 
     const collectionPath = `/v1/models/${key}`;
     const rowPath = `/v1/models/${key}/{id}`;
@@ -1206,13 +1233,27 @@ export function schemaToOpenApi<S extends SchemaRecord>(
           }),
         },
       },
-      patch: { tags: [key], summary: `Update a ${key}`, parameters: [idParam()], requestBody: createBody, responses: { '200': commitReceipt() } },
+      patch: { tags: [key], summary: `Update a ${key}`, parameters: [idParam()], requestBody: updateBody, responses: { '200': commitReceipt() } },
       delete: { tags: [key], summary: `Delete a ${key}`, parameters: [idParam()], responses: { '200': commitReceipt() } },
     };
     paths[claimPath] = {
       post: { tags: [key], summary: `Claim a ${key} (acquire lease)`, parameters: [idParam()], responses: { '200': jsonResp('Claim acquired', { type: 'object' }) } },
       delete: { tags: [key], summary: `Release a ${key} claim`, parameters: [idParam()], responses: { '200': jsonResp('Released', { type: 'object' }) } },
     };
+    for (const kind of ['text', 'counter'] as const) {
+      const fields = Object.entries(def.fields).filter(([, meta]) => meta.merge === kind).map(([field]) => field);
+      if (fields.length === 0) continue;
+      const fieldPath = `${rowPath}/${kind}/{field}`;
+      const historyName = kind === 'text' ? 'TextHistory' : 'CounterHistory';
+      operationIds[`GET ${fieldPath}`] = `get${modelName}${kind === 'text' ? 'Text' : 'Counter'}History`;
+      paths[fieldPath] = {
+        get: {
+          tags: [key], summary: `Read ${key} ${kind} history`,
+          parameters: [idParam(), { name: 'field', in: 'path', required: true, schema: { type: 'string', enum: fields } }],
+          responses: { '200': namedResp('A bounded base and contiguous accepted operations.', historyName) },
+        },
+      };
+    }
     paths[heartbeatPath] = {
       post: { tags: [key], summary: `Heartbeat a held ${key} claim (extend the lease for long-running work)`, parameters: [idParam()], responses: { '200': jsonResp('Lease extended (or queued slot refreshed)', derive(claimHeartbeatReplySchema, 'output')) } },
     };

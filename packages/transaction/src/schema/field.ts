@@ -200,9 +200,11 @@ export function resolveFieldMeta(schema: z.ZodType): FieldMeta {
 /** A Zod schema returned by a {@link field} builder — the underlying Zod type plus
  *  two chainable methods: `indexed()` marks the field for a database index, and
  *  `from(column)` overrides the database column name it maps to. */
-export type FieldBuilder<T extends z.ZodType> = T & {
-  indexed(): FieldBuilder<T>;
-  from(column: string): FieldBuilder<T>;
+export type FieldBuilder<T extends z.ZodType, Merge extends FieldMeta['merge'] = undefined> = T & {
+  /** Type evidence only; runtime metadata remains in the schema description. */
+  readonly __operationKind: Merge;
+  indexed(): FieldBuilder<T, Merge>;
+  from(column: string): FieldBuilder<T, Merge>;
 };
 
 function assertColumnName(column: string): void {
@@ -212,11 +214,11 @@ function assertColumnName(column: string): void {
 }
 
 /** Add sync-engine chain methods to a Zod schema without disturbing its type. */
-function withFieldMethods<T extends z.ZodType>(
+function withFieldMethods<T extends z.ZodType, Merge extends FieldMeta['merge'] = undefined>(
   schema: T,
-  meta: Omit<FieldMeta, 'isOptional'>,
-): FieldBuilder<T> {
-  const described = schema.describe(encodeMeta(meta)) as FieldBuilder<T>;
+  meta: Omit<FieldMeta, 'isOptional'> & { merge?: Merge },
+): FieldBuilder<T, Merge> {
+  const described = schema.describe(encodeMeta(meta)) as FieldBuilder<T, Merge>;
   described.indexed = () => withFieldMethods(schema, { ...meta, isIndexed: true });
   described.from = (column: string) => {
     assertColumnName(column);
@@ -225,10 +227,10 @@ function withFieldMethods<T extends z.ZodType>(
   return described;
 }
 
-function buildField<T extends z.ZodType>(
+function buildField<T extends z.ZodType, Merge extends FieldMeta['merge'] = undefined>(
   schema: T,
-  baseMeta: Omit<FieldMeta, 'isOptional' | 'isIndexed'>,
-): FieldBuilder<T> {
+  baseMeta: Omit<FieldMeta, 'isOptional' | 'isIndexed'> & { merge?: Merge },
+): FieldBuilder<T, Merge> {
   return withFieldMethods(schema, { ...baseMeta, isIndexed: false });
 }
 
@@ -236,6 +238,16 @@ export const field = {
   /** Defines a text field. */
   string() {
     return buildField(z.string(), { type: 'string' });
+  },
+
+  /** Plain text edited through versioned operations after creation. */
+  text() {
+    return buildField(z.string(), { type: 'string', merge: 'text' });
+  },
+
+  /** Safe integer values edited through checked increment operations. */
+  counter() {
+    return buildField(z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER), { type: 'number', merge: 'counter' });
   },
 
   /** Defines a numeric field. */

@@ -1,6 +1,7 @@
 """Managed Linux adapter entry point; Unix peer credentials identify workers."""
 import argparse
 import json
+import math
 import os
 import signal
 import socket
@@ -10,12 +11,15 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 
 from fusepy import FUSE
 from filesystem import Filesystem
 from commands import CommandServer
+from gvisor import Gvisor
 from git import initialize_refs, validate_git_publication
 from store import Rejected, Store, canonical, path_name
+from publication import publish_project
 from process import ProcessChannel, Profile, HOME, await_domain_exit
 
 
@@ -34,9 +38,38 @@ def resource_path(resource):
 
 
 class Adapter:
-    def __init__(self, store, workers, gateway, mountpoint, mount_tag):
+    def __init__(self, store, workers, gateway, mountpoint, mount_tag, gvisor_rootfs=None, gvisor_cgroup_root=None, gvisor_memory_limit=None, gvisor_concurrency=8, *, project_file_uids=()):
         self.store, self.workers, self.gateway, self.mountpoint = store, workers, gateway, mountpoint
         self.mount_tag = mount_tag
+        self.gvisor = Gvisor(gvisor_rootfs, mountpoint, gvisor_cgroup_root, gvisor_memory_limit, gvisor_concurrency) if gvisor_rootfs is not None else None
+        if any(uid not in workers for uid in project_file_uids):
+            raise RuntimeError("Project file workers must be registered")
+        self.project_owners = {workers[uid] for uid in project_file_uids}
+        self.project_deadlines = {}
+
+    def authorize_project(self, owner, operation):
+        try:
+            if str(uuid.UUID(operation)) != operation:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            raise Rejected("operation_id_invalid")
+        if owner not in self.project_owners:
+            raise Rejected("permission_denied")
+        try:
+            lease = self.upstream(owner, "project_authorize", operationId=operation)
+        except Exception:
+            self.project_deadlines.pop((owner, operation), None)
+            raise
+        expires = lease.get("expires")
+        if not isinstance(expires, (int, float)) or not math.isfinite(expires) or not 0 < expires - time.time() <= 60:
+            self.project_deadlines.pop((owner, operation), None)
+            raise Rejected("permission_denied")
+        self.project_deadlines[owner, operation] = time.monotonic() + expires - time.time()
+
+    def project_valid(self, owner, operation):
+        if self.project_deadlines.get((owner, operation), 0) <= time.monotonic():
+            raise Rejected("permission_denied")
+        return True
 
     def upstream(self, owner, action, **fields):
         with socket.socket(socket.AF_UNIX) as connection:
@@ -67,6 +100,11 @@ class Adapter:
         try:
             return self._execute(owner, request, channel)
         finally:
+            if request.get("action") == "run" and isinstance(request.get("operationId"), str):
+                with self.store.lock:
+                    settled = self.store.db.execute("SELECT status FROM operations WHERE id=? AND owner=?", (request["operationId"], owner)).fetchone()
+                    if not settled or settled["status"] != "running":
+                        self.project_deadlines.pop((owner, request["operationId"]), None)
             # Publication's transaction has exited, even if the caller loses its reply.
             if request.get("action") in ("write", "delete", "rename", "run"):
                 with self.store.changed:
@@ -163,6 +201,10 @@ class Adapter:
             raise Rejected("claim_required")
         for claim in request["claims"]:
             resource_path(claim["resource"])
+        if action == "run" and owner in self.project_owners:
+            if any(claim["resource"].startswith("ref:") for claim in request["claims"]):
+                raise Rejected("permission_denied")
+            self.authorize_project(owner, request.get("operationId"))
         with self.store.lock, self.store.db:
             try:
                 operation, fresh = self.store.start(owner, request)
@@ -205,6 +247,8 @@ class Adapter:
                             self.store.stage(identifier, destination, "file", original["content"], original["mode"])
                         self.store.stage(identifier, path, "deleted", None, 0)
                     detail = {}
+            if action == "run" and owner in self.project_owners and not detail.get("exitCode", 0):
+                return publish_project(self, owner, identifier, request, detail)
             with self.store.lock, self.store.db:
                 self.store.validate(identifier)
                 if detail.get("exitCode", 0):
@@ -233,16 +277,19 @@ class Adapter:
             raise Rejected("permission_denied")
         if channel and any(key in supplied for key in ("HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR")):
             raise Rejected("profile_environment_invalid")
+        if self.gvisor and channel:
+            raise Rejected("command_invalid")  # Hosted native/SRT networking is not qualified for this backend.
         with self.store.lock:
             self.store.pin(operation["id"])
         uid = operation["uid"]
         private_mount = os.path.join(self.store.directory, "mounts", operation["id"])
         os.makedirs(private_mount, mode=0o700, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="ablo-worker-") as home:
+        with tempfile.TemporaryDirectory(prefix="ablo-worker-", dir="/tmp" if self.gvisor else None) as home:
             mount_failure = []
             def mount_operation():
                 try:
-                    FUSE(Filesystem(self.store, self.workers, operation), private_mount,
+                    FUSE(Filesystem(self.store, self.workers, operation,
+                                    (lambda: self.project_valid(operation["owner"], operation["id"])) if operation["owner"] in self.project_owners else None), private_mount,
                          foreground=True, allow_other=True, direct_io=True, atomic_o_trunc=True,
                          attr_timeout=0, entry_timeout=0, negative_timeout=0, fsname=self.mount_tag + ":" + operation["id"])
                 except Exception as error:
@@ -250,6 +297,7 @@ class Adapter:
             mount_thread = threading.Thread(target=mount_operation, daemon=True)
             mount_thread.start()
             process, reader, profile = None, None, None
+            sandbox = None
             threads = []
             try:
                 deadline = time.monotonic() + 10
@@ -270,12 +318,16 @@ class Adapter:
                         os.chown(path, uid, uid)
                     environment.update(CODEX_HOME=HOME + "/codex", CLAUDE_CONFIG_DIR=HOME + "/claude",
                                        TMPDIR=HOME + "/tmp", CLAUDE_CODE_TMPDIR=HOME + "/tmp")
+                invocation = ["setpriv", "--reuid", str(uid), "--regid", str(uid), "--clear-groups", "--no-new-privs", "--bounding-set=-all", "--", "/usr/bin/env", "-i", "--",
+                              *[key + "=" + value for key, value in environment.items()], *argv]
+                if self.gvisor:
+                    sandbox, invocation = self.gvisor.prepare(uid, home, environment, argv)
                 # Separate inode caches, with the same workspace path and publication store.
                 command = ["unshare", "--mount", "--propagation", "private", "sh", "-c",
                            'set -e; mount --bind "$1" "$2"; if [ -n "$3" ]; then mount --bind "$3" "$4"; fi; cd "$2"; shift 4; exec "$@"',
-                           "sh", private_mount, self.mountpoint, profile.path if profile else "", HOME,
-                           "setpriv", "--reuid", str(uid), "--regid", str(uid), "--clear-groups", "--no-new-privs", "--bounding-set=-all", "--", "/usr/bin/env", "-i", "--",
-                           *[key + "=" + value for key, value in environment.items()], *argv]
+                           "sh", private_mount, self.mountpoint, profile.path if profile else "", HOME, *invocation]
+                if operation["owner"] in self.project_owners:
+                    self.project_valid(operation["owner"], operation["id"])
                 process = subprocess.Popen(command, cwd="/", env={"PATH": "/usr/bin:/bin"},
                                            stdin=subprocess.PIPE if channel else subprocess.DEVNULL,
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE if channel else subprocess.STDOUT, start_new_session=True)
@@ -300,10 +352,12 @@ class Adapter:
                     reader = threading.Thread(target=drain, daemon=True)
                     reader.start()
                 deadline = time.monotonic() + timeout / 1000
-                heartbeat = time.monotonic() + 10
+                heartbeat = time.monotonic()
                 while process.poll() is None:
                     with self.store.lock:
                         self.store.validate(operation["id"])
+                        if operation["owner"] in self.project_owners:
+                            self.project_valid(operation["owner"], operation["id"])
                         expiry = min((self.store.authorize(operation["owner"], claim["resource"], claim["claim"])["expires"] for claim in request["claims"]), default=time.time() + 30)
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -318,14 +372,17 @@ class Adapter:
                         except subprocess.TimeoutExpired:
                             raise Rejected("process_shutdown_failed") from None
                         break
-                    interval = min(10, max(0.01, (expiry - time.time()) / 3), remaining)
+                    authority_remaining = self.project_deadlines[operation["owner"], operation["id"]] - time.monotonic() if operation["owner"] in self.project_owners else 30
+                    interval = min(10, max(0.01, (expiry - time.time()) / 3), max(.01, authority_remaining / 3), remaining)
                     try:
                         process.wait(timeout=min(interval, .1) if channel else interval)
                     except subprocess.TimeoutExpired:
                         if not channel or time.monotonic() >= heartbeat:
+                            if operation["owner"] in self.project_owners:
+                                self.authorize_project(operation["owner"], operation["id"])
                             for claim in request["claims"]:
                                 self.execute(operation["owner"], {"action": "heartbeat", **claim})
-                            heartbeat = time.monotonic() + min(10, max(.01, (expiry - time.time()) / 3))
+                            heartbeat = time.monotonic() + min(10, max(.01, (expiry - time.time()) / 3), max(.01, (self.project_deadlines[operation["owner"], operation["id"]] - time.monotonic()) / 3) if operation["owner"] in self.project_owners else 10)
                 if channel:
                     channel.decision.wait(timeout=max(0, min(5, deadline - time.monotonic())))
                     if not channel.decision.is_set() or channel.action != "complete" or channel.failed:
@@ -335,6 +392,12 @@ class Adapter:
                             self.store.validate(operation["id"])
                         raise Rejected("command_failed")
             finally:
+                if self.gvisor and process is not None and process.poll() is None:
+                    # Stop root namespace setup before killing the mapped UID, including pre-map children.
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 # Operation UIDs are never reused; escaped children cannot join later operations.
                 subprocess.run(["pkill", "-KILL", "-u", str(uid)], capture_output=True)
                 if process is not None:
@@ -353,6 +416,9 @@ class Adapter:
                 mount_thread.join(timeout=10)
                 if os.path.isdir(private_mount) and not os.path.ismount(private_mount):
                     os.rmdir(private_mount)
+                if sandbox is not None:
+                    if self.gvisor.close(sandbox, home):
+                        raise Rejected("command_failed")
                 if channel and (channel.failed or any(thread.is_alive() for thread in threads)):
                     raise Rejected("stream_failed")
             return {"exitCode": 0} if channel else {"exitCode": process.returncode, "output": output.decode(errors="replace")}
@@ -367,7 +433,14 @@ if __name__ == "__main__":
     parser.add_argument("--gateway", required=True)
     parser.add_argument("--mount-tag", required=True)
     parser.add_argument("--seed")
+    parser.add_argument("--project-file-uids", default="[]")
+    parser.add_argument("--gvisor-rootfs")
+    parser.add_argument("--gvisor-cgroup-root")
+    parser.add_argument("--gvisor-memory-limit-bytes", type=int)
+    parser.add_argument("--gvisor-concurrency", type=int, default=8)
     arguments = parser.parse_args()
+    if arguments.gvisor_rootfs is None and (arguments.gvisor_cgroup_root is not None or arguments.gvisor_memory_limit_bytes is not None):
+        raise RuntimeError('gVisor memory configuration requires its runtime image')
     if os.getuid() != 0:
         raise RuntimeError("The managed adapter supervisor must run as root")
     workers = {int(uid): owner for uid, owner in json.loads(input()).items()}
@@ -384,7 +457,8 @@ if __name__ == "__main__":
             subprocess.run(["fusermount", "-uz", abandoned], check=True, capture_output=True)
         if os.path.isdir(abandoned):
             os.rmdir(abandoned)
-    adapter = Adapter(store, workers, arguments.gateway, arguments.mount, arguments.mount_tag)
+    adapter = Adapter(store, workers, arguments.gateway, arguments.mount, arguments.mount_tag, arguments.gvisor_rootfs,
+                      arguments.gvisor_cgroup_root, arguments.gvisor_memory_limit_bytes, arguments.gvisor_concurrency, project_file_uids=json.loads(arguments.project_file_uids))
 
     class Commands(socketserver.StreamRequestHandler):
         def handle(self):

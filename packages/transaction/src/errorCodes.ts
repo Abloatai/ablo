@@ -1290,6 +1290,12 @@ export const ERROR_CODES = {
     true,
     'The server is at connection capacity. Retry shortly — transient and not specific to your credentials.'
   ),
+  subscription_delivery_unavailable: wire(
+    'transport',
+    503,
+    true,
+    'Change subscription delivery is reconnecting. Retry shortly; the server checks the durable log before resuming notifications.'
+  ),
   delivery_partition_mismatch: wire(
     'transport',
     503,

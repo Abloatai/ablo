@@ -69,6 +69,13 @@ its private view. Expiry is shortened by the configured clock-skew bound
 extending a grant. Deployments must maintain that server/adapter skew bound.
 Long native operations renew their grants, and renewal failure stops admission.
 
+## Optional gVisor commands
+
+`startResourceAdapter` accepts `gvisorRootfs` for network-isolated, noninteractive
+commands under the existing protected filesystem boundary. Interactive native
+providers are rejected in this mode. See the [operator setup, identity boundary
+and kernel verification](../../docs/ops/gvisor-resource-commands.md).
+
 ## SDK and supervisor
 
 Use the existing Ablo client for each authenticated worker. Scoped credentials
@@ -290,9 +297,15 @@ connection helper together.
 
 The coordinator admits at most 2,048 connections and 16 pending requests per
 connection. Read/control, urgent receipt/heartbeat/release, mutation, and native
-execution lanes have 8, 4, 8, and 8 active slots respectively. Non-native admission
-waits at most two seconds behind a bounded 1,024-request queue. A ninth native
-execution receives `adapter_busy` immediately. This separates connected agents
+execution lanes have 8, 4, 8, and 8 active slots respectively. The trusted host
+may set `startResourceAdapter({maxConcurrentProcesses: 10, ...})` to change only
+the execution lane (integer 1–64; default 8). This budget is shared by native
+streams and command operations. Size it for host memory/CPU; exhaustion still
+returns `adapter_busy`, while receipt, release and heartbeat capacity remains
+reserved. The coordinator accepts the same optional fourth CLI argument; workers
+cannot change it through requests. Restart the authority to change capacity. Non-native admission
+waits at most two seconds behind a bounded 1,024-request queue. An execution above the configured budget (the ninth by default)
+receives `adapter_busy` immediately. This separates connected agents
 from simultaneous native processes; it does not promise 1,000 running sandboxes.
 The private Python authority retains its 32-handler bound.
 
@@ -533,3 +546,14 @@ path; it remains recorded. This is a small synthetic fixture with local claims,
 not full-repository or cross-host source acceptance. See the
 [diagnostic evidence](tests/evidence/2026-10-15-command-diagnostics.json) for
 exact revisions, trace sequences, controls and limits.
+
+Directory listings return entry types as well as names. This avoids an `lstat`
+fallback per child in `scandir`/ripgrep traversal and guards the observed names
+and types with the parent membership revision. Explicit `stat`, `open` and file
+reads still capture file evidence; creation, deletion, rename and type changes
+still invalidate directory evidence. This does not solve retained native context
+becoming stale after its own successful write.
+
+For explicitly project-authorized native CRUD without a pre-enumerated file list,
+see [project-file publication](../../docs/ops/project-file-publication.md).
+This opt-in still acquires exact server-backed leases before atomic publication.

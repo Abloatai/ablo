@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.5
+
+### Native commands gain explicit isolation and publication modes
+
+Directory scans now return entry types without observing the contents of each
+child. Membership and type changes still invalidate directory observations;
+explicit reads retain their own dependencies.
+
+Trusted hosts can configure concurrent native processes from one to 64, keeping
+eight as the default. Publication ownership and validation remain enforced. Use
+the matching 0.67.0 transaction package and the documented Linux supervisor,
+FUSE and runtime setup.
+
+The optional gVisor backend runs network-isolated noninteractive commands within
+the existing protected filesystem boundary, with trusted per-command and
+aggregate memory budgets. Project-authorized file publication can acquire exact
+leases for the final staged diff after checking the active project/run binding.
+Both modes are explicit opt-ins. Follow the
+[gVisor setup](https://github.com/Abloatai/ablo/blob/v0.67.0/docs/ops/gvisor-resource-commands.md)
+and [publication guide](https://github.com/Abloatai/ablo/blob/v0.67.0/docs/ops/project-file-publication.md)
+before enabling them; local unit checks do not establish hosted acceptance.
+
 ## 0.1.4
 
 This release uses the matching 0.66.17 browser and transaction packages.

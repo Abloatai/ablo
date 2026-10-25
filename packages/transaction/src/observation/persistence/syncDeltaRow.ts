@@ -21,6 +21,7 @@
  */
 
 import { z } from 'zod';
+import { acceptedOperationReferenceSchema } from '../../commit/operations/contract.js';
 import type { ModelResidency } from '../../schema/residency.js';
 import {
   participantKindSchema,
@@ -62,6 +63,7 @@ export const syncDeltaCoreSchema = z.object({
   modelId: z.string().min(1),
   data: deltaDataSchema,
   previousData: deltaDataSchema.optional(),
+  operation: acceptedOperationReferenceSchema.optional(),
   /** Routing keys that decide which subscribers receive this delta; computed by the server at append time. */
   syncGroups: z.array(z.string()).optional(),
   /** The committing organization id — the coarse-grained tenant-isolation boundary. */

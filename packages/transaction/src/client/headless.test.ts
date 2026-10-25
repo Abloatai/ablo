@@ -118,12 +118,20 @@ describe('createTransactionClient', () => {
         model: 'orders',
         id: 'order-1',
         input: { status: 'approved' },
+        where: { status: 'pending' },
+        claimId: 'claim-1',
+        fenceToken: 42,
       }],
     });
     await client.settled(queued);
 
     expect(requests).toHaveLength(2);
     expect(requests[0]?.body).toBe(requests[1]?.body);
+    expect(JSON.parse(requests[0]!.body).operations[0]).toMatchObject({
+      where: { status: 'pending' },
+      claimId: 'claim-1',
+      fenceToken: 42,
+    });
     expect(requests.map((request) => request.idempotencyKey)).toEqual([
       'approve:order-1',
       'approve:order-1',

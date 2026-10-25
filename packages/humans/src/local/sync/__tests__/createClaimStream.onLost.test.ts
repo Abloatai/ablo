@@ -26,15 +26,21 @@ import { claimLifetimeOf } from '@abloatai/transaction/claims/lifetime';
 function fakeWs(): ClaimTransport & {
   emit(event: string, payload: Record<string, unknown>): void;
   sent: unknown[];
+  online: boolean;
 } {
   const bus = new EventEmitter();
   const sent: unknown[] = [];
-  return {
+  const ws: ClaimTransport & {
+    emit(event: string, payload: Record<string, unknown>): void;
+    sent: unknown[];
+    online: boolean;
+  } = {
+    online: true,
     subscribe(event, handler) {
       bus.on(event, handler);
       return () => bus.off(event, handler);
     },
-    isConnected: () => true,
+    isConnected: () => ws.online,
     send: (frame) => {
       sent.push(frame);
     },
@@ -43,6 +49,7 @@ function fakeWs(): ClaimTransport & {
       bus.emit(event, payload);
     },
   };
+  return ws;
 }
 
 /**
@@ -90,7 +97,7 @@ describe('createClaimStream.onLost', () => {
     expect(lifetime?.reason).toMatchObject({ code: 'claim_lost' });
   });
 
-  it('ends grants on disconnect and never re-announces them on reconnect', () => {
+  it('keeps grants through a disconnect and re-checks them with a heartbeat on reconnect', () => {
     const ws = fakeWs();
     const stream = createClaimStream({});
     stream.attach(ws);
@@ -102,12 +109,48 @@ describe('createClaimStream.onLost', () => {
     const lifetime = claimLifetimeOf(handle);
     expect(ws.sent).toHaveLength(1);
 
+    ws.online = false;
     ws.emit('disconnected', {});
+    expect(lifetime?.ended).toBe(false);
+    ws.online = true;
     ws.emit('connected', {});
 
+    expect(lifetime?.ended).toBe(false);
+    expect(ws.sent).toHaveLength(2);
+    expect(ws.sent[1]).toMatchObject({ type: 'claim_heartbeat', payload: { claimId: 'i-one-grant' } });
+  });
+
+  it('ends a kept grant with claim_lost when its reconnect re-check is not held', () => {
+    const ws = fakeWs();
+    const stream = createClaimStream({});
+    stream.attach(ws);
+    const handle = stream.claim({ type: 'item', id: 't1' }, { description: 'editing' }, 'i-expired');
+    const lifetime = claimLifetimeOf(handle);
+
+    ws.online = false;
+    ws.emit('disconnected', {});
+    ws.online = true;
+    ws.emit('connected', {});
+    ws.emit('claim_heartbeat_ack', { claimId: 'i-expired', status: 'lost' });
+
     expect(lifetime?.ended).toBe(true);
-    expect(lifetime?.reason).toMatchObject({ name: 'AbloConnectionError' });
-    expect(ws.sent).toHaveLength(1);
+    expect(lifetime?.reason).toMatchObject({ code: 'claim_lost' });
+  });
+
+  it('sends a release made while offline once the socket reconnects', async () => {
+    const ws = fakeWs();
+    const stream = createClaimStream({});
+    stream.attach(ws);
+    const handle = stream.claim({ type: 'item', id: 't1' }, { description: 'editing' }, 'i-offline-release');
+
+    ws.online = false;
+    ws.emit('disconnected', {});
+    await handle.release();
+    expect(ws.sent.some((f) => (f as { type?: string }).type === 'claim_abandon')).toBe(false);
+
+    ws.online = true;
+    ws.emit('connected', {});
+    expect(ws.sent).toContainEqual(expect.objectContaining({ type: 'claim_abandon', payload: expect.objectContaining({ claimId: 'i-offline-release' }) }));
   });
 
   it('delivers claim_lost with reason="preempted" to onLost listeners', () => {

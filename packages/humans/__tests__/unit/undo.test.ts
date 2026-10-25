@@ -38,6 +38,7 @@ import { resolveOps, deepEqual } from '../../src/local/mutators/undoApply';
 import type { InverseOp } from '../../src/local/mutators/inverseOp';
 import { ViewRegistry } from '../../src/local/views/ViewRegistry';
 import { createTestContext } from '../../src/local/testing';
+import { AbloClaimedError, AbloConnectionError } from '@abloatai/transaction/errors';
 
 // ── Shared schema + model ──────────────────────────────────────────────
 
@@ -111,13 +112,13 @@ function createStore(): SyncStoreContract {
   return {
     retrieve: (_class, id) => pool.get(id),
     queryByClass: () => ({ data: [] }),
-    save: async (m) => {
+    save: async (m, origin) => {
       if (!pool.get(m.id)) pool.add(m);
-      emit({ type: 'update', modelName: 'Item', modelId: m.id, data: { title: (m as TestItem).title } });
+      emit({ type: 'update', undoScopeId: origin?.undoScopeId, modelName: 'Item', modelId: m.id, data: { title: (m as TestItem).title } });
     },
-    delete: async (m) => {
+    delete: async (m, origin) => {
       pool.remove(m.id);
-      emit({ type: 'delete', modelName: 'Item', modelId: m.id, previousData: m.toJSON() });
+      emit({ type: 'delete', undoScopeId: origin?.undoScopeId, modelName: 'Item', modelId: m.id, previousData: m.toJSON() });
     },
     archive: async () => {},
     unarchive: async () => {},
@@ -604,6 +605,66 @@ describe('resolveOps (unit)', () => {
 // ── Reactivity & failure handling ──────────────────────────────────────
 
 describe('UndoScope reactivity & failure handling', () => {
+  it('resumes a partially accepted bulk replay one row at a time', async () => {
+    const a = await seed({ title: 'new A' });
+    const b = await seed({ title: 'new B' });
+    let blocked = true;
+    const write = jest.fn(async (model: Model, patch: Record<string, unknown>) => {
+      if (blocked && model.id === b) throw new AbloClaimedError('held', { code: 'entity_claimed' });
+      model.updateFromData(patch);
+    });
+    const scope = new UndoScope(testSchema, { ...store, write }, 'org-1');
+    scope.record({ inverses: [{ kind: 'updateMany', modelKey: 'items', patches: [{ id: a, title: 'old A' }, { id: b, title: 'old B' }] }],
+      forwards: [{ kind: 'updateMany', modelKey: 'items', patches: [{ id: a, title: 'new A' }, { id: b, title: 'new B' }] }] });
+    await expect(scope.undo()).rejects.toMatchObject({ code: 'entity_claimed' });
+    expect(item(a).title).toBe('old A');
+    expect(item(b).title).toBe('new B');
+    blocked = false;
+    await scope.undo();
+    expect(item(b).title).toBe('old B');
+    expect(write.mock.calls.map(([model]) => model.id)).toEqual([a, b, b]);
+    await scope.redo();
+    expect(item(a).title).toBe('new A');
+    expect(item(b).title).toBe('new B');
+  });
+
+  it('checks a resumed same-row suffix against the value before its failed attempt', async () => {
+    const id = await seed({ title: 'latest' });
+    let blocked = true;
+    const write = jest.fn(async (model: Model, patch: Record<string, unknown>) => {
+      if (blocked && patch.title === 'original') throw new AbloClaimedError('held', { code: 'entity_claimed' });
+      model.updateFromData(patch);
+    });
+    const scope = new UndoScope(testSchema, { ...store, write }, 'org-1');
+    scope.record({ inverses: [
+      { kind: 'update', modelKey: 'items', patch: { id, title: 'middle' } },
+      { kind: 'update', modelKey: 'items', patch: { id, title: 'original' } }], forwards: [
+      { kind: 'update', modelKey: 'items', patch: { id, title: 'middle' } },
+      { kind: 'update', modelKey: 'items', patch: { id, title: 'latest' } }] });
+    await expect(scope.undo()).rejects.toMatchObject({ code: 'entity_claimed' });
+    expect(item(id).title).toBe('middle');
+    item(id).updateFromData({ title: 'collaborator' });
+    blocked = false;
+    await scope.undo();
+    expect(item(id).title).toBe('collaborator');
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds an unknown replay outcome instead of generating another write on retry', async () => {
+    const id = await seed({ title: 'new' });
+    const write = jest.fn(async (model: Model, patch: Record<string, unknown>) => {
+      model.updateFromData(patch);
+      throw new AbloConnectionError('acknowledgement lost');
+    });
+    const scope = new UndoScope(testSchema, { ...store, write }, 'org-1');
+    scope.record({ inverses: [{ kind: 'update', modelKey: 'items', patch: { id, title: 'old' } }],
+      forwards: [{ kind: 'update', modelKey: 'items', patch: { id, title: 'new' } }] });
+    await expect(scope.undo()).rejects.toThrow('acknowledgement lost');
+    await expect(scope.undo()).rejects.toMatchObject({ code: 'stale_context' });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(scope.size()).toEqual({ undo: 1, redo: 0 });
+  });
+
   it('onChange fires on record, undo, redo, and clear', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1');
     let changes = 0;
@@ -770,24 +831,22 @@ describe('UndoScope stream recording', () => {
 
 // ── Async replay-echo suppression ──────────────────────────────────────
 //
-// A store whose writes surface on the stream a macroitem LATER — mirroring the
-// real engine (the echo lands after undo()/redo() reset their synchronous
-// `replaying` flag). This is the timing that made every undo silently wipe its
-// own redo stack before the `pendingReplayEchoes` guard was added.
+// Delayed store events retain the write's explicit provenance, so an undo
+// cannot record its own echo even after the method has returned.
 
 describe('UndoScope async replay-echo suppression', () => {
   function asyncEchoStore(): SyncStoreContract {
     return {
       ...store,
-      save: async (m) => {
+      save: async (m, origin) => {
         if (!pool.get(m.id)) pool.add(m);
         const title = (m as TestItem).title;
-        setTimeout(() => { emit({ type: 'update', modelName: 'Item', modelId: m.id, data: { title } }); }, 0);
+        setTimeout(() => { emit({ type: 'update', undoScopeId: origin?.undoScopeId, modelName: 'Item', modelId: m.id, data: { title } }); }, 0);
       },
-      delete: async (m) => {
+      delete: async (m, origin) => {
         const previousData = m.toJSON();
         pool.remove(m.id);
-        setTimeout(() => { emit({ type: 'delete', modelName: 'Item', modelId: m.id, previousData }); }, 0);
+        setTimeout(() => { emit({ type: 'delete', undoScopeId: origin?.undoScopeId, modelName: 'Item', modelId: m.id, previousData }); }, 0);
       },
     };
   }

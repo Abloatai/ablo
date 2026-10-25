@@ -26,6 +26,7 @@
  */
 
 import { z } from 'zod';
+import { acceptedOperationReferenceSchema } from '../commit/operations/contract.js';
 import { correlationIdSchema } from '../commit/contract.js';
 import { participantKindSchema } from '../coordination/schema.js';
 import type { ParticipantKind, ParticipantRef } from '../types/participant.js';
@@ -115,6 +116,7 @@ export const syncDeltaWireCoreSchema = z.object({
   modelId: z.string().min(1),
   data: wireDeltaDataSchema,
   previousData: wireDeltaDataSchema.optional(),
+  operation: acceptedOperationReferenceSchema.optional(),
   syncGroups: z.array(z.string()),
   transactionId: z.string().optional(),
   /** Opaque source-batch identity present only on decoded customer-WAL echoes. */

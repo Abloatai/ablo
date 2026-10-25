@@ -1,3 +1,4 @@
+import type { CounterField, CounterFieldParams } from '../../commit/counter/index.js';
 /**
  * Creates a stateless, typed HTTP client for server-side actors — agents,
  * workers, and serverless handlers. It talks to Ablo over plain request/response
@@ -21,6 +22,7 @@ import {
   createHttpTransport,
 } from './transport.js';
 import type { HttpTransport } from './contract.js';
+import type { TextField, TextFieldParams } from '../../commit/text/index.js';
 import type { HttpClientConfig } from './options.js';
 import type {
   CommitResource,
@@ -44,7 +46,7 @@ import type {
   ModelReadParams,
   ModelUpdateParams,
 } from '../../client/resources/modelOperations.js';
-import type { Schema, SchemaRecord, InferModel, InferCreate } from '../../schema/schema.js';
+import type { Schema, SchemaRecord, InferModel, InferCreate, InferUpdate } from '../../schema/schema.js';
 import { omittedModelError } from '../../schema/select.js';
 import {
   reconcileFunctionalUpdate,
@@ -151,7 +153,10 @@ export type HttpGuardedMutationParams<P, T> = HttpModelMutationParams<P> & {
  * commit receipt envelopes internally; callers should not have to change data
  * access syntax when they switch transport.
  */
-export interface HttpModelClient<T, C = T> {
+export interface HttpModelClient<T, C = T, U = C> {
+  /** Open a versioned buffer for an explicitly declared field.text() field. */
+  text(params: TextFieldParams<Extract<keyof C, string>>): Promise<TextField>;
+  counter(params: CounterFieldParams<Extract<keyof C, string>>): Promise<CounterField>;
   /** Reads one current row without declaring it as input to a later decision. */
   get(params: ModelReadParams & ModelReadOptions): Promise<T | undefined>;
   /**
@@ -196,7 +201,7 @@ export interface HttpModelClient<T, C = T> {
    */
   create(params: HttpModelMutationParams<ModelCreateManyParams<C>>): Promise<T[]>;
   /** Pass `ifUnchanged: row` to reject if the exact row returned by `read` moved. */
-  update(params: HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>): Promise<T>;
+  update(params: HttpGuardedMutationParams<ModelUpdateParams<T, C, U>, T>): Promise<T>;
   /**
    * Updates a row with a function of its latest value — `update(id, current =>
    * next)`, the data-layer equivalent of a `setState(prev => next)` reducer. The
@@ -227,7 +232,8 @@ export interface HttpModelClient<T, C = T> {
 export type AbloHttpClient<S extends SchemaRecord> = {
   readonly [K in keyof S & string]: HttpModelClient<
     InferModel<Schema<S>, K>,
-    InferCreate<Schema<S>, K>
+    InferCreate<Schema<S>, K>,
+    InferUpdate<Schema<S>, K>
   >;
 } & {
   /** Runs one-time setup (durable-outbox scope resolution and replay) before the client is used. It also runs lazily ahead of the first request, so calling it yourself is optional. */
@@ -309,12 +315,12 @@ function isProtocolMember(prop: string): prop is keyof HttpTransport {
  * receipts because functional updates need them. This is the single boundary
  * that unwraps those transport details for application code.
  */
-function createHttpModelClient<T, C = T>(
+function createHttpModelClient<T, C = T, U = C>(
   protocol: HttpTransportModel<T, C>,
   modelName: string,
   clientIdentity: object,
   readSetContext: ReadSetContext | undefined,
-): HttpModelClient<T, C> {
+): HttpModelClient<T, C, U> {
   async function readRow(id: string): Promise<T | undefined> {
     const read = await protocol.read({ id });
     capturePointRead(readSetContext, clientIdentity, modelName, id, read.data, read.stamp);
@@ -385,7 +391,7 @@ function createHttpModelClient<T, C = T>(
     };
   }
 
-  function update(params: HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>): Promise<T>;
+  function update(params: HttpGuardedMutationParams<ModelUpdateParams<T, C, U>, T>): Promise<T>;
   function update(
     id: string,
     updater: ModelUpdater<T>,
@@ -393,7 +399,7 @@ function createHttpModelClient<T, C = T>(
   ): Promise<T | undefined>;
   async function update(
     arg:
-      | HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>
+      | HttpGuardedMutationParams<ModelUpdateParams<T, C, U>, T>
       | string,
     updater?: ModelUpdater<T>,
     options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
@@ -556,6 +562,8 @@ function createHttpModelClient<T, C = T>(
 
   return {
     get,
+    text: (params) => protocol.text(params),
+    counter: (params) => protocol.counter(params),
     read,
     list,
     listAll,

@@ -55,6 +55,8 @@ function toCommitOptions(payload: CommitMessage['payload']) {
       model: operation.model,
       id: operation.id,
       data: operation.input,
+      where: operation.where,
+      claimId: operation.claimId,
       readAt: operation.readAt,
       transactionId: operation.transactionId,
       fenceToken: operation.fenceToken,

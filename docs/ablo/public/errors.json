@@ -2429,6 +2429,15 @@
       "docUrl": "https://docs.abloatai.com/errors#store_query_unknown_model"
     },
     {
+      "code": "subscription_delivery_unavailable",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "Change subscription delivery is reconnecting. Retry shortly; the server checks the durable log before resuming notifications.",
+      "docUrl": "https://docs.abloatai.com/errors#subscription_delivery_unavailable"
+    },
+    {
       "code": "sync_client_db_missing",
       "category": "client",
       "surface": "client",

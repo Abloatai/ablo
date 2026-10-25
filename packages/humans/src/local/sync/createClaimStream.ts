@@ -146,6 +146,9 @@ export function createClaimStream(
 
   // ── State: our own open grants, keyed by the exact claim id ─────
   const ownClaims = new Map<string, OwnGrant>();
+  // Releases made while the socket was down, sent on reconnect so a held lease
+  // never outlives its release just because the connection dropped.
+  const pendingAbandons = new Map<string, OwnClaim | undefined>();
 
   // ── State: per-entity wait queues, from `claim_queue` frames ────
   // Keyed `type:id`; the value is the FIFO line of queued claims. Powers
@@ -396,25 +399,31 @@ export function createClaimStream(
       }),
     );
 
-    // (3) A granted handle belongs to this connection's exact grant. The server
-    //     releases the participant's claims when its last socket leaves; trying
-    //     to recreate them on `connected` silently swapped the lease beneath an
-    //     old `data` / `readAt` / fenceToken tuple. End them instead. A caller
-    //     reconnects, re-reads, and takes a fresh handle.
+    // (3) A held lease outlives the socket: the server ends it only on release,
+    //     revocation or its own expiry. A dropped connection therefore keeps
+    //     every handle. On reconnect each one is re-checked with a heartbeat; a
+    //     lease that expired or moved on meanwhile comes back as not held, and
+    //     the heartbeat-ack handler ends that handle with `claim_lost`. Nothing
+    //     is re-acquired, so a handle never pairs its fence with a new lease.
     unsubs.push(
       t.subscribe('disconnected', () => {
         queueByEntity.clear();
         queueEntries.clear();
         notifyListeners();
         const error = new AbloConnectionError(
-          'The connection holding this claim ended. Reconnect and acquire a fresh claim before continuing.',
+          'The connection dropped before this heartbeat was answered. The claim stays held until its lease expires and is re-checked on reconnect.',
         );
-        for (const { lifetime } of ownClaims.values()) {
-          lifetime.end(error);
-        }
-        ownClaims.clear();
         for (const claimId of [...pendingHeartbeats.keys()]) {
           settleHeartbeat(claimId, ({ reject }) => { reject(error); });
+        }
+      }),
+      t.subscribe('connected', () => {
+        for (const [claimId, claim] of pendingAbandons) sendAbandon(claimId, claim);
+        pendingAbandons.clear();
+        for (const [claimId, { claim }] of ownClaims) {
+          // A not-held answer ends the handle in the ack handler; a dropped
+          // connection leaves it for the next reconnect.
+          sendHeartbeat(claimId, claim, resolveHeartbeatOptions(undefined)).catch(() => {});
         }
       }),
     );
@@ -511,7 +520,7 @@ export function createClaimStream(
     if (!attached?.isConnected()) {
       return Promise.reject(
         new AbloConnectionError(
-          `The heartbeat for ${claimLabel(claim.entityType, claim.entityId, claim.field)} was skipped because the connection is down. This connection's grant has ended; reconnect and acquire a fresh claim.`,
+          `The heartbeat for ${claimLabel(claim.entityType, claim.entityId, claim.field)} was skipped because the connection is down. The claim stays held until its lease expires and is re-checked on reconnect.`,
         ),
       );
     }
@@ -547,7 +556,10 @@ export function createClaimStream(
   }
 
   function sendAbandon(claimId: string, claim?: OwnClaim): void {
-    if (!attached?.isConnected()) return;
+    if (!attached?.isConnected()) {
+      pendingAbandons.set(claimId, claim);
+      return;
+    }
     // Carry the target so the server can dequeue us if we were only *waiting*
     // (a queued claim isn't in the holder set it would otherwise scan). Held
     // claims are found by claimId regardless; the target is harmless there.

@@ -101,6 +101,8 @@ export interface AppliedChange {
    * position.
    */
   syncId?: number;
+  /** Accepted field revision carried through from the received delta. */
+  operation?: SyncDeltaWireCore['operation'];
 }
 
 /**

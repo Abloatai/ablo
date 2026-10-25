@@ -1,6 +1,5 @@
 import type { MutationInput, QueuedMutation } from './commitPayload.js';
 import { asTransportError, extractStatusCode } from './commitPayload.js';
-import { mergeUpdateData } from './coalesceRules.js';
 import { AbloConnectionError, errorCodeSpec } from '@abloatai/transaction/errors';
 import type { MutationQueueConfig } from './MutationQueue.js';
 import type { MutationStore } from './MutationStore.js';
@@ -11,7 +10,7 @@ export function isPermanentError(error: Error): boolean {
   const spec = code ? errorCodeSpec(code) : undefined;
   if (spec) return !spec.retryable;
   const message = error.message.toLowerCase();
-  if (['failed to fetch', 'network error', 'networkerror', 'connection refused', 'connection reset', 'timeout', 'econnrefused', 'econnreset', 'etimedout', 'socket hang up'].some((value) => message.includes(value))) return false;
+  if (['failed to fetch', 'fetch failed', 'network error', 'networkerror', 'connection refused', 'connection reset', 'timeout', 'econnrefused', 'econnreset', 'etimedout', 'socket hang up'].some((value) => message.includes(value))) return false;
   const status = extractStatusCode(error);
   if (status !== undefined) return status < 500 && status !== 429;
   return !(asTransportError(error).response?.errors?.length);

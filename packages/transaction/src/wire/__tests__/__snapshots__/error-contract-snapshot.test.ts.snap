@@ -1659,6 +1659,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "client",
     },
+    "subscription_delivery_unavailable": {
+      "category": "transport",
+      "httpStatus": 503,
+      "retryable": true,
+      "surface": "wire",
+    },
     "sync_client_db_missing": {
       "category": "client",
       "httpStatus": null,

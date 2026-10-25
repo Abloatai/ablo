@@ -41,16 +41,20 @@ function makeAuth(): AuthCredentialSource & { tokens: string[] } {
   };
 }
 
-function makeStore(auth: AuthCredentialSource) {
+function makeStore(auth: AuthCredentialSource, listeners = new Map<string, (value?: unknown) => void>()) {
   // Structural fakes: the constructor touches only these members, and the
   // Pick keeps each signature exact so a single assertion suffices.
   const wired: unknown[] = [];
-  const syncClient: Pick<SyncClient, 'on' | 'onTransactionEvent'> = {
+  const syncClient: Pick<SyncClient, 'on' | 'onTransactionEvent' | 'subscribe'> = {
     on: (event, listener) => {
       wired.push(event, listener);
       return syncClient as SyncClient;
     },
     onTransactionEvent: () => () => undefined,
+    subscribe: (event, listener) => {
+      listeners.set(event, listener);
+      return () => { listeners.delete(event); };
+    },
   };
   const objectPool: Pick<InstanceCache, 'registerForeignKey'> = {
     registerForeignKey: () => undefined,
@@ -117,6 +121,14 @@ describe('BaseSyncedStore — credential lifecycle before any connection exists'
   it('nudgeReconnect is a safe no-op before the connection FSM exists', () => {
     const store = makeStore(makeAuth());
     expect(() => { store.nudgeReconnect(); }).not.toThrow();
+  });
+
+  it('exposes background operation reconciliation failures in the public sync status', () => {
+    const listeners = new Map<string, (value?: unknown) => void>();
+    const store = makeStore(makeAuth(), listeners);
+    listeners.get('sync:error')?.(new Error('Operation history is unavailable'));
+    expect(store.syncStatus.state).toBe('error');
+    expect(store.syncStatus.error?.message).toBe('Operation history is unavailable');
   });
 
   it('a null mint reports session expiry without a session-error listener in place', async () => {

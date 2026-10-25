@@ -34,6 +34,7 @@ type Expect<T extends true> = T;
 export const PUBLIC_MODEL_VERBS = [
   'get',
   'read',
+  'text', 'counter',
   'list',
   'listAll',
   'local',

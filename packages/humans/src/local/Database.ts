@@ -592,6 +592,13 @@ export class Database {
         deltaCount: bootstrapData.deltaCount ?? 0,
       });
 
+      // A delayed response must not rewind rows or the durable resume cursor.
+      if (bootstrapData.lastSyncId < await this.getLastSyncId()) {
+        throw new AbloConnectionError('Bootstrap snapshot is older than the persisted replica; retry the refresh.', {
+          code: 'bootstrap_response_invalid',
+        });
+      }
+
       // Clear only after a successful fetch, for transactional safety.
       // Clear when the server says the response is a full snapshot,
       // regardless of what type was requested.

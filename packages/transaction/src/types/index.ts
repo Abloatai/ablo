@@ -117,7 +117,7 @@ export interface ModelMetadata {
    * wire serializer how to encode the value. When this is absent — a model
    * registered without a schema — the payload is passed through unchanged.
    */
-  fields?: Readonly<Record<string, Pick<FieldMeta, 'type'>>>;
+  fields?: Readonly<Record<string, Pick<FieldMeta, 'type' | 'merge'>>>;
   /**
    * Fields to fill in from the signed-in identity when they are missing from a
    * stored row during self-healing. Each entry maps a field on this model to

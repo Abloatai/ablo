@@ -1189,11 +1189,6 @@
       "count": 1
     }
   },
-  "src/local/transactions/mutations/queueCoalescing.ts": {
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 3
-    }
-  },
   "src/local/utils/mobxSetup.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5

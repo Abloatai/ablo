@@ -94,3 +94,24 @@ export function idempotencyLedgerMigrations(schema = 'public'): readonly Migrati
 export function adapterTableMigrations(schema = 'public'): readonly Migration[] {
   return [...idempotencyLedgerMigrations(schema), ...endpointOutboxMigrations(schema)];
 }
+
+/** Direct PostgreSQL claims serialize against customer DML, including after control task loss. */
+export function directFenceMigrations(schema = 'public'): readonly Migration[] {
+  const table = qualified(schema, 'ablo_claim_fence_watermark');
+  return [{
+    name: 'ablo_idempotency_claim_evidence',
+    up: addColumnIfAbsent(schema, 'claim_evidence', 'JSONB'),
+  }, {
+    name: 'ablo_claim_fence_watermark',
+    up: `CREATE TABLE IF NOT EXISTS ${table} (
+  organization_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  marks JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(marks) = 'object'),
+  PRIMARY KEY (organization_id, project_id, branch_id, model_name, entity_id)
+);
+REVOKE ALL ON TABLE ${table} FROM PUBLIC;`,
+  }];
+}

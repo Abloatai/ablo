@@ -14,12 +14,19 @@ import type { RuntimeContext } from '../../RuntimeContext.js';
 import { MutationOperationType } from '@abloatai/transaction/types';
 import { snapshotJsonValue } from '@abloatai/transaction/utils/json';
 import type { MutationOptions, WriteOptions } from '../../interfaces/index.js';
+import type { FieldIntent } from '../operations/intent.js';
 import type {
   CommitEnvelopeMember,
   DurableCommitEnvelope,
 } from '@abloatai/transaction/commit';
 
-export interface UserContext {
+/** Client-local replay provenance, never part of the server commit payload. */
+export interface MutationOrigin {
+  /** Stores forward this scope identity into their local mutation events. */
+  readonly undoScopeId?: string;
+}
+
+export interface UserContext extends MutationOrigin {
   userId: string;
   organizationId: string;
   role?: string;
@@ -105,6 +112,8 @@ export interface QueuedMutation {
   modelId: string;
   modelKey: string;
   data?: MutationInput;
+  /** Authoring context of an unsealed local operation; the primary journal owns it. */
+  fieldIntent?: FieldIntent;
   previousData?: MutationInput | null;
   context: UserContext;
   status: 'pending' | 'executing' | 'awaiting_delta' | 'completed' | 'failed' | 'rolled_back';
@@ -235,6 +244,13 @@ export function hasCommitCoalescingBarrier(options?: WriteOptions): boolean {
     options?.fenceToken != null ||
     typeof options?.idempotencyKey === 'string' ||
     typeof options?.label === 'string'
+  );
+}
+
+/** Relative intent cannot be overwritten by replacement-style queue coalescing. */
+export function hasVersionedFieldInput(transaction: Pick<QueuedMutation, 'data'>): boolean {
+  return Object.values(transaction.data ?? {}).some((value) =>
+    typeof value === 'object' && value !== null && ('$text' in value || '$increment' in value),
   );
 }
 

@@ -4,7 +4,7 @@
  * component schemas derived from `FieldMeta` (incl. enum + optionality), the
  * Bearer security scheme, and the `/v1/commits` route.
  */
-import { defineSchema, model, z } from '../index.js';
+import { defineSchema, model, field, z } from '../index.js';
 import { abloOpenApi, schemaToOpenApi } from '@abloatai/transaction/schema/openapi';
 import {
   API_DEPRECATION_HEADER,
@@ -52,6 +52,31 @@ describe('schemaToOpenApi', () => {
     expect(byId.get && byId.patch && byId.delete).toBeTruthy();
   });
 
+  it('describes safe integer fields and their operation history', () => {
+    const doc = schemaToOpenApi(defineSchema({ counters: model({ count: field.counter() }) }));
+    const paths = doc.paths as Record<string, unknown>;
+    expect(paths['/v1/models/counters/{id}/counter/{field}']).toBeDefined();
+    expect(JSON.stringify(doc)).toContain('CounterEditValue');
+    expect(JSON.stringify(doc)).toContain('9007199254740991');
+  });
+
+  it('describes versioned text history only for models that explicitly declare it', () => {
+    const text = schemaToOpenApi(defineSchema({ docs: model({ body: field.text(), title: field.string() }) }));
+    expect(text.paths).toMatchObject({
+      '/v1/models/docs/{id}/text/{field}': {
+        get: { operationId: 'getDocsTextHistory', parameters: [
+          { name: 'id' }, { name: 'field', schema: { enum: ['body'] } },
+        ] },
+      },
+      '/v1/models/docs/{id}': {
+        patch: { requestBody: { content: { 'application/json': { schema: { properties: {
+          body: { $ref: '#/components/schemas/TextEditValue' }, title: { type: 'string' },
+        } } } } } },
+      },
+    });
+    expect(paths['/v1/models/items/{id}/text/{field}']).toBeUndefined();
+  });
+
   it('derives the component schema from FieldMeta (types, enum, optionality)', () => {
     const items = components.Items;
     if (!items) throw new Error('expected Items component schema');
@@ -86,6 +111,8 @@ describe('abloOpenApi (protocol reference)', () => {
     expect(Object.keys(paths).sort()).toEqual(
       [
         '/v1/commits',
+        '/v1/models/{model}/{id}/text/{field}',
+        '/v1/models/{model}/{id}/counter/{field}',
         '/v1/commits/{id}',
         '/v1/ephemeral_keys',
         // The whole coordination surface, not only the model-scoped half: a

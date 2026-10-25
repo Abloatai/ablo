@@ -16,6 +16,7 @@ import type {
   SchemaRecord,
   Model,
   InferCreate,
+  InferUpdate,
   InferRow,
 } from '@abloatai/transaction/schema/schema';
 import type { InstanceCache } from './local/InstanceCache.js';
@@ -37,7 +38,8 @@ export type { LocalReadOptions } from './local/client/resourceTypes.js';
 export type AbloClient<S extends SchemaRecord> = {
   readonly [K in keyof S & string]: ModelOperations<
     Model<Schema<S>, K>,
-    InferCreate<Schema<S>, K>
+    InferCreate<Schema<S>, K>,
+    InferUpdate<Schema<S>, K>
   >;
 } & AbloCore<S>;
 
@@ -285,6 +287,7 @@ interface AbloCore<S extends SchemaRecord> {
 export type AbloReads<S extends SchemaRecord> = AbloCore<S> & {
   readonly [K in keyof S & string]: ModelOperations<
     InferRow<Schema<S>, K>,
-    InferCreate<Schema<S>, K>
+    InferCreate<Schema<S>, K>,
+    InferUpdate<Schema<S>, K>
   >;
 };

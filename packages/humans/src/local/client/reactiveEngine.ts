@@ -1,3 +1,6 @@
+import { createModelFieldEditor, type ModelFieldEditor } from './modelFieldEditor.js';
+import { textDomain, counterDomain, textValueSchema, counterValueSchema, type TextOperation, type OperationTarget } from '@abloatai/transaction/commit';
+
 /**
  * The reactive engine assembly (ADR 0016). `Ablo({ ... })` resolves auth and
  * capabilities; `humans().init` constructs the store cluster; the lifecycle
@@ -294,6 +297,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      model: op.model.toLowerCase(),
 	      id,
 	      input: op.data ?? undefined,
+	      where: op.where ?? undefined,
 	      transactionId: op.transactionId ?? undefined,
 	      claimId:
 	        op.claimId ?? claimIdFor(claim?.target, claim?.id, op.model, op.id ?? null) ?? undefined,
@@ -595,6 +599,11 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
         // Lazily referenced: `commits` is declared below this loop, and this
         // only runs when someone actually writes a batch.
         commitBatch: (commitOptions) => commits.create(commitOptions),
+        openText: (model, { id, field }) => openFieldEditor<string, TextOperation>(textEditors, 'text', { model, id, field }, (value) => textValueSchema.parse(value)),
+        openCounter: async (model, { id, field }) => {
+          const editor = await openFieldEditor<number, number>(counterEditors, 'counter', { model, id, field }, (value) => counterValueSchema.parse(value));
+          return Object.assign(editor, { increment: (amount: number) => editor.edit(amount) });
+        },
         readPoint,
         // A claim needs the post-read watermark, not the legacy snapshot
         // object. `readFloor` is max(applied, acked-own-write), so a claim
@@ -732,6 +741,65 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	    },
 	  };
 
+    const textEditors = new Map<string, Promise<ModelFieldEditor<string, TextOperation>>>();
+    const counterEditors = new Map<string, Promise<ModelFieldEditor<number, number>>>();
+    const disposeOperationEditors = () => {
+      syncClient.clearModelOperations();
+      for (const pending of [...textEditors.values(), ...counterEditors.values()]) {
+        void pending.then((editor) => editor.dispose(), () => undefined);
+      }
+      textEditors.clear(); counterEditors.clear();
+    };
+    const stopOperationSessionListener = store.subscribeSessionError(disposeOperationEditors);
+
+    async function openFieldEditor<Value, Operation extends TextOperation | number>(
+      cache: Map<string, Promise<ModelFieldEditor<Value, Operation>>>, kind: 'text' | 'counter', target: OperationTarget,
+      parseValue: (value: unknown) => Value,
+    ): Promise<ModelFieldEditor<Value, Operation>> {
+      await ready();
+      const key = JSON.stringify(target);
+      const current = cache.get(key);
+      if (current && !(await current).disposed) return current;
+      const opening = (async () => {
+        const definition = schema.models[target.model];
+        if (definition?.fields[target.field]?.merge !== kind) throw new AbloValidationError('The field does not declare this operation kind.', { code: 'commit_operation_invalid' });
+        const saved = await store.db.getPersistedTransaction(`operation-buffer:${JSON.stringify([pointReadBaseUrl, selfParticipantId, kind, target.model, target.id, target.field])}`);
+        if (saved) {
+          const previous = kind === 'text' ? textDomain.schemas.state.parse(saved.state) : counterDomain.schemas.state.parse(saved.state);
+          if (previous.pending.length || previous.inFlight) throw new AbloValidationError('Unsent legacy field edits remain. Recover them with the previous SDK before opening the model editor.', { code: 'write_options_invalid' });
+        }
+        await modelProxies[target.model]?.get({ id: target.id });
+        const model = objectPool.get(target.id);
+        if (!model || model.getModelName() !== (definition.typename ?? target.model)) throw new AbloValidationError('The field editor row is unavailable.', { code: 'entity_not_found' });
+        const release = syncClient.retainFieldOperation(model, target.field);
+        try { await syncClient.refreshModelOperations(model); }
+        catch (error) { release(); throw error; }
+        return createModelFieldEditor<Value, Operation>({
+          value: () => parseValue(Reflect.get(model, target.field)),
+          error: () => store.syncStatus.error,
+          stage: (operation) => syncClient.stageFieldOperation(model, target.field, kind, operation),
+          refresh: () => syncClient.refreshModelOperations(model),
+          flush: async () => { await syncClient.syncNow(); await syncClient.waitForConfirmation(model.getModelName(), target.id); },
+          dispose: release,
+        });
+      })();
+      cache.set(key, opening);
+      try { return await opening; }
+      catch (error) { if (cache.get(key) === opening) cache.delete(key); throw error; }
+    }
+
+    const readOperationHistory: (kind: 'text' | 'counter', target: import('@abloatai/transaction/commit').OperationTarget) => Promise<unknown> = async (kind, target) => {
+      await ready();
+      const response = await (internalOptions.fetch ?? globalThis.fetch)(
+        `${pointReadBaseUrl}/v1/models/${encodeURIComponent(target.model)}/${encodeURIComponent(target.id)}/${kind}/${encodeURIComponent(target.field)}`,
+        { headers: authCredentials.withAuthHeaders() },
+      );
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok) throw translateHttpError(response.status, body);
+      return body;
+    };
+    syncClient.configureModelOperations(readOperationHistory);
+
 	  const engine = {
     ...modelProxies,
 
@@ -796,6 +864,8 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
         // Best-effort teardown — a disposal hiccup isn't consumer-actionable → debug.
         logger.debug('Error during sync engine disposal', { error: (err as Error).message });
       }
+      stopOperationSessionListener();
+      disposeOperationEditors();
       presenceStream.dispose();
       claimStream.dispose();
       syncClient.dispose();
@@ -808,6 +878,8 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
      * Best-effort — errors from individual deletions are swallowed.
      */
     async purge() {
+      stopOperationSessionListener();
+      disposeOperationEditors();
       await store.purge();
       syncClient.dispose();
     },

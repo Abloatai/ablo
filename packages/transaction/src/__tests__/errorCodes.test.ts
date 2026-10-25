@@ -1,4 +1,4 @@
-import { errorCodeSpec } from '../errorCodes';
+import { classifyRecovery, errorCodeSpec } from '../errorCodes';
 import { AbloError, AbloIdempotencyError, errorFromWire } from '../errors';
 
 describe('error observability policy', () => {
@@ -21,5 +21,16 @@ describe('decision contention', () => {
     expect(error).toBeInstanceOf(AbloError);
     expect(error).not.toBeInstanceOf(AbloIdempotencyError);
     expect(error).toMatchObject({ code: 'decision_contended', retryable: true });
+  });
+});
+
+describe('change subscription recovery', () => {
+  it('retries interrupted delivery without treating it as credential expiry', () => {
+    expect(classifyRecovery('subscription_delivery_unavailable')).toBe('transient');
+    const error = errorFromWire('Subscription delivery is reconnecting.', {
+      code: 'subscription_delivery_unavailable',
+      httpStatus: 503,
+    });
+    expect(error).toMatchObject({ code: 'subscription_delivery_unavailable', retryable: true });
   });
 });

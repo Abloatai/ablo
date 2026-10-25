@@ -68,6 +68,12 @@ still reads and writes, it just orders and attributes its history less precisely
 
 ## Reads and writes
 
+`field.text()` explicitly enables versioned insert/delete operations for a
+required, non-null string on Ablo-owned storage. Creation accepts a string;
+subsequent edits use `ablo.<model>.text({ id, field })`. Ordinary strings retain
+replacement semantics. Read [Versioned text fields](./text-fields.md) before
+opting in, including its storage, retention and recovery limits.
+
 Use async reads when the row may not be local:
 
 ```ts
@@ -129,3 +135,7 @@ session route, never a raw API key.
 
 For the shortest runnable path, start with [Quickstart](./quickstart.md). For a
 production app, continue with [Integration Guide](./integration-guide.md).
+
+Use `field.counter()` for a required safe integer operated on through checked
+increments. See [Operation fields](./operation-fields.md) for shared acceptance,
+reconciliation, persistence and recovery.

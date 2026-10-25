@@ -21,14 +21,14 @@ pub struct Backend {
     output: Arc<Semaphore>,
 }
 impl Backend {
-    pub fn new(path: String) -> Self {
+    pub fn new(path: String, execution_slots: usize) -> Self {
         Self {
             path,
             control: Arc::new(Semaphore::new(8)),
             urgent: Arc::new(Semaphore::new(4)),
             waiting: Arc::new(Semaphore::new(1024)),
             mutations: Arc::new(Semaphore::new(8)),
-            execution: Arc::new(Semaphore::new(8)),
+            execution: Arc::new(Semaphore::new(execution_slots)),
             claim_waiters: Arc::new(Semaphore::new(1024)),
             claim_connecting: Semaphore::new(16),
             input: Arc::new(Semaphore::new(64 * 1024 * 1024)),
@@ -158,6 +158,16 @@ pub struct Reply {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn configured_native_capacity_keeps_urgent_work_available() {
+        let backend = super::Backend::new(String::new(), 10);
+        let permits: Vec<_> = (0..10).map(|_| backend.execution.clone().try_acquire_owned().unwrap()).collect();
+        assert!(backend.execution.clone().try_acquire_owned().is_err());
+        let urgent = backend.urgent.clone().try_acquire_owned().unwrap();
+        drop(permits);
+        assert_eq!(backend.execution.available_permits(), 10);
+        drop(urgent);
+    }
     use super::*;
 
     #[tokio::test]
@@ -168,6 +178,7 @@ mod tests {
         let authority = tokio::net::UnixListener::bind(root.join("commands.sock")).unwrap();
         let backend = Arc::new(Backend::new(
             root.join("commands.sock").to_str().unwrap().into(),
+            8,
         ));
         let mut waiters = tokio::task::JoinSet::new();
         for worker in 0..1024 {
@@ -244,7 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_full_waiting_queue_does_not_consume_reserved_urgent_capacity() {
-        let backend = Backend::new("/nonexistent/ablo-coordinator-test.sock".into());
+        let backend = Backend::new("/nonexistent/ablo-coordinator-test.sock".into(), 8);
         let _queue = backend
             .waiting
             .clone()

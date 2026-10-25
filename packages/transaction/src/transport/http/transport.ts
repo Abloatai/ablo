@@ -1,3 +1,5 @@
+import { createModelFieldResources } from '../../commit/operations/resources.js';
+
 /**
  * Private HTTP protocol client behind `Ablo({ schema, transport: 'http' })`.
  * It carries no object pool, local database, or WebSocket and maps Model,
@@ -2032,6 +2034,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
 
     return {
       claim,
+      text: ({ id, field, ...options }) => text.open({ model: name, id, field }, options),
+      counter: ({ id, field, ...options }) => counter.open({ model: name, id, field }, options),
       read(params: ModelReadOptions & { readonly id: string }): Promise<HttpTransportRead<T>> {
         return readModel<T>(name, params);
       },
@@ -2141,6 +2145,20 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       },
     };
   }
+
+  const { text, counter } = createModelFieldResources({
+    read: (kind, target) => requestJson(
+      `/v1/models/${encodeURIComponent(target.model)}/${encodeURIComponent(target.id)}/${kind}/${encodeURIComponent(target.field)}`,
+      { method: 'GET' }, z.unknown(),
+    ),
+    commit: (kind, target, edit) => commits.create({
+      idempotencyKey: edit.id,
+      operations: [{
+        action: 'update', model: target.model, id: target.id, transactionId: edit.id,
+        data: { [target.field]: { [kind === 'text' ? '$text' : '$increment']: edit } },
+      }],
+    }),
+  });
 
   return {
     ready,

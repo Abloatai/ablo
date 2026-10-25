@@ -1,5 +1,28 @@
 # @abloatai/humans
 
+## 0.67.0
+
+### Reactive edits share the model journal
+
+Versioned text and counter editors now stage through the primary mutation
+journal and materialize in ordinary observable rows. Accepted history rebases
+queued intent without changing sealed requests. UndoScope records semantic and
+ordinary edits together, retaining progress across interrupted grouped undo and
+redo. Accepted rows publish as a reconciled frame; revocation cancels delayed
+publication before clearing state.
+
+The reactive field editor API supersedes earlier development buffers. Use normal
+client persistence and UndoScope rather than buffer state, export and undo
+methods. Recover unresolved preview buffers with the SDK build that created
+them before upgrading. Custom stores must now forward undoScopeId through local
+mutation events. See the
+[upgrade guide](https://github.com/Abloatai/ablo/blob/v0.67.0/packages/ablo/docs/migration.md).
+
+Failed bootstrap refreshes preserve saved rows and the durable resume cursor.
+The response cache serves cold starts with full snapshots only. Delayed reads
+cannot resurrect confirmed deletions, and held claims remain usable across
+reconnect when the server retains their leases.
+
 ## 0.66.17
 
 ### Browser reloads preserve the active session

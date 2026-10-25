@@ -109,7 +109,8 @@ deliberate boundaries:
 | Last acknowledged subscription | Restored on the replacement socket. |
 | Presence | Re-announced after the replacement socket opens. |
 | Commit awaiting a receipt | Rejects as `commit_no_result`; Ablo never guesses whether the server accepted it. Retry with the same idempotency key. |
-| Row claim or queued claim | Ends with the socket. Re-read and acquire a fresh claim after reconnecting. |
+| Held row claim | Survives the socket. The lease ends only on release, revocation or its own expiry; after reconnecting the handle is re-checked and ends with `claim_lost` if the lease expired in the meantime. A release made while offline is sent on reconnect. |
+| Queued claim (not yet granted) | Ends with the socket. Acquire it again after reconnecting. |
 
 A static session cannot renew itself. When its bearer expires, the session is
 terminal and operations reject instead of reconnecting forever with the same

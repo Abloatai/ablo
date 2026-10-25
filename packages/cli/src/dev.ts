@@ -36,7 +36,9 @@ import { datasourceSummarySchema } from '@abloatai/transaction/wire';
 import { resolveRuntimeApiKey } from './config';
 import { looksLikeCredentialRefusal, poolerExplanation } from './readiness';
 import { brand } from './theme';
-import { readProjectEnvVariable } from './dbRole';
+import { readProjectAdminDatabaseUrl, readProjectEnvVariable } from './dbRole';
+import { createDeploymentPlanBundle } from './plan/index';
+import { renderDeploymentPlan } from './plan/render';
 import { createSourceConnector, type ConnectorStatus } from '@abloatai/transaction/source';
 import { acquireLocalConnectorLease, type LocalConnectorLease } from './localConnectorLease';
 
@@ -274,8 +276,31 @@ export function wireEnvLocal(apiKey: string, cwd: string = process.cwd()): strin
 }
 
 /** Push once and return a rendered result for a spinner to display. */
-async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; message: string }> {
+export async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; message: string }> {
+  // Initial push and every watch repush must review the same observations that
+  // apply consumes, just like `ablo push`. Never reuse an earlier watch plan.
+  const databaseUrl = readProjectAdminDatabaseUrl();
+  const reviewed = await createDeploymentPlanBundle({
+    schema,
+    schemaPath: args.schemaPath,
+    appSchema: 'public',
+    apiKey: args.apiKey!,
+    url: args.url,
+    ...(databaseUrl ? { databaseUrl } : {}),
+    force: false,
+    renames: [],
+    backfills: [],
+  });
+  if (reviewed.plan.outcome === 'blocked') {
+    renderDeploymentPlan(reviewed.plan);
+    return {
+      ok: false,
+      message: `Schema deployment plan ${reviewed.plan.fingerprint} is blocked; resolve its blocker findings before pushing.`,
+    };
+  }
   const { ok, status, body, bodyText } = await pushSchema(schema, {
+    plan: reviewed.plan,
+    database: reviewed.database,
     url: args.url,
     apiKey: args.apiKey,
     force: false,

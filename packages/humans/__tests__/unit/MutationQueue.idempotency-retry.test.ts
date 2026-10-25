@@ -23,6 +23,7 @@ import {
   resetFixtureCounter,
 } from '../../src/local/testing';
 import { confirmedCommitAck } from '@abloatai/transaction/testing/fixtures/httpResponses';
+import { fieldIntentSchema } from '../../src/local/transactions/operations/intent';
 
 const USER_CONTEXT = {
   userId: 'user-1',
@@ -149,6 +150,73 @@ describe('MutationQueue retry idempotency', () => {
     expect(first.data).toEqual({ title: 'first' });
     expect(second.data).toEqual({ title: 'offline edit' });
     expect(queue.getStats().pending).toBe(2);
+  });
+
+  it('prepares local field context once and retries the exact sealed operation after a lost acknowledgement', async () => {
+    const attempts = failFirstCommitAfterCapturing(queue);
+    const fieldIntent = fieldIntentSchema.parse({ kind: 'text', field: 'title', editId: 'child', context: {
+      snapshot: { epoch: 'epoch', version: 0, value: 'ab' },
+      pending: [{ id: 'parent', operation: ['A'] }, { id: 'child', operation: [1, 'B'] }],
+    } });
+    const prepared = { title: { $text: { id: 'child', epoch: 'epoch', baseVersion: 2, operation: [2, 'B'] } } };
+    const prepare = jest.fn(async () => prepared);
+    queue.setFieldIntentPreparation(prepare);
+    const transaction = await queue.update(createItemFixture(), USER_CONTEXT, {
+      title: { $text: { id: 'child', epoch: 'epoch', baseVersion: 0, operation: [1, 'B'] } },
+    }, undefined, undefined, fieldIntent);
+    await transaction.confirmation;
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toEqual(attempts[1]);
+    expect(attempts[0]?.operations[0]?.input).toEqual(prepared);
+    expect(attempts[0]?.operations[0]).not.toHaveProperty('fieldIntent');
+    expect(transaction.fieldIntent).toEqual(fieldIntent);
+  });
+
+  it('retries an aggregated row patch unchanged and confirms every original caller', async () => {
+    queue.dispose();
+    queue = new MutationQueue({ batchDelay: 10, retryBackoff: { baseMs: 1, capMs: 1 } });
+    const attempts = failFirstCommitAfterCapturing(queue);
+    const item = createItemFixture();
+    const first = await queue.update(item, USER_CONTEXT, { title: 'first' });
+    const second = await queue.update(item, USER_CONTEXT, { status: 'done' });
+    await Promise.all([first.confirmation, second.confirmation]);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(attempts[0]?.operations).toHaveLength(1);
+    expect(attempts[0]?.operations[0]?.input).toEqual({ title: 'first', status: 'done' });
+    expect(first.data).toEqual({ title: 'first' });
+    expect(second.data).toEqual({ status: 'done' });
+    expect(first.status).toBe('completed');
+    expect(second.status).toBe('completed');
+  });
+
+  it('retries a transient pre-seal read without rejecting callers or letting a descendant overtake', async () => {
+    queue.dispose();
+    queue = new MutationQueue({ batchDelay: 0, retryBackoff: { baseMs: 10, capMs: 10 } });
+    const item = createItemFixture();
+    const input = { title: { $text: { id: 'parent', epoch: 'epoch', baseVersion: 0, operation: ['A'] } } };
+    const intent = fieldIntentSchema.parse({ kind: 'text', field: 'title', editId: 'parent', context: {
+      snapshot: { epoch: 'epoch', version: 0, value: 'ab' }, pending: [{ id: 'parent', operation: ['A'] }],
+    } });
+    let reads = 0;
+    const prepare = jest.fn(async () => {
+      if (++reads === 1) throw new TypeError('fetch failed');
+      return input;
+    });
+    queue.setFieldIntentPreparation(prepare);
+    const blocked = jest.fn();
+    queue.on('operations:blocked', blocked);
+    const parent = await queue.update(item, USER_CONTEXT, input, undefined, undefined, intent);
+    await waitFor(() => reads === 1);
+    const child = await queue.update(item, USER_CONTEXT, { title: 'later' });
+    await queue.drainPending();
+    await Promise.all([parent.confirmation, child.confirmation]);
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(blocked).not.toHaveBeenCalled();
+    expect(parent.status).toBe('completed');
+    expect(child.status).toBe('completed');
+    expect(parent.fieldIntent).toEqual(intent);
   });
 
   it('retries an ambiguous batch with the identical key, members, and order', async () => {
@@ -449,20 +517,30 @@ describe('MutationQueue retry idempotency', () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
-  it('restores a lost-ack envelope with the identical key and operation order', async () => {
+  it.each(['creates', 'aggregated updates'])('restores %s after a lost acknowledgement with the identical key and operation order', async (kind) => {
     queue.dispose();
     const outbox = createMemoryOutbox();
     queue = new MutationQueue({ batchDelay: 60_000, maxBatchSize: 50 });
     queue.setCommitOutbox(outbox.store);
     const firstAttempts = failFirstCommitAfterCapturing(queue);
 
-    await queue.create(createItemFixture({ title: 'crash-a' }), USER_CONTEXT);
-    await queue.create(createItemFixture({ title: 'crash-b' }), USER_CONTEXT);
+    if (kind === 'creates') {
+      await queue.create(createItemFixture({ title: 'crash-a' }), USER_CONTEXT);
+      await queue.create(createItemFixture({ title: 'crash-b' }), USER_CONTEXT);
+    } else {
+      const item = createItemFixture();
+      await queue.update(item, USER_CONTEXT, { title: 'crash-a' });
+      await queue.update(item, USER_CONTEXT, { status: 'done' });
+    }
     await Promise.resolve();
     await queue.drainPending();
     expect(firstAttempts).toHaveLength(1);
     expect(outbox.records.size).toBe(1);
     const original = firstAttempts[0];
+    if (kind !== 'creates') {
+      expect(original?.operations).toHaveLength(1);
+      expect(original?.operations[0]?.input).toEqual({ title: 'crash-a', status: 'done' });
+    }
     queue.dispose();
 
     const replayQueue = new MutationQueue({ batchDelay: 0 });

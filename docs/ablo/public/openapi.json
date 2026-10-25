@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.66.16",
+    "version": "0.67.0",
     "description": "Ablo collaboration infrastructure: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.\n\n## Versioning\n\nEvery route is mounted under `/v1`, and that segment is part\nof the address you call. A change that would break a caller — a field removed, a\ntype narrowed, a status changed — arrives as a new segment beside this one, never\nas a change to this one. Additive changes do land here: a new field on a\nresponse, a new optional parameter, a new error code. Ignore what you do not\nrecognize and you will not be broken by them.\n\nEvery response carries `Ablo-Version`, a date stamp for the contract\nthe server is serving. Record the value your integration was built against and\ncompare it if behavior surprises you.\n\n## Deprecation\n\nA route being withdrawn says so on itself, for at least\n180 days before it stops answering:\n\n- `Deprecation` — an sf-Date of when the deprecation took effect\n  (RFC 9745). The route still answers normally while this is present.\n- `Sunset` — an HTTP-date of when it stops answering (RFC 8594).\n- `Link` with `rel=\"deprecation\"` pointing at what to read, and\n  `rel=\"successor-version\"` at what to call instead when there is one.\n\nThe same operations are marked `deprecated: true` in this document. Treating\neither signal as a build failure is the intended use; nothing is removed without\nboth.",
     "license": {
       "name": "Apache License 2.0",
@@ -1136,6 +1136,297 @@
         ],
         "additionalProperties": false
       },
+      "CounterHistory": {
+        "type": "object",
+        "properties": {
+          "base": {
+            "type": "object",
+            "properties": {
+              "epoch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "value": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "epoch",
+              "version",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "edits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "epoch": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "operation": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "id",
+                "epoch",
+                "operation",
+                "version"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "base",
+          "edits"
+        ],
+        "additionalProperties": false
+      },
+      "CounterEditValue": {
+        "type": "object",
+        "properties": {
+          "$increment": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "epoch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "baseVersion": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "operation": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "epoch",
+              "baseVersion",
+              "operation"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "$increment"
+        ],
+        "additionalProperties": false
+      },
+      "TextHistory": {
+        "type": "object",
+        "properties": {
+          "base": {
+            "type": "object",
+            "properties": {
+              "epoch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "value": {
+                "type": "string",
+                "maxLength": 1000000
+              }
+            },
+            "required": [
+              "epoch",
+              "version",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "edits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "epoch": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "operation": {
+                  "maxItems": 4096,
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 1000000
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "d": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "string",
+                                "maxLength": 1000000
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "d"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "id",
+                "epoch",
+                "operation",
+                "version"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "base",
+          "edits"
+        ],
+        "additionalProperties": false
+      },
+      "TextEditValue": {
+        "type": "object",
+        "properties": {
+          "$text": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "epoch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "baseVersion": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "operation": {
+                "maxItems": 4096,
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "string",
+                      "maxLength": 1000000
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "d": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "string",
+                              "maxLength": 1000000
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "d"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "epoch",
+              "baseVersion",
+              "operation"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "$text"
+        ],
+        "additionalProperties": false
+      },
       "ModelPage": {
         "type": "object",
         "properties": {
@@ -1643,6 +1934,45 @@
                             }
                           ]
                         },
+                        "operation": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "text",
+                                "counter"
+                              ]
+                            },
+                            "field": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "epoch": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255
+                            },
+                            "version": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "field",
+                            "epoch",
+                            "version"
+                          ],
+                          "additionalProperties": false
+                        },
                         "createdAt": {
                           "type": "string"
                         },
@@ -1978,6 +2308,13 @@
                           "isIndexed": {
                             "type": "boolean"
                           },
+                          "merge": {
+                            "type": "string",
+                            "enum": [
+                              "text",
+                              "counter"
+                            ]
+                          },
                           "column": {
                             "type": "string"
                           },
@@ -2099,6 +2436,13 @@
                           },
                           "isIndexed": {
                             "type": "boolean"
+                          },
+                          "merge": {
+                            "type": "string",
+                            "enum": [
+                              "text",
+                              "counter"
+                            ]
                           },
                           "column": {
                             "type": "string"
@@ -5370,6 +5714,930 @@
           }
         },
         "operationId": "deleteModelRow"
+      }
+    },
+    "/v1/models/{model}/{id}/text/{field}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Read versioned plain-text edit history",
+        "description": "Requires a field.text() declaration and read access to the row. Text transforms support Ablo-owned storage; connected-source writes are rejected. Submit a versioned {$text: ...} field value through the existing update or commit endpoint.",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A model name from your pushed schema, e.g. `item`."
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A bounded text base and its contiguous accepted operations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TextHistory"
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "400": {
+            "description": "The request did not satisfy the published contract.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "401": {
+            "description": "The Bearer credential is missing, malformed, or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "403": {
+            "description": "The credential does not authorize this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist in the credential scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current claim, version, or idempotency state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "429": {
+            "description": "The caller exceeded an enforced rate limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "500": {
+            "description": "The server could not complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "default": {
+            "description": "An HTTP error not otherwise listed; decoded through the canonical envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          }
+        },
+        "operationId": "getModelTextHistory"
+      }
+    },
+    "/v1/models/{model}/{id}/counter/{field}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Read versioned integer increment history",
+        "description": "Requires a field.counter() declaration and read access to the row. Integer operations support Ablo-owned storage; connected-source writes are rejected. Submit a versioned {$increment: ...} field value through the existing update or commit endpoint.",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A model name from your pushed schema, e.g. `item`."
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A bounded text base and its contiguous accepted operations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CounterHistory"
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "400": {
+            "description": "The request did not satisfy the published contract.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "401": {
+            "description": "The Bearer credential is missing, malformed, or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "403": {
+            "description": "The credential does not authorize this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist in the credential scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current claim, version, or idempotency state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "429": {
+            "description": "The caller exceeded an enforced rate limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "500": {
+            "description": "The server could not complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "default": {
+            "description": "An HTTP error not otherwise listed; decoded through the canonical envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "validation": {
+                    "summary": "Typed validation failure",
+                    "value": {
+                      "type": "AbloValidationError",
+                      "code": "invalid_request",
+                      "param": "body",
+                      "message": "The request did not satisfy the published contract.",
+                      "doc_url": "https://docs.abloatai.com/errors#invalid_request",
+                      "request_id": "req_52bb7f46-17bc-4f2d-9988-89d1398d2990"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Ablo-Version": {
+                "$ref": "#/components/headers/AbloVersion"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "RateLimit-Policy": {
+                "$ref": "#/components/headers/RateLimitPolicy"
+              },
+              "RateLimit": {
+                "$ref": "#/components/headers/RateLimit"
+              },
+              "Deprecation": {
+                "$ref": "#/components/headers/Deprecation"
+              },
+              "Sunset": {
+                "$ref": "#/components/headers/Sunset"
+              }
+            }
+          }
+        },
+        "operationId": "getModelCounterHistory"
       }
     },
     "/v1/models/{model}/{id}/claim": {

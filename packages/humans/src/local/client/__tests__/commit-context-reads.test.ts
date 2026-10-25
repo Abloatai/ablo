@@ -145,6 +145,28 @@ describe('reactive/WebSocket atomic commit context reads', () => {
     globalThis.WebSocket = originalWebSocket;
   });
 
+  it('preserves a conditional update through the durable envelope and WebSocket frame', async () => {
+    const client = createClient();
+    try {
+      await client.ready();
+      const request = {
+        idempotencyKey: 'conditional-commit',
+        operations: [{ action: 'update' as const, model: 'notes', id: 'note-1',
+          data: { status: 'reviewed' }, where: { status: 'ready' } }],
+        wait: 'confirmed' as const,
+      };
+      await client.commits.create(request);
+      const commit = sockets.flatMap(socket => socket.sent.map(raw => JSON.parse(raw)))
+        .find(frame => frame.type === 'commit' && frame.payload.clientTxId === request.idempotencyKey);
+      expect(commit.payload.operations[0].where).toEqual({ status: 'ready' });
+      await expect(client.commits.create({ ...request, operations: [
+        { ...request.operations[0], where: { status: 'different' } },
+      ] })).rejects.toMatchObject({ code: 'idempotency_conflict' });
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it('resolves a captured row into canonical reads on the commit frame', async () => {
     const client = createClient();
     try {

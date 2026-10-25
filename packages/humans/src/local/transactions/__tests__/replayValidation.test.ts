@@ -36,6 +36,8 @@ import type {
   TransactionFailureDetails,
 } from '../../interfaces/index.js';
 import { noopObservability } from '../../RuntimeContext.js';
+import { appendContextOperation, prepareContextOperation, textDomain, textHistorySchema } from '@abloatai/transaction/commit';
+import { fieldIntentSchema } from '../operations/intent.js';
 
 const VALID_ROW = {
   id: 'tx_1',
@@ -151,6 +153,52 @@ describe('MutationQueue.loadPersistedTransactions', () => {
     // Exactly ONE capture: the corrupt row. The 'queue' neighbor is expected.
     expect(captured).toHaveLength(1);
     expect(captured[0]?.context).toBe('deserialize-persisted-transaction');
+    queue.dispose();
+  });
+
+  it('restores a chained field context from the primary journal before preparing its actual basis', async () => {
+    const scope = { namespace: 'field-journal', organizationId: 'org_1', participantId: 'user_1' };
+    const base = { epoch: 'epoch', version: 0, value: 'ab' };
+    const context = appendContextOperation(textDomain, appendContextOperation(textDomain, { snapshot: base, pending: [] }, 'parent', ['A']), 'child', [1, 'B']);
+    const fieldIntent = fieldIntentSchema.parse({ kind: 'text', field: 'title', editId: 'child', context });
+    const row = { id: 'pending-mutation:child', type: 'pending_mutation', storageVersion: 2, scope, timestamp: Date.now(), mutation: {
+      mutationId: 'child', type: 'update', modelName: 'Item', undoScopeId: 'original-undo-scope', modelData: { id: 'item_1', title: 'ABab' },
+      timestamp: new Date().toISOString(), capturedChanges: { title: { $text: { id: 'child', epoch: 'epoch', baseVersion: 0, operation: [1, 'B'] } } }, fieldIntent,
+    } };
+    const database = fakeDatabase({ getPersistedTransactions: () => Promise.resolve([row]) });
+    const queue = new MutationQueue({ enablePersistence: true, batchDelay: 60_000 });
+    await queue.setCommitOutboxScope(scope);
+    await queue.loadPersistedTransactions(database);
+    const restored = queue.getOutstandingTransactions()[0];
+    expect(restored?.confirmation).toBeInstanceOf(Promise);
+    expect(queue.confirmationFor('Item', 'item_1')).toBe(restored?.confirmation);
+    expect(restored?.fieldIntent).toEqual(fieldIntent);
+    expect(restored?.context.undoScopeId).toBe('original-undo-scope');
+    const history = textHistorySchema.parse({ base, edits: [
+      { id: 'remote', epoch: 'epoch', version: 1, operation: ['R'] },
+      { id: 'parent', epoch: 'epoch', version: 2, operation: [1, 'A'] },
+    ] });
+    const saved = fieldIntentSchema.parse(restored?.fieldIntent);
+    if (saved.kind !== 'text') throw new Error('Expected the text journal context');
+    expect(prepareContextOperation(textDomain, saved.context, history, saved.editId)).toMatchObject({ baseVersion: 2, operation: [2, 'B'] });
+    expect(row.mutation.fieldIntent).toEqual(fieldIntent);
+    queue.dispose();
+    const foreign = new MutationQueue({ enablePersistence: true, batchDelay: 60_000 });
+    await foreign.setCommitOutboxScope({ ...scope, participantId: 'another-user' });
+    await foreign.loadPersistedTransactions(database);
+    expect(foreign.getOutstandingTransactions()).toHaveLength(0);
+    expect((await database.getPersistedTransactions())[0]).toEqual(row);
+    foreign.dispose();
+  });
+
+  it('holds unresolved legacy field state rather than silently leaving it outside the model queue', async () => {
+    const record = { id: 'operation-buffer:legacy', type: 'operation_buffer', state: { pending: [{ id: 'local', operation: ['unsent'] }], inFlight: null } };
+    const database = fakeDatabase({ getPersistedTransactions: () => Promise.resolve([VALID_ROW, record]) });
+    const queue = new MutationQueue({ enablePersistence: true, batchDelay: 60_000 });
+    await expect(queue.loadPersistedTransactions(database)).rejects.toMatchObject({ code: 'stale_context' });
+    await expect(queue.update(createItemFixture(), { userId: 'user_1', organizationId: 'org_1' }, { title: 'newer' })).rejects.toMatchObject({ code: 'stale_context' });
+    expect(queue.getOutstandingTransactions()).toHaveLength(0);
+    expect((await database.getPersistedTransactions())[1]).toEqual(record);
     queue.dispose();
   });
 });

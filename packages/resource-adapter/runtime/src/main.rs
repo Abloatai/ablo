@@ -282,12 +282,20 @@ async fn connection(server: Arc<Server>, client: UnixStream) -> io::Result<()> {
     }
 }
 
+fn execution_slots(value: Option<&str>) -> io::Result<usize> {
+    let slots = value.unwrap_or("8").parse::<usize>().map_err(io::Error::other)?;
+    if !(1..=64).contains(&slots) {
+        return Err(io::Error::other("execution slots must be from 1 to 64"));
+    }
+    Ok(slots)
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 3 {
+    if args.len() != 3 && args.len() != 4 {
         return Err(io::Error::other(
-            "usage: coordinator PUBLIC_SOCKET PRIVATE_BACKEND",
+            "usage: coordinator PUBLIC_SOCKET PRIVATE_BACKEND [EXECUTION_SLOTS]",
         ));
     }
     let private = std::fs::metadata(std::path::Path::new(&args[2]).parent().unwrap())?;
@@ -317,7 +325,7 @@ async fn main() -> io::Result<()> {
         .keys()
         .next()
         .ok_or_else(|| io::Error::other("workers required"))?;
-    let backend = Arc::new(Backend::new(args[2].clone()));
+    let backend = Arc::new(Backend::new(args[2].clone(), execution_slots(args.get(3).map(String::as_str))?));
     let (events, _) = broadcast::channel(256);
     let server = Arc::new(Server {
         backend: backend.clone(),
@@ -368,10 +376,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn execution_capacity_requires_a_bounded_host_value() {
+        assert_eq!(execution_slots(None).unwrap(), 8);
+        assert_eq!(execution_slots(Some("10")).unwrap(), 10);
+        for value in ["0", "65", "-1", "1.5", "invalid"] {
+            assert!(execution_slots(Some(value)).is_err());
+        }
+    }
+
+    #[test]
     fn peer_identity_cannot_be_overridden_by_a_worker() {
         let (events, _) = broadcast::channel(1);
         let server = Server {
-            backend: Arc::new(Backend::new(String::new())),
+            backend: Arc::new(Backend::new(String::new(), 8)),
             workers: HashMap::from([
                 (
                     1001,

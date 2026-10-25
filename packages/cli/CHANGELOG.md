@@ -1,5 +1,15 @@
 # @abloatai/cli
 
+## 0.67.0
+
+### SDK 0.67 accompanies the command-line tools
+
+The CLI uses the matching 0.67.0 SDK packages. Its bundled documentation covers
+versioned text and counter operations, reactive editor migration, and browser
+persistence recovery. Run ablo docs migration before upgrading an application;
+the reactive editor changes require application decisions and are not automatic
+rewrites.
+
 ## 0.66.17
 
 This release uses the matching 0.66.17 browser and transaction packages.

@@ -74,6 +74,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY,owner TEXT NOT NULL,operation TEXT);
             """)
             with self.db:
+                if "publication" not in {row["name"] for row in self.db.execute("PRAGMA table_info(operations)")}:
+                    self.db.execute("ALTER TABLE operations ADD COLUMN publication TEXT")
                 for key, value in [("workspace", workspace), ("secret", uuid.uuid4().hex)]:
                     self.db.execute("INSERT OR IGNORE INTO meta VALUES (?,?)", (key, value))
                 if self.meta("workspace") != workspace:
@@ -253,7 +255,7 @@ class Store:
                 raise Rejected("idempotency_conflict")
             return previous, False
         uid = self.identities.allocate(self.meta("workspace"), owner)
-        self.db.execute("INSERT INTO operations VALUES (?,?,?,?,'running',NULL)", (operation, owner, uid, intent))
+        self.db.execute("INSERT INTO operations(id,owner,uid,intent,status,receipt) VALUES (?,?,?,?,'running',NULL)", (operation, owner, uid, intent))
         reads = [(read, self.decode_evidence(owner, read["evidence"])) for read in request.get("reads", [])]
         for read, payload in reads:
             if read["resource"] != payload["kind"] + ":" + payload["path"]:
@@ -295,6 +297,9 @@ class Store:
         if content is not None and len(content) > 16 * 1024 * 1024:
             raise Rejected("file_too_large", [path])
         self.capture(operation, path)
+        original = self.file(path, operation)
+        if original is None or original["kind"] != kind:
+            self.capture(operation, posixpath.dirname(path))
         self.db.execute("INSERT OR REPLACE INTO staging VALUES (?,?,?,?,?,?)", (operation, path, kind, content, mode, time.time()))
 
     def finish(self, operation, status, detail):
@@ -327,16 +332,45 @@ class Store:
             snapshot.close()
         return receipt
 
-    def publish(self, operation, detail, refs=None):
-        _, request = self.validate(operation)
+    def changes(self, operation):
         changes = []
         for row in self.db.execute("SELECT * FROM staging WHERE operation=?", (operation,)).fetchall():
             original = self.file(row["path"])
             if (not original and row["kind"] == "deleted") or (original and all(original[key] == row[key] for key in ("kind", "content", "mode"))):
                 continue
             changes.append((row, original))
+        return changes
+
+    def freeze_publication(self, operation):
+        self.validate(operation)
+        changes = self.changes(operation)
+        values = [{"path": row["path"], "kind": row["kind"], "mode": row["mode"],
+                   "sha256": hashlib.sha256(row["content"] or b"").hexdigest()} for row, _ in changes]
+        values.sort(key=lambda value: value["path"])
+        premises = [dict(row) for row in self.db.execute("SELECT path,kind,revision FROM dependencies WHERE operation=? ORDER BY kind,path", (operation,))]
+        return {"version": 1, "digest": hashlib.sha256(canonical({"changes": values, "premises": premises}).encode()).hexdigest(),
+                "premises": premises,
+                "paths": [value["path"] for value in values], "claims": []}
+
+    def publish(self, operation, detail, refs=None, publication=None):
+        row, request = self.validate(operation)
+        changes = self.changes(operation)
+        if publication is not None:
+            current = self.freeze_publication(operation)
+            recorded = json.loads(row["publication"] or "null")
+            if (not recorded or recorded != publication or current["digest"] != publication["digest"]
+                    or current["paths"] != publication["paths"]):
+                raise Rejected("stale_context")
+            exact = {claim["resource"]: claim for claim in publication["claims"]}
+            if set(exact) != {"file:" + path for path in current["paths"]}:
+                raise Rejected("claim_required", current["paths"])
+            for resource, claim in exact.items():
+                held = self.authorize(row["owner"], resource, claim["claim"])
+                if held["fence"] != claim["fence"]:
+                    raise Rejected("claim_lost", [resource])
+            detail = {**detail, "publication": publication}
         # Check the entire net diff before writing any published bytes or events.
-        if request.get("action") == "run" and not any(claim["resource"].startswith("ref:") for claim in request["claims"]):
+        if publication is None and request.get("action") == "run" and not any(claim["resource"].startswith("ref:") for claim in request["claims"]):
             claimed = {claim["resource"] for claim in request["claims"]}
             unclaimed = [row["path"] for row, _ in changes if "file:" + row["path"] not in claimed]
             if unclaimed:

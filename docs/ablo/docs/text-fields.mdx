@@ -1,0 +1,106 @@
+---
+title: "Versioned text fields"
+description: "Preserve concurrent plain-text edits using versioned operations and recover pending intent explicitly."
+---
+
+Declare `field.text()` when concurrent writers need to preserve insert/delete
+intent within one plain-text value. Ordinary `field.string()` fields keep their
+replacement and stale-write behavior.
+
+This opt-in path currently supports Ablo-owned database and log planes.
+Versioned text edits on connected customer sources are rejected. The server must have the
+versioned-text migration installed before this field is enabled.
+
+## Open a field buffer
+
+```ts
+import Ablo from '@abloatai/ablo';
+import { defineSchema, model, field } from '@abloatai/ablo/schema';
+
+const schema = defineSchema({
+  documents: model({ title: field.string(), body: field.text() }),
+});
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+const body = await ablo.documents.text({ id: 'document-1', field: 'body' });
+await body.edit(['Hello ']);
+console.log(body.value); // The optimistic text, including your pending edits.
+await body.flush();
+```
+
+The row must already exist with a string in the field. A text field is required
+and non-null. Creation still accepts a plain string; subsequent edits use
+versioned operations. Update every writer before changing an existing string
+field to `field.text()`: whole-value updates to that field will be rejected.
+
+Text shares its commit and reconciliation lifecycle with
+[integer counters](/operation-fields). Reactive editors read the normal
+observable row and enqueue through the normal durable model mutation path.
+`edit` stages immediately; `flush` waits for authoritative confirmation. HTTP
+editors are explicit staging buffers and send their unsent edits on `flush`.
+Retries preserve sealed identity and payload. Validation and stale-basis
+failures surface to the caller.
+
+## Operations and undo
+
+An operation traverses the original value. A positive number retains that many
+Unicode code points, a string inserts text, and `{ d: count }` deletes code
+points. `{ d: 'text' }` additionally checks the deleted contents. For example,
+`[1, { d: '🤖' }, '🌍']` changes `a🤖b` to `a🌍b`.
+
+Positions count code points, not JavaScript UTF-16 offsets or grapheme clusters.
+Convert editor offsets before submitting them. A value is limited to 1,000,000
+UTF-16 code units, and an operation to 4,096 components.
+
+The humans client refreshes automatically on row invalidation, catch-up and
+bootstrap. HTTP callers use `await body.refresh()` when observing a change or
+polling. It rebases pending edits and undo/redo against accepted operations
+without discarding unsent edits.
+
+Reactive edits enter the ordinary UndoScope alongside model value changes.
+Its inverses use accepted operation history so undo preserves collaborators'
+intervening text. A standalone HTTP buffer instead exposes `undo()`/`redo()`,
+followed by `flush()`; it has no reactive model or UndoScope.
+
+## Persistence and recovery
+
+Reactive edits use normal client persistence and the primary mutation journal.
+Chained edits retain their authoring context until their actual server bases are
+known. Sealing consumes the primary records into the immutable commit envelope.
+Disposing and reopening an editor does not create another pending-state owner.
+
+For standalone HTTP buffers, pass `state` to restore `body.exportState()` and a
+`persist: async state => ...` callback to save it. That callback runs before
+dispatch and after acknowledgement; a failed save prevents dispatch. Without a
+callback, unsent HTTP buffer edits remain in memory. Their commit outbox protects
+only dispatched requests. Scope any saved buffer to its account, model, row and
+field. Reactive editors reject these buffer restoration options: recover
+unresolved legacy buffers with the previous SDK before upgrading.
+
+The operation journal retains text content and uses the row's current read
+permission. It is not a redaction mechanism. The engine's `sync_text_fields`
+table is reserved and cannot be exposed as an application model.
+
+The server retains a checkpoint and up to 256 operations per field. It also
+checkpoints histories above 8 MiB while retaining the latest operation, so large
+edits can shorten the offline window. A missing basis or changed epoch rejects
+with `stale_context` and leaves the saved pending edits available for explicit
+recovery. An in-flight edit may already have been accepted: inspect its commit
+by id before deciding how to recover it, rather than blindly applying it again.
+
+An out-of-band database replacement that disagrees with retained history is
+preserved. Edits against the old value reject; the server does not silently
+reset that history or merge over the replacement. Recovering such a fork
+requires an explicit new base outside this first API. Value comparison cannot
+detect an external change that returns to the exact same text.
+
+Call `body.dispose()` when finished to release the editor view and its cached
+accepted basis. Pending primary writes remain journaled and continue through
+the queue. The reactive client shares one active editor per field. Background
+reconciliation failures are visible through `body.error` and client sync status.
+
+One commit may carry semantic operations on distinct rows, with one field
+operation per semantic row. See [Operation fields](/operation-fields#atomic-operations-on-distinct-rows)
+for atomic composition through the existing commit API. Claims, fencing, authorization and
+product validation remain in the normal commit path. Text merge does not
+establish business validity, acquire a claim, or merge rich-text formatting.

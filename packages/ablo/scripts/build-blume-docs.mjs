@@ -82,6 +82,8 @@ const TITLES = {
   groups: 'Groups and shared context',
   'concurrency-convention': 'Concurrency Convention',
   'schema-contract': 'Schema Contract',
+  'operation-fields': 'Operation fields',
+  'text-fields': 'Versioned text fields',
   sessions: 'Sessions',
   'customer-organizations': 'Serving Many Customers',
   agents: 'Agents',

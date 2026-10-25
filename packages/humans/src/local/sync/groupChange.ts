@@ -28,6 +28,8 @@ import type {
  * store that supplies them.
  */
 export interface GroupChangeContext {
+  /** Cancel delayed operation projections before any security clear. */
+  clearOperationSession?(): void;
   /**
    * Local persistence. Performs the security clear, reads and writes the
    * subscription metadata, and sets the flag that forces a full bootstrap.
@@ -114,6 +116,7 @@ async function clearForUnknownGroupChange(
   );
   // Revoked data must not persist if the device goes offline before the
   // re-bootstrap, the same reasoning as the explicit removed-groups path.
+  ctx.clearOperationSession?.();
   await ctx.database.clear();
   ctx.objectPool.clear();
   ctx.forceFullRebootstrap();
@@ -172,6 +175,7 @@ export async function handleSyncGroupChange(
   // cannot persist should the device go offline before the re-bootstrap
   // completes.
   if (payload.removedGroups.length > 0) {
+    ctx.clearOperationSession?.();
     await ctx.database.clear();
     ctx.objectPool.clear();
     runtimeOf(ctx).logger.info('[BaseSyncedStore] Cleared cached data due to revoked sync groups', {
@@ -242,6 +246,7 @@ export async function handleGroupRemoved(
   // Clear cached data before the re-bootstrap so revoked-group data cannot
   // persist if the device goes offline between receiving this delta and
   // completing the re-bootstrap.
+  ctx.clearOperationSession?.();
   await ctx.database.clear();
   ctx.objectPool.clear();
 
@@ -329,6 +334,7 @@ export async function checkSyncGroupShrinkage(ctx: GroupChangeContext): Promise<
 
       // Clear cached data before the re-bootstrap so revoked-group data cannot
       // persist if the device goes offline first.
+      ctx.clearOperationSession?.();
       await ctx.database.clear();
       ctx.objectPool.clear();
 

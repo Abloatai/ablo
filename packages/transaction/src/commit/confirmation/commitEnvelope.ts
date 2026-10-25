@@ -40,6 +40,7 @@ export const durableCommitOperationSchema = wireCommitOperationSchema
     model: true,
     id: true,
     input: true,
+    where: true,
     transactionId: true,
     claimId: true,
     readAt: true,

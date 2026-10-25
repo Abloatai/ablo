@@ -17,10 +17,12 @@ import { v4 as uuid } from 'uuid';
 import type { LocalModel } from '../../localModelContract.js';
 import type { MutationPersistencePort } from '../../mutationPersistence.js';
 import { globalRuntime } from '../../context.js';
+import { containsFieldIntentAncestor } from '../operations/intent.js';
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import {
   AbloConnectionError,
   AbloIdempotencyError,
+  AbloStaleContextError,
 } from '@abloatai/transaction/errors';
 import {
   LogPosition,
@@ -104,11 +106,10 @@ import {
   update as updateModel,
   type ModelMutationContext,
 } from './modelOperations.js';
-import { enqueueTransaction, type QueueCoalescingContext } from './queueCoalescing.js';
+import { enqueueTransaction, takeNextExecutionBatch as selectExecutionBatch, type ExecutionQueueContext } from './executionQueue.js';
 import { processBatch, type BatchProcessingContext } from './batchProcessing.js';
-import { handleFailure, type FailureHandlingContext } from './failureHandling.js';
+import { handleFailure, transientRetryDelayMs, type FailureHandlingContext } from './failureHandling.js';
 import { handleConflict as resolveConflict, isPermanentError as classifyPermanentError, isDefinitiveRejection as classifyDefinitiveRejection, type ConflictResolutionContext } from './failurePolicy.js';
-import { takeNextExecutionBatch as selectExecutionBatch } from './executionSelection.js';
 import { scheduleProcessing as scheduleProcessingExternal, type ProcessingSchedulerContext } from './processingScheduler.js';
 import { restoreDurableCommits as restoreDurableCommitsExternal, type DurableCommitRestoreContext } from './durableCommitRestore.js';
 
@@ -231,6 +232,7 @@ export class MutationQueue extends EventEmitter {
     model: LocalModel;
     capturedChanges?: Record<string, unknown>;
     writeOptions?: WriteOptions;
+    origin?: import('./commitPayload.js').MutationOrigin;
   }[] = [];
   private pendingPersistenceStages: {
     transaction: QueuedMutation;
@@ -254,12 +256,6 @@ export class MutationQueue extends EventEmitter {
   private createdTransactions: QueuedMutation[] = [];
   private commitScheduled = false;
 
-  // Per-model in-flight tracking and merge buffer
-  private inFlightByModel = new Set<string>();
-  private pendingMergeByModel = new Map<
-    string,
-    { data: MutationInput; sourceMutationIds: string[] }
-  >();
   private deferredDeletesByCreate = new Map<string, QueuedMutation[]>();
 
   // Commit lane: pre-built atomic multi-op envelopes from `ablo.commits.create()`.
@@ -268,11 +264,12 @@ export class MutationQueue extends EventEmitter {
   private commitLane: CommitTransaction[] = [];
   private commitStore = new Map<string, CommitTransaction>();
   /**
-   * Small race buffer for authoritative echoes that arrive before the queued
-   * mutation receipt. The forward and WAL stream are independent channels, so
-   * either can win without changing the confirmation result.
+   * Retain verified receipts separately from echoes that arrived before acceptance.
+   * A partial source echo only triggers verification of the whole stored batch.
    */
   private recentDeltaCorrelations = new Map<string, number>();
+  private recentSourceEchoes = new Map<string, number>();
+  private sourceConfirmationInFlight = new Set<string>();
   /**
    * Client-facing confirmation deadlines for source-forwarded writes. These
    * timers settle only the caller waiting for `confirmed`; the accepted write
@@ -284,7 +281,8 @@ export class MutationQueue extends EventEmitter {
   private commitProcessing = false;
   private commitRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private lastCommitSequence = 0;
-  private durableReplayBlock: AbloIdempotencyError | null = null;
+  private durableReplayBlock: Error | null = null;
+  private prepareFieldIntent?: (transaction: QueuedMutation) => Promise<MutationInput>;
   /** Browser-backed strict outbox; absent for standalone/in-memory consumers. */
   private commitOutbox: DurableWriteStore | null = null;
   private commitOutboxScope: CommitOutboxScope | null = null;
@@ -327,6 +325,7 @@ export class MutationQueue extends EventEmitter {
       persistDurableCommitAcceptance: (envelope, result) => this.persistDurableCommitAcceptance(envelope, result),
       removeDurableCommit: (idempotencyKey) => this.removeDurableCommit(idempotencyKey),
       queuedCommitEchoSyncId: (transaction) => this.queuedCommitEchoSyncId(transaction),
+      reconcileSourceCommit: (envelope, correlationId) => { void this.reconcileSourceCommit(envelope, correlationId); },
       completeQueuedCommit: (transaction, syncId) => { this.completeQueuedCommit(transaction, syncId); },
       scheduleReplicationLagTimeout: (transactionId, clientTxId, correlationId) => { this.scheduleReplicationLagTimeout(transactionId, clientTxId, correlationId); },
       noteAck: (syncId) => { this.noteAck(syncId); },
@@ -390,8 +389,6 @@ export class MutationQueue extends EventEmitter {
       cancelUnsentCreateForDelete: (transaction) => this.cancelUnsentCreateForDelete(transaction),
       completeLocalDelete: (model, context, writeOptions, sourceMutationIds) => this.completeLocalDelete(model, context, writeOptions, sourceMutationIds),
       cancelTransactionsForModel: (modelId, type) => this.cancelTransactionsForModel(modelId, type),
-      pendingMergeByModel: this.pendingMergeByModel,
-      inFlightByModel: this.inFlightByModel,
       findCreateBarrierForDelete: (modelName, modelId) => this.findCreateBarrierForDelete(modelName, modelId),
       deferDeleteUntilCreateSettles: (create, transaction) => { this.deferDeleteUntilCreateSettles(create, transaction); },
       logger: this.runtime.logger,
@@ -402,14 +399,11 @@ export class MutationQueue extends EventEmitter {
     };
   }
 
-  private get queueCoalescingContext(): QueueCoalescingContext {
+  private get executionQueueContext(): ExecutionQueueContext {
     return {
       executionQueue: this.executionQueue,
-      inFlightByModel: this.inFlightByModel,
-      pendingMergeByModel: this.pendingMergeByModel,
       ensureDerivedFields: (transaction) => { this.ensureDerivedFields(transaction); },
       scheduleProcessing: (immediate) => { this.scheduleProcessing(immediate); },
-      storeRemove: (transactionId) => { this.store.remove(transactionId); },
     };
   }
 
@@ -424,14 +418,38 @@ export class MutationQueue extends EventEmitter {
       takeNextExecutionBatch: () => this.takeNextExecutionBatch(),
       ensureDerivedFields: (transaction) => { this.ensureDerivedFields(transaction); },
       ensureCommitEnvelope: (batch) => this.ensureCommitEnvelope([...batch]),
+      prepareUnsealedOperations: async (batch) => {
+        for (const transaction of batch) {
+          if (!transaction.fieldIntent || transaction.commitEnvelope || transaction.durableEnvelope) continue;
+          await this.waitForOperationAncestors(transaction.modelName, transaction.modelId, transaction.fieldIntent.field);
+          if (!this.prepareFieldIntent) throw new AbloStaleContextError('The operation runtime is unavailable; the pending mutation is retained.', { code: 'stale_context' });
+          transaction.data = await this.prepareFieldIntent(transaction);
+        }
+      },
+      holdUnsealedOperations: (batch, error) => {
+        if (!this.isPermanentError(error)) {
+          // An unavailable basis cannot discard or reject unsealed intent.
+          for (const transaction of batch) {
+            transaction.attempts++;
+            this.store.updateStatus(transaction.id, 'pending');
+          }
+          this.scheduleRetry(() => {
+            for (const transaction of batch) this.enqueue(transaction);
+          }, transientRetryDelayMs(error, Math.max(...batch.map((transaction) => transaction.attempts)), this.config.retryBackoff));
+          return;
+        }
+        this.durableReplayBlock = error;
+        for (const transaction of batch) {
+          this.store.updateStatus(transaction.id, 'pending');
+          this.executionQueue.push(transaction);
+          this.confirmationResolvers.get(transaction.id)?.reject(error);
+          this.confirmationResolvers.delete(transaction.id);
+        }
+        this.emit('operations:blocked', { error, transactions: batch });
+      },
       executingCount: this.executingCount,
       setExecutingCount: (value) => { this.executingCount = value; },
-      inFlightByModel: this.inFlightByModel,
-      pendingMergeByModel: this.pendingMergeByModel,
-      generateId: () => this.generateId(),
-      computePriorityScore: (type, modelName) => this.computePriorityScore(type, modelName),
       store: this.store,
-      enqueue: (transaction) => { this.enqueue(transaction); },
       optimisticUpdates: this.localMutationPort.updates,
       commitMissingIds: this.commitMissingIds,
       sourceMutationIdsFor: (batch) => this.sourceMutationIdsFor(batch),
@@ -448,6 +466,7 @@ export class MutationQueue extends EventEmitter {
       completeQueuedCommit: (transaction, syncId) => { this.completeQueuedCommit(transaction, syncId); },
       queuedCommitMatchesCorrelation: (transaction, correlationId) => this.queuedCommitMatchesCorrelation(transaction, correlationId),
       recentDeltaCorrelations: this.recentDeltaCorrelations,
+      reconcileSourceCommit: (envelope, correlationId) => { void this.reconcileSourceCommit(envelope, correlationId); },
       lastSeenSyncId: this.lastSeenSyncId,
       scheduleProcessing: (immediate) => { this.scheduleProcessing(immediate); },
       handleFailure: (transaction, error) => this.handleFailure(transaction, error),
@@ -839,7 +858,7 @@ export class MutationQueue extends EventEmitter {
       this.enqueueModelMutation(
         mutation.type,
         mutation.model,
-        { userId: scope.participantId, organizationId: scope.organizationId },
+        { userId: scope.participantId, organizationId: scope.organizationId, ...(mutation.origin?.undoScopeId ? { undoScopeId: mutation.origin.undoScopeId } : {}) },
         mutation.capturedChanges,
         mutation.writeOptions,
       ),
@@ -850,9 +869,10 @@ export class MutationQueue extends EventEmitter {
     model: LocalModel,
     capturedChanges?: Record<string, unknown>,
     writeOptions?: WriteOptions,
+    origin?: import('./commitPayload.js').MutationOrigin,
   ): void {
     this.runtime.logger.debug('[MutationQueue] Deferring mutation until identity is resolved', { type, model: model.getModelName(), modelId: model.id });
-    this.deferredMutations.push({ type, model, capturedChanges, writeOptions });
+    this.deferredMutations.push({ type, model, capturedChanges, writeOptions, origin });
   }
 
   async enqueueModelMutation(
@@ -861,10 +881,11 @@ export class MutationQueue extends EventEmitter {
     context: UserContext,
     capturedChanges?: Record<string, unknown>,
     writeOptions?: WriteOptions,
+    fieldIntent?: QueuedMutation['fieldIntent'],
   ): Promise<QueuedMutation> {
     switch (type) {
       case 'create': return this.create(model, context, writeOptions);
-      case 'update': return this.update(model, context, capturedChanges, writeOptions);
+      case 'update': return this.update(model, context, capturedChanges, writeOptions, undefined, fieldIntent);
       case 'delete': return this.delete(model, context, writeOptions);
       case 'archive': return this.archive(model, context, writeOptions);
     }
@@ -1046,7 +1067,7 @@ export class MutationQueue extends EventEmitter {
   }
 
   private takeNextExecutionBatch(): QueuedMutation[] {
-    const selected = selectExecutionBatch(this.executionQueue, this.config.maxBatchSize);
+    const selected = selectExecutionBatch(this.executionQueue, this.config.maxBatchSize, this.getOutstandingTransactions());
     this.executionQueue = selected.remaining;
     return selected.batch;
   }
@@ -1253,6 +1274,10 @@ export class MutationQueue extends EventEmitter {
     this._mutationExecutor = executor;
   }
 
+  setFieldIntentPreparation(prepare: (transaction: QueuedMutation) => Promise<MutationInput>): void {
+    this.prepareFieldIntent = prepare;
+  }
+
   // ============================================================================
   // Microtask-based transaction staging
   // ============================================================================
@@ -1345,6 +1370,7 @@ export class MutationQueue extends EventEmitter {
   }
 
   private async drainPendingInternal(): Promise<void> {
+    this.assertDurableReplayOpen();
     // Explicit flushes and reconnects are merely another trigger for the one
     // model-mutation execution lane. A second sealing implementation can race
     // the scheduled lane, consume its journal sources, and later dispatch the
@@ -1353,6 +1379,9 @@ export class MutationQueue extends EventEmitter {
     this.commitCreatedTransactions();
     await this.processCommitLane();
     while (this.executionQueue.length > 0 || this.modelProcessingPromise) {
+      this.assertDurableReplayOpen();
+      // Backoff owns blocked rows; spinning here would starve its retry timer.
+      if (!this.modelProcessingPromise && selectExecutionBatch(this.executionQueue, this.config.maxBatchSize, this.getOutstandingTransactions()).batch.length === 0) break;
       await this.processBatch();
     }
   }
@@ -1371,8 +1400,9 @@ export class MutationQueue extends EventEmitter {
     precomputedChanges?: Record<string, unknown>,
     writeOptions?: WriteOptions,
     sourceMutationId?: string,
+    fieldIntent?: QueuedMutation['fieldIntent'],
   ): Promise<QueuedMutation> {
-    return updateModel(this.modelMutationContext, model, context, precomputedChanges, writeOptions, sourceMutationId);
+    return updateModel(this.modelMutationContext, model, context, precomputedChanges, writeOptions, sourceMutationId, fieldIntent);
   }
 
   async delete(
@@ -1414,7 +1444,8 @@ export class MutationQueue extends EventEmitter {
   }
 
   private enqueue(transaction: QueuedMutation): void {
-    enqueueTransaction(this.queueCoalescingContext, transaction);
+    this.attachConfirmation(transaction);
+    enqueueTransaction(this.executionQueueContext, transaction);
   }
 
   private scheduleProcessing(immediate = false): void {
@@ -1439,13 +1470,13 @@ export class MutationQueue extends EventEmitter {
     await tracked;
   }
 
-  private rememberDeltaCorrelation(correlationId: string, syncId: number): void {
+  private rememberDeltaCorrelation(correlationId: string, syncId: number, target = this.recentDeltaCorrelations): void {
     // Refresh insertion order when a replay repeats the same correlation id.
-    this.recentDeltaCorrelations.delete(correlationId);
-    this.recentDeltaCorrelations.set(correlationId, syncId);
-    if (this.recentDeltaCorrelations.size <= 2_048) return;
-    const oldest = this.recentDeltaCorrelations.keys().next().value;
-    if (typeof oldest === 'string') this.recentDeltaCorrelations.delete(oldest);
+    target.delete(correlationId);
+    target.set(correlationId, syncId);
+    if (target.size <= 2_048) return;
+    const oldest = target.keys().next().value;
+    if (typeof oldest === 'string') target.delete(oldest);
   }
 
   private queuedCommitEchoSyncId(tx: CommitTransaction): number | undefined {
@@ -1466,9 +1497,7 @@ export class MutationQueue extends EventEmitter {
     this.clearReplicationLagState(tx.id);
     tx.lastSyncId = syncId;
     tx.status = 'completed';
-    // The queued receipt was only acceptance. The correlated source echo is
-    // the first definitive success and therefore the point where the durable
-    // replay envelope may be removed.
+    // Only the server's complete receipt permits deleting the durable envelope.
     void this.removeDurableCommit(tx.id);
     this.emitCommitLifecycle('transaction:completed', tx);
     this.emitCommitLifecycle(`transaction:completed:${tx.id}`, tx);
@@ -1476,22 +1505,66 @@ export class MutationQueue extends EventEmitter {
 
   /**
    * Confirms awaiting writes. Hosted/anomaly receipts keep their sync-id
-   * threshold semantics; queued forwards require the exact server correlation.
+   * threshold semantics; source echoes trigger verification of their stored batch.
    */
   onDeltaReceived(
     syncId: number,
     _transactionId?: string,
     correlationId?: string,
   ): void {
-    if (correlationId) this.rememberDeltaCorrelation(correlationId, syncId);
-    const correlatedModelTransactions = correlationId
-      ? this.store.getByStatus('awaiting_delta').filter(
-          (tx) =>
-            tx.requiresCorrelatedDelta === true &&
-            tx.correlationId !== undefined &&
-            tx.correlationId === correlationId,
-        )
-      : [];
+    this.deltaConfirmation.onDeltaReceived(syncId);
+    if (!correlationId) return;
+    this.rememberDeltaCorrelation(correlationId, syncId, this.recentSourceEchoes);
+    const envelopes = new Map<string, DurableCommitEnvelope>();
+    for (const tx of [...this.store.getByStatus('awaiting_delta'), ...this.commitStore.values()]) {
+      if (tx.status === 'awaiting_delta' && tx.correlationId === correlationId && tx.durableEnvelope) {
+        envelopes.set(tx.durableEnvelope.idempotencyKey, tx.durableEnvelope);
+      }
+    }
+    for (const envelope of envelopes.values()) void this.reconcileSourceCommit(envelope, correlationId);
+  }
+
+  private async reconcileSourceCommit(envelope: DurableCommitEnvelope, correlationId: string, attempt = 0): Promise<void> {
+    const key = envelope.idempotencyKey;
+    if (this.disposed || !this.recentSourceEchoes.has(correlationId) || this.sourceConfirmationInFlight.has(key)
+      || this.recentDeltaCorrelations.has(correlationId)) return;
+    this.sourceConfirmationInFlight.add(key);
+    try {
+      let observed: number | undefined;
+      do {
+        observed = this.recentSourceEchoes.get(correlationId);
+        // One echo cannot prove the whole batch; replay asks the durable server receipt.
+        const result = this.parseMutationCommitResult(await this.dispatchCommitBounded(envelope.operations, {
+          idempotencyKey: key,
+          ...(envelope.commitOptions.reads !== undefined ? { reads: envelope.commitOptions.reads } : {}),
+        }));
+        if (this.disposed) return;
+        if (result.correlationId !== correlationId) throw new AbloIdempotencyError(
+          'Source confirmation returned a different correlation.', { code: 'idempotency_conflict' },
+        );
+        if (result.status === 'confirmed' && result.lastSyncId > 0) {
+          this.confirmSourceCommit(result.lastSyncId, correlationId);
+          return;
+        }
+      } while (this.recentSourceEchoes.get(correlationId) !== observed);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this.runtime.logger.debug('[MutationQueue] Source receipt verification deferred', { idempotencyKey: key, message: error.message });
+      // An accepted write stays pending; a failed status check must not roll it back.
+      if (!this.disposed && !this.isPermanentError(error) && attempt < this.config.maxRetries) {
+        this.scheduleRetry(() => { void this.reconcileSourceCommit(envelope, correlationId, attempt + 1); },
+          transientRetryDelayMs(error, attempt + 1, this.config.retryBackoff));
+      }
+    } finally {
+      this.sourceConfirmationInFlight.delete(key);
+    }
+  }
+
+  private confirmSourceCommit(syncId: number, correlationId: string): void {
+    this.rememberDeltaCorrelation(correlationId, syncId);
+    const correlatedModelTransactions = this.store.getByStatus('awaiting_delta').filter(
+      (tx) => tx.requiresCorrelatedDelta === true && tx.correlationId === correlationId,
+    );
     this.deltaConfirmation.onDeltaReceived(syncId, correlationId);
     if (correlatedModelTransactions.length > 0) {
       const envelopeIds = new Set<string>();
@@ -1508,7 +1581,6 @@ export class MutationQueue extends EventEmitter {
         if (!envelopeStillAwaiting) void this.removeDurableCommit(envelopeId);
       }
     }
-    if (!correlationId) return;
     for (const tx of this.commitStore.values()) {
       if (tx.status !== 'awaiting_delta') continue;
       if (this.queuedCommitMatchesCorrelation(tx, correlationId)) {
@@ -1656,7 +1728,13 @@ export class MutationQueue extends EventEmitter {
   }
 
   async loadPersistedTransactions(persistence: MutationPersistencePort, sealedMutationIds: ReadonlySet<string> = new Set()): Promise<void> {
-    await loadPersistedTransactions(this.persistenceContext, persistence, sealedMutationIds);
+    try { await loadPersistedTransactions(this.persistenceContext, persistence, sealedMutationIds); }
+    catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this.durableReplayBlock = error;
+      this.emit('operations:blocked', { error, transactions: [] });
+      throw error;
+    }
   }
 
   async restoreDurableCommits(): Promise<Set<string>> {
@@ -1775,10 +1853,20 @@ export class MutationQueue extends EventEmitter {
   }
 
   getOutstandingTransactions(): readonly QueuedMutation[] {
-    return [
-      ...this.store.getByStatus('pending'),
-      ...this.store.getByStatus('executing'),
-    ];
+    return this.store.getAll().filter((tx) =>
+      tx.status === 'pending' || tx.status === 'executing' || tx.status === 'awaiting_delta',
+    );
+  }
+
+  /** A restored descendant cannot be projected before its sealed parent is known. */
+  async waitForOperationAncestors(modelName: string, modelId: string, field: string): Promise<void> {
+    const intents = this.getOutstandingTransactions().filter((tx) => tx.modelName === modelName && tx.modelId === modelId && tx.fieldIntent?.field === field).flatMap((tx) => tx.fieldIntent ? [tx.fieldIntent] : []);
+    for (const restored of this.commitStore.values()) {
+      if (restored.status === 'completed' || !intents.some((intent) => containsFieldIntentAncestor(intent, restored.operations.filter((operation) => operation.id === modelId).map((operation) => operation.input)))) continue;
+      const accepted = this.waitForCommitReceipt(restored.id);
+      void this.processCommitLane();
+      await accepted;
+    }
   }
 
   /** Generates a unique local transaction id. */
@@ -1932,6 +2020,8 @@ export class MutationQueue extends EventEmitter {
     this.createdTransactions = [];
     this.deferredDeletesByCreate.clear();
     this.recentDeltaCorrelations.clear();
+    this.recentSourceEchoes.clear();
+    this.sourceConfirmationInFlight.clear();
     this.commitLane = [];
     this.commitStore.clear();
     this.commitMissingIds.clear();

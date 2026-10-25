@@ -5,6 +5,7 @@ import sys
 from types import SimpleNamespace
 import unittest
 import threading
+import stat
 from unittest.mock import MagicMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "linux"))
@@ -44,3 +45,20 @@ class MountIdentity(unittest.TestCase):
         attributes = module.Filesystem(store, {}).getattr("/source")
         self.assertEqual(attributes["st_mtime"], 1800000000.25)
         self.assertEqual(attributes["st_ctime"], 1800000000.25)
+
+
+    def test_directory_entries_supply_types_without_claiming_child_observations(self):
+        binding = SimpleNamespace(Operations=object, FuseOSError=OSError, fuse_get_context=lambda: (0, 0, 0))
+        spec = importlib.util.spec_from_file_location("directory_types_fixture", Path(__file__).resolve().parents[1] / "linux/filesystem.py")
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"fusepy": binding}):
+            spec.loader.exec_module(module)
+        store = SimpleNamespace(db=MagicMock(), lock=threading.RLock(), capture=Mock(),
+                                children=lambda *_: ["src/file", "src/directory", "src/symlink"],
+                                metadata=lambda path, operation: {"kind": path.split("/")[-1]})
+        filesystem = module.Filesystem(store, {})
+        filesystem.context = lambda: ("operation", "owner")
+        entries = filesystem.readdir("/src", None)
+        self.assertEqual(entries, [".", "..", ("file", {"st_mode": stat.S_IFREG}, 0),
+                                  ("directory", {"st_mode": stat.S_IFDIR}, 0), ("symlink", {"st_mode": stat.S_IFLNK}, 0)])
+        store.capture.assert_called_once_with("operation", "src")
