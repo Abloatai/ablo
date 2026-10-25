@@ -59,9 +59,11 @@ function buildEstablished(paired: InverseOp[]): Map<string, Record<string, unkno
   const map = new Map<string, Record<string, unknown>>();
   for (const op of paired) {
     if (op.kind === 'update') {
-      map.set(op.patch.id, op.patch);
+      map.set(op.patch.id, { ...map.get(op.patch.id), ...op.patch });
+    } else if (op.kind === 'reverse-operation') {
+      map.set(op.id, { ...map.get(op.id), ...op.patch });
     } else if (op.kind === 'updateMany') {
-      for (const p of op.patches) map.set(p.id, p);
+      for (const p of op.patches) map.set(p.id, { ...map.get(p.id), ...p });
     }
   }
   return map;
@@ -158,6 +160,11 @@ export function resolveOps(
       if (patches.length > 0) {
         out.push({ kind: 'updateMany', modelKey: op.modelKey, patches });
       }
+    } else if (op.kind === 'reverse-operation') {
+      const filtered = filterStalePatch(store, { id: op.id, ...op.patch }, established.get(op.id));
+      const changes = { ...filtered };
+      delete changes.id;
+      out.push({ ...op, patch: changes });
     } else {
       // create / createMany / delete / deleteMany — structural, applied as-is.
       out.push(op);

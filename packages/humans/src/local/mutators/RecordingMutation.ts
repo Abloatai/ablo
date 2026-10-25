@@ -1,3 +1,5 @@
+import { fieldOperationUndo } from '../transactions/operations/index.js';
+import type { ModelMetadata } from '@abloatai/transaction/types';
 /**
  * Wraps a {@link Transaction} and records the inverse of every write so the
  * change can be undone. Each write is observed just before it runs, to snapshot
@@ -15,7 +17,7 @@
  * since the schema generates one when the caller omits it.
  */
 
-import type { Schema, InferModel, InferCreate } from '@abloatai/transaction/schema/schema';
+import type { Schema, InferModel, InferCreate, InferUpdate } from '@abloatai/transaction/schema/schema';
 import type { SyncStoreContract } from '../storeContract.js';
 import type { MutateActions } from './mutateActions.js';
 import type { Transaction } from './Transaction.js';
@@ -56,7 +58,7 @@ export function createRecordingMutation<S extends Schema>(
         | MutateActions<S, keyof S['models'] & string>
         | undefined;
       if (!innerMutate) return innerMutate;
-      return wrapMutateForKey(prop, innerMutate, store, inverses, forwards);
+      return wrapMutateForKey(prop, innerMutate, store, inverses, forwards, schema.models[prop]?.fields);
     },
   });
 
@@ -79,6 +81,7 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
   store: SyncStoreContract,
   inverses: InverseOp[],
   forwards: InverseOp[],
+  declaredFields: ModelMetadata['fields'],
 ): MutateActions<S, K> {
   const snapshot = (id: string): Record<string, unknown> | null => {
     const model = store.pool.get(id);
@@ -106,7 +109,7 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
     store.pool.get(id)?.consumeModifiedFields(fieldNames);
   };
 
-  type Patch = { id: string } & Partial<InferModel<S, K>>;
+  type Patch = { id: string } & Partial<InferUpdate<S, K>>;
 
   return {
     // Overloaded — single row or array. The recorder dispatches the
@@ -156,6 +159,17 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
         for (const p of forwardPatches) {
           consumeModifiedFields(p.id, Object.keys(p).filter((k) => k !== 'id'));
         }
+        const operationInverses = forwardPatches.map((p) => fieldOperationUndo(modelKey, p.id, p, prevPatches.find((previous) => previous.id === p.id) ?? {}, declaredFields));
+        if (operationInverses.some(Boolean)) {
+          forwardPatches.forEach((p, index) => {
+            forwards.push({ kind: 'update', modelKey, patch: p });
+            const previous = prevPatches.find((candidate) => candidate.id === p.id);
+            const inverse = operationInverses[index];
+            if (inverse) inverses.push(inverse);
+            else if (previous) inverses.push({ kind: 'update', modelKey, patch: previous });
+          });
+          return updated;
+        }
         forwards.push({ kind: 'updateMany', modelKey, patches: forwardPatches });
         if (prevPatches.length > 0) {
           inverses.push({ kind: 'updateMany', modelKey, patches: prevPatches });
@@ -173,7 +187,7 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
       consumeModifiedFields(id, fields);
       forwards.push({ kind: 'update', modelKey, patch: patchCopy });
       if (prev) {
-        inverses.push({ kind: 'update', modelKey, patch: { id, ...prev } });
+        inverses.push(fieldOperationUndo(modelKey, id, patchCopy, prev, declaredFields) ?? { kind: 'update', modelKey, patch: { id, ...prev } });
       }
       return updated;
     }) as MutateActions<S, K>['update'],

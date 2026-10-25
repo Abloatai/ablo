@@ -13,16 +13,16 @@ import type { ResolveModels as DefaultModels } from '@abloatai/transaction/types
 import { useAbloClient } from './useAbloClient.js';
 import { useReactive } from './useReactive.js';
 
-export type PresenceModelSelector<R extends SchemaRecord, T, C> =
-  (ablo: Ablo<R>) => ModelOperations<T, C>;
+export type PresenceModelSelector<R extends SchemaRecord, T, C, U = C> =
+  (ablo: Ablo<R>) => ModelOperations<T, C, U>;
 
 /**
  * Declare that this component is reading one row and return every live session
  * reading or otherwise acting on that row. Ablo owns the lease, refresh,
  * reconnect, and cleanup mechanics for the component's lifetime.
  */
-export function usePresence<T, C>(
-  modelClient: ModelOperations<T, C>,
+export function usePresence<T, C, U = C>(
+  modelClient: ModelOperations<T, C, U>,
   recordId: string,
   options?: usePresence.Options,
 ): readonly PresenceSession[];
@@ -30,8 +30,9 @@ export function usePresence<
   R extends SchemaRecord = DefaultModels,
   T = Record<string, unknown>,
   C = unknown,
+  U = C,
 >(
-  select: PresenceModelSelector<R, T, C>,
+  select: PresenceModelSelector<R, T, C, U>,
   recordId: string,
   options?: usePresence.Options,
 ): readonly PresenceSession[];
@@ -39,8 +40,9 @@ export function usePresence<
   R extends SchemaRecord = DefaultModels,
   T = Record<string, unknown>,
   C = unknown,
+  U = C,
 >(
-  modelOrSelect: ModelOperations<T, C> | PresenceModelSelector<R, T, C>,
+  modelOrSelect: ModelOperations<T, C, U> | PresenceModelSelector<R, T, C, U>,
   recordId: string,
   options?: usePresence.Options,
 ): readonly PresenceSession[] {
@@ -72,8 +74,8 @@ export function usePresence<
 
 export namespace usePresence {
   export interface Bound<S extends SchemaRecord> {
-    <T, C>(
-      model: ModelOperations<T, C> | PresenceModelSelector<S, T, C>,
+    <T, C, U = C>(
+      model: ModelOperations<T, C, U> | PresenceModelSelector<S, T, C, U>,
       recordId: string,
       options?: Options,
     ): readonly PresenceSession[];

@@ -604,7 +604,7 @@ export type ModelCreateManyParams<CreateInput> = Pick<
   readonly data: readonly CreateInput[];
 };
 
-export interface ModelUpdateParams<T, Fields = T>
+export interface ModelUpdateParams<T, Fields = T, UpdateFields = Fields>
   extends ModelWriteOptions {
   readonly id: string;
   /**
@@ -616,7 +616,7 @@ export interface ModelUpdateParams<T, Fields = T>
    * see {@link Clearable}. `undefined` is not a clear: it is dropped from the
    * payload and the old value survives.
    */
-  readonly data: Clearable<ClaimableFields<Fields>>;
+  readonly data: Clearable<ClaimableFields<UpdateFields>>;
   readonly claim?: Claim<T> | ClaimTargetOptions<Fields> | null;
 }
 

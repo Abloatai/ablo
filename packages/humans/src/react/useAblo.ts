@@ -19,13 +19,13 @@ function reactiveReads<R extends SchemaRecord>(engine: Ablo<R>): AbloReads<R> {
   return engine as AbloReads<R>;
 }
 
-export type ModelClientSelector<R extends SchemaRecord, T, C> =
-  (ablo: AbloReads<R>) => ModelOperations<T, C>;
+export type ModelClientSelector<R extends SchemaRecord, T, C, U = C> =
+  (ablo: AbloReads<R>) => ModelOperations<T, C, U>;
 export type AbloSelector<R extends SchemaRecord, T> = (ablo: AbloReads<R>) => T;
 
-function readModelResult<R extends SchemaRecord, T, C>(
+function readModelResult<R extends SchemaRecord, T, C, U = C>(
   engine: Ablo<R> | null,
-  modelClient: ModelOperations<T, C> | undefined,
+  modelClient: ModelOperations<T, C, U> | undefined,
   id: string | undefined,
   initial: T | undefined,
 ): useAblo.Result<T> {
@@ -49,8 +49,8 @@ export function useAblo<
 >(
   select: AbloSelector<R, T>,
 ): T | undefined;
-export function useAblo<T, C>(
-  modelClient: ModelOperations<T, C>,
+export function useAblo<T, C, U = C>(
+  modelClient: ModelOperations<T, C, U>,
   id: string,
   options?: useAblo.Options<T>,
 ): useAblo.Result<T>;
@@ -58,8 +58,9 @@ export function useAblo<
   R extends SchemaRecord = DefaultModels,
   T = Record<string, unknown>,
   C = unknown,
+  U = C,
 >(
-  select: ModelClientSelector<R, T, C>,
+  select: ModelClientSelector<R, T, C, U>,
   id: string,
   options?: useAblo.Options<T>,
 ): useAblo.Result<T>;
@@ -67,18 +68,19 @@ export function useAblo<
   R extends SchemaRecord = DefaultModels,
   T = Record<string, unknown>,
   C = unknown,
+  U = C,
 >(
-  modelOrSelect: ModelOperations<T, C> | ModelClientSelector<R, T, C> | AbloSelector<R, T>,
+  modelOrSelect: ModelOperations<T, C, U> | ModelClientSelector<R, T, C, U> | AbloSelector<R, T>,
   id?: string,
   options?: useAblo.Options<T>,
 ): useAblo.Result<T> | T | undefined {
   const engine = useAbloClient<R>();
   const initial = options?.initial;
   const isSelectorOnly = typeof modelOrSelect === 'function' && id === undefined;
-  const modelClient: ModelOperations<T, C> | undefined =
+  const modelClient: ModelOperations<T, C, U> | undefined =
     typeof modelOrSelect === 'function' && id !== undefined
       ? engine
-        ? (modelOrSelect(reactiveReads<R>(engine)) as ModelOperations<T, C>)
+        ? (modelOrSelect(reactiveReads<R>(engine)) as ModelOperations<T, C, U>)
         : undefined
       : typeof modelOrSelect === 'function'
         ? undefined
@@ -122,8 +124,8 @@ export function useAblo<
 export namespace useAblo {
   export interface Bound<S extends SchemaRecord> {
     <T>(select: AbloSelector<S, T>): T | undefined;
-    <T, C>(
-      model: ModelOperations<T, C> | ModelClientSelector<S, T, C>,
+    <T, C, U = C>(
+      model: ModelOperations<T, C, U> | ModelClientSelector<S, T, C, U>,
       id: string,
       options?: Options<T>,
     ): Result<T>;

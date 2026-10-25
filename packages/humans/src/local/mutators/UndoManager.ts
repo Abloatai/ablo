@@ -8,12 +8,16 @@
  * ledger grid, and so on — reached through {@link UndoManager.getScope}. Undo in
  * one surface never affects another.
  *
- * Two things to know about its reach. History lives in memory and does not
- * persist across sessions. And if the server rejects a change after it was
- * applied optimistically, the undo stack is not invalidated automatically; call
- * {@link UndoScope.clear} on a sync error if you need strict correctness.
+ * History lives in memory and does not persist across sessions. A rejected
+ * replay retains its group and accepted prefix. An unknown write outcome holds
+ * that history for explicit recovery rather than generating another reversal.
  */
 
+import { fieldOperationUndo, reverseFieldOperation, replaceOperationReversals } from '../transactions/operations/index.js';
+import { isDefinitiveRejection } from '../transactions/mutations/failurePolicy.js';
+import { AbloStaleContextError } from '@abloatai/transaction/errors';
+import type { MutationOrigin } from '../transactions/mutations/commitPayload.js';
+import type { ModelMetadata } from '@abloatai/transaction/types';
 import type { Schema } from '@abloatai/transaction/schema/schema';
 import { getContext } from '../context.js';
 import type { SyncStoreContract, LocalMutation } from '../storeContract.js';
@@ -75,18 +79,20 @@ export interface UndoScopeOptions {
  * add an entry, and {@link UndoScope.undo} / {@link UndoScope.redo} to move
  * through the history.
  */
-/**
- * How long a pending replay-echo marker stays armed before it is pruned. A real
- * echo returns within a couple of local-store round-trips (tens of milliseconds);
- * this is a generous ceiling so that an echo which never arrives — for instance,
- * because the write was skipped while offline — cannot suppress a genuine later
- * edit to the same row indefinitely.
- */
-const REPLAY_ECHO_TTL_MS = 5000;
+type ReplayOperation = Exclude<InverseOp, { kind: 'createMany' | 'updateMany' | 'deleteMany' }>;
+type Reversal = Extract<ReplayOperation, { kind: 'reverse-operation' }>;
+interface ReplayProgress {
+  remaining: ReplayOperation[];
+  reversed: Reversal[];
+  completed: number;
+  baseline: Map<string, Extract<InverseOp, { kind: 'update' }>>;
+  uncertain?: { error: unknown };
+}
 
 export class UndoScope<S extends Schema> {
   private undoStack: UndoEntry[] = [];
   private redoStack: UndoEntry[] = [];
+  private replayProgress = new WeakMap<UndoEntry, ReplayProgress>();
   private readonly maxHistory: number;
   private readonly conflictPolicy: UndoConflictPolicy;
 
@@ -130,13 +136,7 @@ export class UndoScope<S extends Schema> {
   private readonly schemaKeyByAlias = new Map<string, string>();
   /** Unsubscribe from the local-mutation stream. */
   private readonly unsubscribe: () => void;
-  /**
-   * True while undo or redo is replaying operations. A replay writes through the
-   * normal commit path and therefore re-emits on the local-mutation stream; this
-   * flag tells the scope's own listener to ignore those writes so they are not
-   * recorded again.
-   */
-  private replaying = false;
+  private readonly replayOrigin: MutationOrigin = { undoScopeId: crypto.randomUUID() };
   /** Operations collected during the current tick, flushed together as one entry. */
   private batch: { forward: InverseOp; inverse: InverseOp | null }[] = [];
   private flushScheduled = false;
@@ -148,24 +148,6 @@ export class UndoScope<S extends Schema> {
    */
   private group: { label?: string; ops: { forward: InverseOp; inverse: InverseOp | null }[] } | null =
     null;
-  /**
-   * Suppression of a replay's asynchronous echo, keyed by `${modelKey}:${id}`.
-   *
-   * The synchronous {@link UndoScope.replaying} flag catches only echoes
-   * delivered inline while operations are applied. In practice the engine does not
-   * emit a replayed write's echo synchronously: the commit is deferred behind a
-   * local-store write, so the echo arrives on the stream after undo or redo has
-   * already reset `replaying` and pushed its entry. That late echo would be
-   * recorded as a new edit — and recording clears the redo stack, so every undo
-   * would quietly destroy its own redo. To prevent that, the row of each operation
-   * about to be replayed is marked here synchronously, before the write, and one
-   * mark is consumed when the matching mutation arrives, whenever that is. Marks
-   * carry a time-to-live so an echo that never arrives — because the write was
-   * skipped while offline — cannot linger and wrongly suppress a much later, real
-   * edit to the same row.
-   */
-  private readonly pendingReplayEchoes = new Map<string, { count: number; expiresAt: number }>();
-
   constructor(
     private readonly schema: S,
     private readonly store: SyncStoreContract,
@@ -226,74 +208,6 @@ export class UndoScope<S extends Schema> {
     this.record({ label: label ?? g.label, inverses, forwards });
   }
 
-  /** Every `${modelKey}:${id}` a set of ops will touch (all op kinds). */
-  private *replayEchoKeys(ops: InverseOp[]): Iterable<string> {
-    for (const op of ops) {
-      switch (op.kind) {
-        case 'create': {
-          const id = op.data.id;
-          if (typeof id === 'string') yield `${op.modelKey}:${id}`;
-          break;
-        }
-        case 'update':
-          yield `${op.modelKey}:${op.patch.id}`;
-          break;
-        case 'delete':
-          yield `${op.modelKey}:${op.id}`;
-          break;
-        case 'createMany':
-          for (const d of op.data) {
-            const id = d.id;
-            if (typeof id === 'string') yield `${op.modelKey}:${id}`;
-          }
-          break;
-        case 'updateMany':
-          for (const p of op.patches) yield `${op.modelKey}:${p.id}`;
-          break;
-        case 'deleteMany':
-          for (const id of op.ids) yield `${op.modelKey}:${id}`;
-          break;
-      }
-    }
-  }
-
-  /**
-   * Arms echo suppression for the rows a replay is about to write. Called
-   * synchronously, before the writes, so the marks exist however long the engine
-   * takes to surface each echo on the stream. See {@link UndoScope.pendingReplayEchoes}.
-   */
-  private markReplayEchoes(ops: InverseOp[]): void {
-    const expiresAt = Date.now() + REPLAY_ECHO_TTL_MS;
-    for (const key of this.replayEchoKeys(ops)) {
-      const existing = this.pendingReplayEchoes.get(key);
-      if (existing) {
-        existing.count += 1;
-        existing.expiresAt = expiresAt;
-      } else {
-        this.pendingReplayEchoes.set(key, { count: 1, expiresAt });
-      }
-    }
-  }
-
-  /**
-   * If `${schemaKey}:${modelId}` has an armed mark, consume one and report that
-   * this mutation is the scope's own replay echo, so the caller drops it. Expired
-   * marks are pruned along the way, so an echo that never arrives cannot linger.
-   */
-  private consumeReplayEcho(schemaKey: string, modelId: string): boolean {
-    if (this.pendingReplayEchoes.size === 0) return false;
-    const now = Date.now();
-    for (const [k, v] of this.pendingReplayEchoes) {
-      if (v.expiresAt <= now) this.pendingReplayEchoes.delete(k);
-    }
-    const key = `${schemaKey}:${modelId}`;
-    const pending = this.pendingReplayEchoes.get(key);
-    if (!pending) return false;
-    pending.count -= 1;
-    if (pending.count <= 0) this.pendingReplayEchoes.delete(key);
-    return true;
-  }
-
   /** Resolve a stream mutation's registered name to its schema key, or null. */
   private resolveSchemaKey(modelName: string): string | null {
     return (
@@ -311,18 +225,12 @@ export class UndoScope<S extends Schema> {
    * say — becomes a single undo step.
    */
   private onLocalMutation(m: LocalMutation): void {
-    if (this.replaying) return;
     const schemaKey = this.resolveSchemaKey(m.modelName);
     if (!schemaKey) return;
-    // Drop the ASYNC echo of our own replayed writes. The engine surfaces a
-    // replay's `transaction:created` only after an IndexedDB-gated commit, i.e.
-    // after `replaying` has already reset — so the synchronous flag above misses
-    // it. The (modelKey,id) marks armed in `markReplayEchoes` catch it whenever
-    // it lands, which is what stops every undo from wiping its own redo stack.
-    if (this.consumeReplayEcho(schemaKey, m.modelId)) return;
+    if (m.undoScopeId === this.replayOrigin.undoScopeId) return;
     if (this.tracksModel && !this.tracksModel(schemaKey)) return;
 
-    const ops = buildUndoOps(m, schemaKey);
+    const ops = buildUndoOps(m, schemaKey, this.schema.models[schemaKey]?.fields);
     if (!ops) return;
 
     // Inside a grouping session, accumulate across ticks (flushed on
@@ -388,7 +296,8 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * Records one entry onto the undo stack and clears the redo stack. It is fed
+   * Records one entry and clears completed redo history; unresolved partial
+   * replays remain available for recovery. It is fed
    * both by the per-tick flush and grouping paths from the local-mutation stream
    * and by direct callers using explicit recording. Entries are built internally
    * and therefore trusted, so the schema check here runs only outside production:
@@ -404,7 +313,11 @@ export class UndoScope<S extends Schema> {
     }
     this.undoStack.push(entry);
     if (this.undoStack.length > this.maxHistory) this.undoStack.shift();
-    this.redoStack = [];
+    // A partial or uncertain redo still owns changes and cannot be discarded.
+    this.redoStack = this.redoStack.filter((entry) => {
+      const progress = this.replayProgress.get(entry);
+      return progress && (progress.completed > 0 || progress.uncertain !== undefined);
+    });
     this.emitRecord(entry);
     this.emitChange();
   }
@@ -468,6 +381,25 @@ export class UndoScope<S extends Schema> {
     return this.redoStack.length > 0;
   }
 
+  private async replayEntry(tx: Transaction<S>, entry: UndoEntry, undo: boolean): Promise<Reversal[]> {
+    let progress = this.replayProgress.get(entry);
+    if (progress?.uncertain) throw new AbloStaleContextError('The previous undo/redo outcome is unknown. Recover its original pending write before clearing this history; no new reversal was submitted.', { code: 'stale_context', cause: progress.uncertain.error });
+    if (!progress) {
+      const remaining = expandReplayOps(resolveOps(undo ? entry.inverses : entry.forwards,
+        undo ? entry.forwards : entry.inverses, this.store, this.conflictPolicy));
+      progress = { remaining, reversed: [], completed: 0, baseline: captureReplayBaseline(remaining, this.store) };
+      this.replayProgress.set(entry, progress);
+    }
+    try {
+      await applyOps(tx, progress, this.store, this.conflictPolicy, this.replayOrigin);
+      this.replayProgress.delete(entry);
+      return progress.reversed;
+    } catch (error) {
+      if (!(error instanceof Error) || !isDefinitiveRejection(error)) progress.uncertain = { error };
+      throw error;
+    }
+  }
+
   /**
    * Pops the most recent entry, applies its inverse operations, and pushes it onto
    * the redo stack. Under the default `skip-stale` policy the inverses are first
@@ -479,25 +411,15 @@ export class UndoScope<S extends Schema> {
     return this.enqueue(async () => {
       const entry = this.undoStack.pop();
       if (!entry) return;
-      const tx = createTransaction(this.schema, this.store, this.organizationId);
-      const ops = resolveOps(entry.inverses, entry.forwards, this.store, this.conflictPolicy);
-      // Suppress the scope's own stream listener so replayed writes are not
-      // recorded as new entries. `replaying` covers echoes delivered inline;
-      // `markReplayEchoes` covers the asynchronous echo that lands after this
-      // method returns. Cleared in `finally` even if a replay throws.
-      this.markReplayEchoes(ops);
-      this.replaying = true;
+      const tx = createTransaction(this.schema, this.store, this.organizationId, this.replayOrigin);
       try {
-        await applyOps(tx, ops);
+        const reversed = await this.replayEntry(tx, entry, true);
+        entry.forwards = replaceOperationReversals(entry.forwards, reversed);
       } catch (err) {
-        // The replay was rejected (for example, a server 409). Nothing changed,
-        // so restore the entry to the undo stack rather than dropping it, which
-        // would also strand it off the redo stack and lose the action entirely.
+        // Keep the group and its accepted prefix so retry resumes the remainder.
         this.undoStack.push(entry);
         this.emitChange();
         throw err;
-      } finally {
-        this.replaying = false;
       }
       this.redoStack.push(entry);
       if (this.redoStack.length > this.maxHistory) this.redoStack.shift();
@@ -516,21 +438,15 @@ export class UndoScope<S extends Schema> {
     return this.enqueue(async () => {
       const entry = this.redoStack.pop();
       if (!entry) return;
-      const tx = createTransaction(this.schema, this.store, this.organizationId);
-      const ops = resolveOps(entry.forwards, entry.inverses, this.store, this.conflictPolicy);
-      // See undo(): arm async-echo suppression before the replayed writes.
-      this.markReplayEchoes(ops);
-      this.replaying = true;
+      const tx = createTransaction(this.schema, this.store, this.organizationId, this.replayOrigin);
       try {
-        await applyOps(tx, ops);
+        const reversed = await this.replayEntry(tx, entry, false);
+        entry.inverses = replaceOperationReversals(entry.inverses, reversed);
       } catch (err) {
-        // Symmetric to undo: a rejected re-apply leaves state unchanged, so put
-        // the entry back on the redo stack instead of losing it.
+        // The rejected suffix remains redoable without repeating its prefix.
         this.redoStack.push(entry);
         this.emitChange();
         throw err;
-      } finally {
-        this.replaying = false;
       }
       this.undoStack.push(entry);
       if (this.undoStack.length > this.maxHistory) this.undoStack.shift();
@@ -542,8 +458,8 @@ export class UndoScope<S extends Schema> {
   clear(): void {
     this.undoStack = [];
     this.redoStack = [];
+    this.replayProgress = new WeakMap();
     this.batch = [];
-    this.pendingReplayEchoes.clear();
     this.emitChange();
   }
 
@@ -562,7 +478,6 @@ export class UndoScope<S extends Schema> {
     this.recordListeners.clear();
     this.changeListeners.clear();
     this.batch = [];
-    this.pendingReplayEchoes.clear();
   }
 }
 
@@ -574,6 +489,7 @@ export class UndoScope<S extends Schema> {
 function buildUndoOps(
   m: LocalMutation,
   modelKey: string,
+  fields: ModelMetadata['fields'],
 ): { forward: InverseOp; inverse: InverseOp | null } | null {
   const id = m.modelId;
   const stripId = (o?: Record<string, unknown> | null): Record<string, unknown> => {
@@ -591,13 +507,14 @@ function buildUndoOps(
     case 'update': {
       const next = stripId(m.data);
       const prev = stripId(m.previousData);
+      const operationInverse = fieldOperationUndo(modelKey, id, next, prev, fields);
       return {
         forward: { kind: 'update', modelKey, patch: { id, ...next } },
         // No previous values captured → not reversible; drop the inverse.
-        inverse:
+        inverse: operationInverse ?? (
           Object.keys(prev).length > 0
             ? { kind: 'update', modelKey, patch: { id, ...prev } }
-            : null,
+            : null),
       };
     }
     case 'delete':
@@ -690,13 +607,43 @@ export class UndoManager<S extends Schema> {
 
 // ── Internal helpers ───────────────────────────────────────────────────────
 
-/**
- * Replays a list of operations through a {@link Transaction}. Used by both undo,
- * which replays the captured inverses, and redo, which replays the captured
- * forwards. Each operation is awaited in turn to preserve ordering.
- */
-async function applyOps<S extends Schema>(tx: Transaction<S>, ops: InverseOp[]): Promise<void> {
+/** Bulk history becomes individually confirmed steps so accepted rows never repeat. */
+function expandReplayOps(ops: InverseOp[]): ReplayOperation[] {
+  return ops.flatMap((op): ReplayOperation[] => {
+    switch (op.kind) {
+      case 'createMany': return op.data.map((data) => ({ kind: 'create', modelKey: op.modelKey, data }));
+      case 'updateMany': return op.patches.map((patch) => ({ kind: 'update', modelKey: op.modelKey, patch }));
+      case 'deleteMany': return op.ids.map((id) => ({ kind: 'delete', modelKey: op.modelKey, id }));
+      default: return [op];
+    }
+  });
+}
+
+/** Retain expected values, then advance them only by this replay's accepted changes. */
+function captureReplayBaseline(ops: ReplayOperation[], store: SyncStoreContract): ReplayProgress['baseline'] {
+  const rows = new Map<string, Extract<InverseOp, { kind: 'update' }>>();
   for (const op of ops) {
+    if (op.kind !== 'update' && op.kind !== 'reverse-operation') continue;
+    const id = op.kind === 'update' ? op.patch.id : op.id;
+    const key = JSON.stringify([op.modelKey, id]);
+    const row = rows.get(key) ?? { kind: 'update', modelKey: op.modelKey, patch: { id } };
+    const current = store.pool.get(id)?.toJSON() ?? {};
+    for (const field of Object.keys(op.patch)) {
+      if (field !== 'id') row.patch[field] = structuredClone(current[field]);
+    }
+    rows.set(key, row);
+  }
+  return rows;
+}
+
+async function applyOps<S extends Schema>(tx: Transaction<S>, progress: ReplayProgress, store: SyncStoreContract, policy: UndoConflictPolicy, origin: MutationOrigin): Promise<void> {
+  while (progress.remaining.length) {
+    const pending = progress.remaining[0];
+    if (!pending) break;
+    const baseline = pending.kind === 'update' || pending.kind === 'reverse-operation'
+      ? progress.baseline.get(JSON.stringify([pending.modelKey, pending.kind === 'update' ? pending.patch.id : pending.id])) : undefined;
+    const op = expandReplayOps(resolveOps([pending], baseline ? [baseline] : [], store, policy))[0];
+    if (!op) { progress.remaining.shift(); continue; }
     const mutations: object = tx.mutations;
     const modelMutations = Reflect.get(mutations, op.modelKey);
     if (!modelMutations || typeof modelMutations !== 'object') {
@@ -718,24 +665,21 @@ async function applyOps<S extends Schema>(tx: Transaction<S>, ops: InverseOp[]):
     };
 
     switch (op.kind) {
-      case 'create':
-        await invoke('create', op.data);
-        break;
-      case 'update':
-        await invoke('update', op.patch);
-        break;
-      case 'delete':
-        await invoke('delete', op.id);
-        break;
-      case 'createMany':
-        await invoke('create', op.data);
-        break;
-      case 'updateMany':
-        await invoke('update', op.patches);
-        break;
-      case 'deleteMany':
-        await invoke('delete', op.ids);
-        break;
+        case 'reverse-operation':
+          progress.reversed.push(await reverseFieldOperation(store, op, origin));
+          break;
+        case 'create':
+          await invoke('create', op.data);
+          break;
+        case 'update':
+          await invoke('update', op.patch);
+          break;
+        case 'delete':
+          await invoke('delete', op.id);
+          break;
     }
+    if (baseline && (op.kind === 'update' || op.kind === 'reverse-operation')) baseline.patch = { ...baseline.patch, ...structuredClone(op.patch) };
+    progress.remaining.shift();
+    progress.completed++;
   }
 }

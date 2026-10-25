@@ -5,6 +5,7 @@ import type { CommitOutboxScope } from '@abloatai/transaction/commit';
 import type { QueuedMutation } from './commitPayload.js';
 import { MutationStore } from './MutationStore.js';
 import { normalizeModelKey } from './commitPayload.js';
+import { AbloStaleContextError } from '@abloatai/transaction/errors';
 import {
   deserializePersistedTransaction,
   legacyPendingMutationRecordSchema,
@@ -22,6 +23,14 @@ export interface MutationPersistenceContext {
   readonly enqueue: (transaction: QueuedMutation) => void;
   readonly computePriorityScore: (type: QueuedMutation['type'], modelName: string) => number;
   readonly deserializeTransaction: (data: Parameters<typeof deserializePersistedTransaction>[0]) => QueuedMutation | null;
+}
+
+function isForeignPendingMutation(ctx: MutationPersistenceContext, row: unknown): boolean {
+  const saved = pendingMutationRecordSchema.safeParse(row);
+  const scope = ctx.commitOutboxScope;
+  return saved.success && scope !== null && (
+    saved.data.scope.namespace !== scope.namespace || saved.data.scope.organizationId !== scope.organizationId || saved.data.scope.participantId !== scope.participantId
+  );
 }
 
 export async function persistQueuedTransaction(
@@ -48,6 +57,8 @@ export async function persistQueuedTransaction(
           ...(transaction.writeOptions !== undefined
             ? { writeOptions: transaction.writeOptions }
             : {}),
+          ...(transaction.fieldIntent ? { fieldIntent: transaction.fieldIntent } : {}),
+          ...(transaction.context.undoScopeId ? { undoScopeId: transaction.context.undoScopeId } : {}),
         },
         scope: ctx.commitOutboxScope,
         timestamp: transaction.createdAt,
@@ -61,6 +72,7 @@ export async function persistQueuedTransaction(
       modelId: transaction.modelId,
       modelKey: transaction.modelKey,
       ...(transaction.data !== undefined ? { data: transaction.data } : {}),
+      ...(transaction.fieldIntent ? { fieldIntent: transaction.fieldIntent } : {}),
       ...(transaction.previousData !== undefined ? { previousData: transaction.previousData } : {}),
       context: transaction.context,
       createdAt: transaction.createdAt,
@@ -105,6 +117,7 @@ export function deserializeLegacyPendingMutation(
     row: object,
     fallbackMutationId?: string,
   ): QueuedMutation | null {
+    if (isForeignPendingMutation(ctx, row)) return null;
     const rowType = (row as { type?: string }).type;
     const parsed = persistedMutationSchema.safeParse(
       rowType === 'pending_mutation'
@@ -144,6 +157,7 @@ export function deserializeLegacyPendingMutation(
       context: {
         userId: scope.participantId,
         organizationId: scope.organizationId,
+        ...(mutation.undoScopeId ? { undoScopeId: mutation.undoScopeId } : {}),
       },
       status: 'pending',
       createdAt: Date.parse(mutation.timestamp) || Date.now(),
@@ -151,6 +165,7 @@ export function deserializeLegacyPendingMutation(
       priority: 'normal',
       priorityScore: ctx.computePriorityScore(type, mutation.modelName),
       ...(mutation.writeOptions !== undefined ? { writeOptions: mutation.writeOptions } : {}),
+      ...(mutation.fieldIntent ? { fieldIntent: mutation.fieldIntent } : {}),
       sourceMutationIds: [mutationId],
     };
   }
@@ -166,7 +181,26 @@ export async function loadPersistedTransactions(
     try {
       const persisted = await persistence.getPersistedTransactions();
 
+      // Preflight recovery records before any older migration can yield to dispatch.
       for (const data of persisted) {
+        if (isForeignPendingMutation(ctx, data)) continue;
+        if (data.type === 'operation_buffer') {
+          const state = data.state;
+          if (typeof state !== 'object' || state === null || !('pending' in state) || !Array.isArray(state.pending) || state.pending.length || ('inFlight' in state && state.inFlight != null)) {
+            throw new AbloStaleContextError('Unresolved legacy field state remains. Recover it with the previous SDK before continuing; its record was retained.', { code: 'stale_context' });
+          }
+          continue;
+        }
+        const hasIntent = data.type === 'pending_mutation'
+          ? typeof data.mutation === 'object' && data.mutation !== null && 'fieldIntent' in data.mutation
+          : 'fieldIntent' in data;
+        if (hasIntent && !(data.type === 'pending_mutation' ? deserializeLegacyPendingMutation(ctx, data) : ctx.deserializeTransaction(data))) {
+          throw new AbloStaleContextError('A queued field intent is unreadable or expired. Its primary mutation record was retained for recovery.', { code: 'stale_context' });
+        }
+      }
+
+      for (const data of persisted) {
+        if (data.type === 'operation_buffer' || isForeignPendingMutation(ctx, data)) continue;
         if (data.type === 'pending_mutation') {
           const legacy = deserializeLegacyPendingMutation(ctx, data);
           if (legacy) {
@@ -227,5 +261,6 @@ export async function loadPersistedTransactions(
         context: 'load-persisted-transactions',
         error: error instanceof Error ? error : String(error),
       });
+      if (error instanceof AbloStaleContextError) throw error;
     }
   }

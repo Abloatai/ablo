@@ -1,3 +1,4 @@
+import type { CounterField, CounterFieldParams } from '../../commit/counter/index.js';
 /**
  * Shared resource types for the typed clients and private HTTP transport.
  * the commit and claim shapes, and the
@@ -10,6 +11,7 @@ import type {
   ReadDependency,
 } from '../../coordination/schema.js';
 import type { ClaimHeartbeatReply, ClaimState } from '../../claims/contract.js';
+import type { TextField, TextFieldParams } from '../../commit/text/index.js';
 import type {
   ClientCommitReceipt,
   CommitWait,
@@ -444,6 +446,8 @@ export interface HttpTransportModel<
   T = Record<string, unknown>,
   Fields = T,
 > {
+  text(params: TextFieldParams): Promise<TextField>;
+  counter(params: CounterFieldParams): Promise<CounterField>;
   /**
    * Single-row read over HTTP. **Returns an envelope, not the bare row** — the
    * row is on `.data`, alongside the `.stamp` watermark (for stale-context

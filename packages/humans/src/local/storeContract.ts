@@ -10,6 +10,7 @@
  * the runtime bundle beyond the erased interface declarations.
  */
 
+import type { MutationOrigin } from './transactions/mutations/commitPayload.js';
 import type { Model } from './Model.js';
 import type { ModelScope } from '@abloatai/transaction/types';
 import type { QueryView, QueryViewOptions } from './views/QueryView.js';
@@ -42,7 +43,7 @@ export interface SyncStatus {
  * derive its inverse, with no separate snapshot step. A store exposes this
  * stream through {@link SyncStoreContract.subscribeLocalMutations}.
  */
-export interface LocalMutation {
+export interface LocalMutation extends MutationOrigin {
   type: 'create' | 'update' | 'delete' | 'archive' | 'unarchive';
   /** The registered name of the mutated model, for example `'Block'`. */
   modelName: string;
@@ -94,8 +95,13 @@ export interface SyncStoreContract {
    * hydration, where the data has already been validated — to skip the per-row
    * schema check, which is a measurable cost at that volume.
    */
-  save(model: Model, options?: { skipValidation?: boolean }): Promise<void>;
-  delete(model: Model): Promise<void>;
+  save(model: Model, options?: { skipValidation?: boolean } & MutationOrigin): Promise<void>;
+  /** Stage an explicit value or declared operation through the primary model lifecycle. */
+  write?(model: Model, patch: Record<string, unknown>, origin?: MutationOrigin): Promise<void>;
+  inverseModelOperation?(kind: 'text' | 'counter', target: import('@abloatai/transaction/commit').OperationTarget, editId: string): Promise<
+    { $text: import('@abloatai/transaction/commit').TextEdit } | { $increment: import('@abloatai/transaction/commit').CounterEdit }
+  >;
+  delete(model: Model, origin?: MutationOrigin): Promise<void>;
   archive(model: Model): Promise<void>;
   unarchive(model: Model): Promise<void>;
   /** The in-memory object pool: look up individual entities or collections by

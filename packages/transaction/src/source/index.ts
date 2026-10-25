@@ -158,6 +158,7 @@ export { prismaDataSource, type PrismaLike, type PrismaDataSourceOptions } from 
 export {
   adapterTableMigrations,
   idempotencyLedgerMigrations,
+  directFenceMigrations,
 } from './adapters/migrations.js';
 export {
   createKyselyMutationAdapter,
@@ -196,6 +197,7 @@ export {
   ABLO_REPLICATION_ROLE,
   ABLO_WRITE_ROLE,
   ABLO_IDEMPOTENCY_TABLE,
+  ABLO_CLAIM_FENCE_TABLE,
   ABLO_OUTBOX_TABLE,
   REPLICATION_SLOT_NAME,
   isValidReplicationSlotName,

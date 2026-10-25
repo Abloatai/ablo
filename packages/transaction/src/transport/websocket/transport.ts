@@ -462,7 +462,6 @@ export class WsTransport<
     this.connectHeld = deferConnect === true;
 
     this.options = {
-      url: wsUrl,
       claimQueueSnapshots: true,
       claimQueuePatches: true,
       reconnectDelay: 1000,
@@ -480,6 +479,7 @@ export class WsTransport<
         batchedDeltas: true,
       },
       ...connectionOptions,
+      url: wsUrl,
     };
 
     this.heartbeat = new HeartbeatController(

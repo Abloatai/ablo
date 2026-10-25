@@ -23,8 +23,6 @@ export interface ModelMutationContext {
   readonly cancelUnsentCreateForDelete: (transaction: QueuedMutation) => Promise<void>;
   readonly completeLocalDelete: (model: Model, context: UserContext, writeOptions?: WriteOptions, sourceMutationIds?: string[]) => QueuedMutation | Promise<QueuedMutation>;
   readonly cancelTransactionsForModel: (modelId: string, type: 'update') => QueuedMutation[];
-  readonly pendingMergeByModel: Map<string, { data: MutationInput; sourceMutationIds: string[] }>;
-  readonly inFlightByModel: Set<string>;
   readonly findCreateBarrierForDelete: (modelName: string, modelId: string) => QueuedMutation | undefined;
   readonly deferDeleteUntilCreateSettles: (create: QueuedMutation, transaction: QueuedMutation) => void;
   readonly logger: { debug: (message: string, fields?: Record<string, string>) => void };
@@ -79,15 +77,10 @@ export async function remove(
   ctx.attachConfirmation(transaction);
   ctx.add(transaction);
   const canceledUpdates = ctx.cancelTransactionsForModel(model.id, 'update');
-  const key = `${modelName}:${model.id}`;
-  const pendingMerge = ctx.pendingMergeByModel.get(key);
   transaction.sourceMutationIds = [...new Set([
     ...(transaction.sourceMutationIds ?? []),
     ...canceledUpdates.flatMap((candidate) => candidate.commitEnvelope ? [] : (candidate.sourceMutationIds ?? [])),
-    ...(pendingMerge?.sourceMutationIds ?? []),
   ])];
-  ctx.pendingMergeByModel.delete(key);
-  ctx.inFlightByModel.delete(key);
   if (ctx.enableOptimistic) ctx.applyOptimisticDelete(model, transaction);
   await ctx.persistQueuedTransaction(transaction, model.toJSON());
   const createBarrier = ctx.findCreateBarrierForDelete(modelName, model.id);
@@ -137,6 +130,7 @@ export function update(
   precomputedChanges?: Record<string, unknown>,
   writeOptions?: WriteOptions,
   sourceMutationId?: string,
+  fieldIntent?: QueuedMutation['fieldIntent'],
 ): Promise<QueuedMutation> | QueuedMutation {
   ctx.assertDurableReplayOpen();
   const modelName = model.getModelName();
@@ -151,6 +145,7 @@ export function update(
     priorityScore: ctx.computePriorityScore('update', modelName),
     data: input, previousData, context, status: 'pending', createdAt: Date.now(), attempts: 0,
     priority: ctx.isReorderPayload(input) ? 'high' : 'normal', writeOptions,
+    ...(fieldIntent ? { fieldIntent } : {}),
     ...(sourceMutationId ? { sourceMutationIds: [sourceMutationId] } : {}),
   };
   if (ctx.persistenceReady) transaction.sourceMutationIds ??= [transaction.id];

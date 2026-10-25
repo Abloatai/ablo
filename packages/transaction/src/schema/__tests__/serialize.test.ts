@@ -60,6 +60,21 @@ const schema = defineSchema(
 );
 
 describe('serializeSchema / parseSchema', () => {
+  it('does not let writable or read-only application schemas expose the text journal', () => {
+    for (const definition of [
+      mutable.instant({ history: field.json() }, { tableName: 'sync_text_fields' }),
+      readOnly.lazy({ history: field.json() }, { tableName: 'sync_text_fields' }),
+    ]) {
+      expect(() => defineSchema({ journal: definition })).toThrow('reserved by Ablo');
+    }
+  });
+  it('keeps text merge an explicit string-field opt-in through schema round trips', () => {
+    const original = defineSchema({ docs: mutable.instant({ body: field.text().from('body_text'), count: field.counter(), title: field.string() }) });
+    const back = parseSchema(serializeSchema(original));
+    expect(back.models.docs?.fields.body).toMatchObject({ type: 'string', merge: 'text', column: 'body_text' });
+    expect(back.models.docs?.fields.title?.merge).toBeUndefined();
+    expect(back.models.docs?.fields.count).toMatchObject({ type: 'number', merge: 'counter' });
+  });
   it('round-trips model routing/scoping metadata', () => {
     const back = parseSchema(serializeSchema(schema));
 
@@ -181,4 +196,21 @@ describe('serializeSchema / parseSchema', () => {
     const different = defineSchema({ items: model({ title: field.string() }, { mutable: true }) });
     expect(schemaHash(different)).not.toBe(h1);
   });
+});
+
+describe('subject rules on model shorthand', () => {
+  for (const [name, build] of Object.entries({
+    mutableInstant: mutable.instant,
+    mutableLazy: mutable.lazy,
+    readOnlyInstant: readOnly.instant,
+    readOnlyLazy: readOnly.lazy,
+  })) {
+    it(`${name} preserves credential-bound row authorization through serialization`, () => {
+      const subject = { field: 'userId', group: 'user' };
+      const declared = defineSchema({ rows: build({ userId: z.string().min(1) }, { subject }) });
+      const wire = JSON.parse(serializeSchema(declared));
+      expect(wire.models.rows.subject).toEqual(subject);
+      expect(parseSchema(JSON.stringify(wire)).models.rows.subject).toEqual(subject);
+    });
+  }
 });

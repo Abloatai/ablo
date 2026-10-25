@@ -15,6 +15,7 @@ import type { DataSourceAdapter } from '../adapters/adapter.js';
 import type { AdapterReadRequest, Row } from '../adapters/adapter.js';
 import { changeSetSchema } from '../adapters/contract.js';
 import { AbloError, AbloPermissionError } from '../../errors.js';
+import { errorCodeSpec } from '../../errorCodes.js';
 import {
   authorizeSourceChange,
   authorizeSourceRead,
@@ -308,9 +309,10 @@ function subjectDenial(error: unknown): Response | null {
 function typedSourceError(error: unknown): Response | null {
   const denial = subjectDenial(error);
   if (denial) return denial;
-  return error instanceof AbloError && error.code && error.httpStatus
-    ? json({ error: error.code, message: error.message }, error.httpStatus)
-    : null;
+  if (!(error instanceof AbloError) || !error.code) return null;
+  const spec = errorCodeSpec(error.code);
+  const status = error.httpStatus ?? (spec?.surface === 'wire' ? spec.httpStatus : undefined);
+  return status ? json({ error: error.code, message: error.message }, status) : null;
 }
 
 function parseHandWrittenChange<TAuth>(

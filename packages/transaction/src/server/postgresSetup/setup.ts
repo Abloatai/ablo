@@ -1,5 +1,5 @@
 import type postgres from 'postgres';
-import { idempotencyLedgerMigrations } from '../../source/index.js';
+import { idempotencyLedgerMigrations, directFenceMigrations } from '../../source/index.js';
 import { ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE } from '../../footprint.js';
 export { ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE };
 
@@ -46,7 +46,7 @@ END $$;`;
  * recipe and asserted in tests. Precisely: the runtime roles own nothing and run
  * no DDL on your tables — the writer applies row DML, the replicator only reads.
  * This provisioning, which you run once with your own admin credential, creates
- * exactly one Ablo bookkeeping table (`ablo_idempotency`) and nothing else; it
+ * the Ablo retry ledger and claim-fence table; it
  * never alters, owns, or migrates your application tables.
  *
  * The `<password>` placeholder is deliberate. You choose the secret and put the
@@ -197,6 +197,9 @@ END $$;`,
         ]),
     // 5. Direct uses the durable replay ledger but deliberately no outbox.
     ...ledger,
+    ...directFenceMigrations(schema).map((migration) => migration.up),
+    `GRANT SELECT, INSERT, UPDATE ON TABLE ${quoteIdent(schema)}.${quoteIdent('ablo_claim_fence_watermark')} TO ${quoteIdent(writeRole)};`,
+    `REVOKE DELETE ON TABLE ${quoteIdent(schema)}.${quoteIdent('ablo_claim_fence_watermark')} FROM ${quoteIdent(writeRole)};`,
     `REVOKE ALL ON TABLE ${quoteIdent(schema)}.${quoteIdent('ablo_idempotency')} FROM PUBLIC;`,
     `GRANT SELECT, INSERT, UPDATE ON TABLE ${quoteIdent(schema)}.${quoteIdent('ablo_idempotency')} TO ${quoteIdent(writeRole)};`,
     `REVOKE DELETE ON TABLE ${quoteIdent(schema)}.${quoteIdent('ablo_idempotency')} FROM ${quoteIdent(writeRole)};`,

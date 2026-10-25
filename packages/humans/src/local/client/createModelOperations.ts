@@ -1,3 +1,6 @@
+import type { TextOperation } from '@abloatai/transaction/commit';
+import type { ModelFieldEditor, ModelCounterEditor } from './modelFieldEditor.js';
+
 /**
  * Builds the typed client for a single schema model — the object reached as
  * `ablo.<model>`.
@@ -196,6 +199,8 @@ type EntityHalf = Pick<ModelTarget, 'model' | 'id'>;
 // `ModelCollaboration<Item>` and `ModelCollaboration<Invoice>` the same type
 // while reading as though they differed.
 export interface ModelCollaboration {
+  openText(model: string, params: { id: string; field: string }): Promise<ModelFieldEditor<string, TextOperation>>;
+  openCounter(model: string, params: { id: string; field: string }): Promise<ModelCounterEditor>;
   /** Session projections already held by this client's one presence store. */
   presence(model: string, recordId?: string, options?: PresenceQueryOptions): readonly PresenceSession[];
   /** Subscribe once to the connection-owned presence projection. */
@@ -463,13 +468,16 @@ function subscribeInModelScope(
  * differ by an awaitedness transform, so it is replaced rather than inherited.
  * See {@link ReactiveModelSurface}.
  */
-export type ModelOperations<T, CreateInput> = Omit<
-  HttpModelClient<T, CreateInput>,
-  'claim'
+export type ModelOperations<T, CreateInput, UpdateInput = CreateInput> = Omit<
+  HttpModelClient<T, CreateInput, UpdateInput>,
+  'claim' | 'text' | 'counter'
 > &
-  ReactiveModelSurface<T, CreateInput>;
+  ReactiveModelSurface<T, CreateInput> & {
+    text(params: { id: string; field: Extract<keyof CreateInput, string> }): Promise<ModelFieldEditor<string, TextOperation>>;
+    counter(params: { id: string; field: Extract<keyof CreateInput, string> }): Promise<ModelCounterEditor>;
+  };
 
-export function createModelOperations<T, C>(
+export function createModelOperations<T, C, U = C>(
   schemaKey: string,
   registeredModelName: string,
   objectPool: Pick<InstanceCache, 'get' | 'getByType' | 'getOfType'>,
@@ -481,7 +489,7 @@ export function createModelOperations<T, C>(
     | 'syncNow'
     | 'update'
     | 'waitForConfirmation'
-  >,
+  > & Partial<Pick<SyncClient, 'write'>>,
   registry: Pick<ModelRegistry, 'getModelByName'>,
   /**
    * The one thing this factory asks of the loader: fetch rows for a model.
@@ -496,8 +504,13 @@ export function createModelOperations<T, C>(
     Partial<Pick<OnDemandLoader, 'getReadEvidence'>>,
   collaboration?: ModelCollaboration,
   readSetContext?: ReadSetContext,
-): ModelOperations<T, C> {
+): ModelOperations<T, C, U> {
   const readSetClientIdentity = syncClient as object;
+  const writeModel = (model: Model, patch: Record<string, unknown>, options: MutationOptions) => {
+    if (syncClient.write) return syncClient.write(model, patch, options);
+    model.applyChanges(patch);
+    return syncClient.update(model, options, patch);
+  };
   /**
    * Resolve a row **this** resource owns.
    *
@@ -1502,7 +1515,7 @@ export function createModelOperations<T, C>(
     return createImpl(params);
   }
 
-  const operations: ModelOperations<T, C> = {
+  const operations: ModelOperations<T, C, U> = {
     local,
 
     presence: (recordId?: string) => collaboration?.presence(registeredModelName, recordId) ?? [],
@@ -1555,6 +1568,19 @@ export function createModelOperations<T, C>(
 
     get,
     read,
+    async text(params) {
+      if ('state' in params || 'persist' in params) throw new AbloValidationError('Reactive editors use the primary mutation journal. Restore legacy field state with the previous SDK before upgrading.', { code: 'write_options_invalid' });
+      if (!collaboration) throw new Error('Text editing requires a connected model client.');
+      void collaboration.enterScope?.({ [schemaKey]: params.id });
+      return collaboration.openText(schemaKey, params);
+    },
+
+    async counter(params) {
+      if ('state' in params || 'persist' in params) throw new AbloValidationError('Reactive editors use the primary mutation journal. Restore legacy field state with the previous SDK before upgrading.', { code: 'write_options_invalid' });
+      if (!collaboration) throw new Error('Counter editing requires a connected model client.');
+      void collaboration.enterScope?.({ [schemaKey]: params.id });
+      return collaboration.openCounter(schemaKey, params);
+    },
 
     // No automatic scope enrolment on bulk `list`: that would subscribe to an
     // unbounded set of rows' entity groups.
@@ -1571,11 +1597,11 @@ export function createModelOperations<T, C>(
     // `update(id, current => next)`. The IIFE keeps the shared error-guard
     // wrapping while exposing the two public signatures (a plain `guard(...)`
     // would collapse them to one).
-    update: ((): ModelOperations<T, C>['update'] => {
+    update: ((): ModelOperations<T, C, U>['update'] => {
       const updateImpl = guardWrite(
         async (
           arg:
-            | HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>
+            | HttpGuardedMutationParams<ModelUpdateParams<T, C, U>, T>
             | string,
           updater?: ModelUpdater<T>,
           contention?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
@@ -1652,12 +1678,7 @@ export function createModelOperations<T, C>(
                   ? { reads: prepared.reads === null ? null : [...prepared.reads] }
                   : {}),
               };
-              model.applyChanges(patch);
-              const confirmation = syncClient.update(
-                model,
-                effective,
-                patch,
-              );
+              const confirmation = writeModel(model, patch, effective);
               await waitForMutation(model, confirmation);
               return modelAsRow<T>(model);
             },
@@ -1719,12 +1740,7 @@ export function createModelOperations<T, C>(
         // edited fields land in `modifiedProperties` and are actually sent to
         // the server. (`updateFromData` is the hydration path and would discard
         // the tracking, producing an empty `input: {}` no-op mutation.)
-        model.applyChanges(params.data);
-        const confirmation = syncClient.update(
-          model,
-          effective,
-          params.data,
-        );
+        const confirmation = writeModel(model, params.data, effective);
         await waitForMutation(model, confirmation);
         const updated = modelAsRow<T>(model);
         await settleClaimsAfterWrite(id, handle);
@@ -1732,7 +1748,7 @@ export function createModelOperations<T, C>(
         },
       );
       function update(
-        params: HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>,
+        params: HttpGuardedMutationParams<ModelUpdateParams<T, C, U>, T>,
       ): Promise<T>;
       function update(
         id: string,
@@ -1741,7 +1757,7 @@ export function createModelOperations<T, C>(
       ): Promise<T | undefined>;
       function update(
         arg:
-          | HttpGuardedMutationParams<ModelUpdateParams<T, C>, T>
+          | HttpGuardedMutationParams<ModelUpdateParams<T, C, U>, T>
           | string,
         updater?: ModelUpdater<T>,
         contention?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,

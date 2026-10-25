@@ -388,9 +388,10 @@ export namespace Ablo {
   export namespace Model {
     export type Target = import('./local/client/resourceTypes.js').ModelTarget;
     export type Claim = import('./local/client/resourceTypes.js').ModelClaim;
-    export type Operations<T, CreateInput = T> = import('./local/client/createModelOperations.js').ModelOperations<
+    export type Operations<T, CreateInput = T, UpdateInput = CreateInput> = import('./local/client/createModelOperations.js').ModelOperations<
       T,
-      CreateInput
+      CreateInput,
+      UpdateInput
     >;
     export type ClaimOptions<T = Record<string, unknown>> =
       import('./local/client/createModelOperations.js').ClaimOptions<T>;

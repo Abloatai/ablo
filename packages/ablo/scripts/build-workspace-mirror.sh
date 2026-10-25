@@ -65,6 +65,11 @@ done
 mkdir -p "$OUTPUT_DIR/.changeset"
 cp "$MONOREPO_ROOT/.changeset/config.json" "$OUTPUT_DIR/.changeset/config.json"
 copy_tree "docs/ablo" "docs/ablo"
+cp "$MONOREPO_ROOT/docs/dependency-security.md" "$OUTPUT_DIR/docs/dependency-security.md"
+mkdir -p "$OUTPUT_DIR/docs/ops"
+cp "$MONOREPO_ROOT/docs/ops/gvisor-resource-commands.md" \
+  "$MONOREPO_ROOT/docs/ops/gvisor-command-memory.md" \
+  "$MONOREPO_ROOT/docs/ops/project-file-publication.md" "$OUTPUT_DIR/docs/ops/"
 copy_tree "examples/account-multiplayer" "examples/account-multiplayer"
 
 # Repository-level branding belongs at the public workspace root as well as in
@@ -85,6 +90,9 @@ cat > "$OUTPUT_DIR/package.json" <<'EOF'
   "description": "Public source for the Ablo SDK, live client, and CLI.",
   "license": "Apache-2.0",
   "workspaces": ["packages/*"],
+  "overrides": {
+    "esbuild@^0.27.0": "0.28.1"
+  },
   "scripts": {
     "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo && npm run build --workspace=@ablo/resource-adapter",
     "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo && npm run typecheck --workspace=@ablo/resource-adapter",

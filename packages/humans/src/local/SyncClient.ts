@@ -8,7 +8,10 @@
  * over the network.
  */
 
+import type { MutationOrigin } from './transactions/mutations/commitPayload.js';
 import { runInAction } from 'mobx';
+import { ModelOperationRuntime, projectModelRow, createModelChangePublisher } from './transactions/operations/index.js';
+import type { TextOperation } from '@abloatai/transaction/commit';
 import { InstanceCache, ModelScope } from './InstanceCache.js';
 import { Model } from './Model.js';
 import type { ModelData } from '@abloatai/transaction/types/modelData';
@@ -38,11 +41,10 @@ import type { Database } from './Database.js';
 import type { MutationPersistencePort } from './mutationPersistence.js';
 import type { WriteOptions } from './interfaces/index.js';
 import { LogPosition } from './logPosition.js';
-import { createLocalMutationPort } from './transactions/localMutation.js';
+import { createLocalMutationPort, subscribeLocalTransactions } from './transactions/localMutation.js';
 import { createReconnectDrain } from './transactions/reconnectDrain.js';
 import { DatabaseCommitOutboxStore } from './transactions/databaseCommitOutbox.js';
 import {
-  toEpochMs,
   type CompletedTransaction,
   type EventHandler,
   type RehydrationStats,
@@ -107,6 +109,77 @@ export class SyncClient extends EventEmitter {
    */
   private readonly echoTracker = new UnconfirmedWrites();
   private readonly pendingDeletes = new Set<string>();
+  private modelOperations?: ModelOperationRuntime;
+  private preparedOperationRows?: ReadonlyMap<string, Record<string, unknown>>;
+
+  configureModelOperations(read: ConstructorParameters<typeof ModelOperationRuntime>[0]['read']): void {
+    this.modelOperations?.clear();
+    this.modelOperations = new ModelOperationRuntime({
+      metadata: (model) => this.runtime.getModelMetadata(model),
+      pending: () => this.mutationQueue.getOutstandingTransactions(),
+      read: (kind, target) => this.mutationQueue.waitForOperationAncestors(target.model, target.id, target.field).then(() => read(kind, target)),
+      publish: (name, id, patch) => {
+        const model = this.objectPool.peek(id);
+        if (!model || model.getModelName() !== name || this.isDisposed || model.disposed || this.pendingDeletes.has(id)) return;
+        model.updateFromData(patch);
+        this.notifyObservers({ type: 'update', modelType: name, model, modelId: id });
+      },
+    });
+    const runtime = this.modelOperations;
+    this.mutationQueue.setFieldIntentPreparation((transaction) => runtime.prepare(transaction));
+  }
+
+  clearModelOperations(): void { this.modelOperations?.clear(); }
+
+  retainFieldOperation(model: Model, field: string): () => void {
+    if (!this.modelOperations) throw new Error('Model operation reconciliation is not configured.');
+    return this.modelOperations.retain({ model: model.getModelName(), id: model.id, field });
+  }
+
+  write(model: Model, patch: Record<string, unknown>, options?: WriteOptions, beforeQueue?: () => void, origin?: MutationOrigin): Promise<void> {
+    const apply = (materialized: Record<string, unknown>) => {
+      if (this.isDisposed || model.disposed) throw new Error('Cannot write through a disposed model client.');
+      model.applyChanges(materialized);
+      beforeQueue?.();
+      return this.update(model, options, beforeQueue ? { ...model.getChanges(), ...patch } : patch, origin);
+    };
+    const confirmation = this.modelOperations
+      ? this.modelOperations.stage(model.getModelName(), model.id, patch, apply)
+      : Promise.resolve(apply(patch));
+    const fields = this.runtime.getModelMetadata(model.getModelName())?.fields;
+    return Object.keys(patch).some((field) => fields?.[field]?.merge)
+      ? confirmation.then(() => this.refreshModelOperations(model))
+      : confirmation;
+  }
+
+  private reconcileModelOperations(model: Model): void {
+    if (!this.modelOperations || !Object.values(this.runtime.getModelMetadata(model.getModelName())?.fields ?? {}).some((field) => field.merge)) return;
+    void this.refreshModelOperations(model).catch((error: unknown) => this.emit('sync:error', error));
+  }
+
+  async refreshModelOperations(model: Model): Promise<void> {
+    await this.modelOperations?.reconcile(model.getModelName(), model.id);
+  }
+
+  async stageFieldOperation(model: Model, field: string, kind: 'text' | 'counter', operation: TextOperation | number): Promise<QueuedMutation> {
+    if (!this.modelOperations || !this.userId || !this.organizationId) throw new Error('Field editing requires a ready model client.');
+    const context = { userId: this.userId, organizationId: this.organizationId };
+    return this.modelOperations.stageLocal(kind, { model: model.getModelName(), id: model.id, field }, operation, Reflect.get(model, field), async (value, input, intent) => {
+      if (this.isDisposed || model.disposed) throw new Error('Cannot edit a disposed model client.');
+      model.applyChanges({ [field]: value });
+      this.objectPool.upsert(model, ModelScope.live);
+      const staged = this.mutationQueue.enqueueModelMutation('update', model, context, input, undefined, intent);
+      this.notifyObservers({ type: 'update', modelType: model.getModelName(), model, modelId: model.id });
+      const transaction = await staged;
+      void transaction.confirmation?.catch((error: unknown) => this.emit('sync:error', error));
+      return transaction;
+    });
+  }
+
+  async inverseModelOperation(kind: 'text' | 'counter', target: import('@abloatai/transaction/commit').OperationTarget, editId: string) {
+    if (!this.modelOperations) throw new Error('Model operation reconciliation is not configured.');
+    return this.modelOperations.inverse(kind, target, editId);
+  }
 
   isDeletePending(id: string): boolean {
     return this.pendingDeletes.has(id);
@@ -169,6 +242,7 @@ export class SyncClient extends EventEmitter {
     });
     this.mutationQueue.setPersistence(this.mutationPersistence);
     this.mutationQueue.setCommitOutbox(commitOutbox);
+    this.mutationQueue.on('operations:blocked', ({ error }: { error: Error }) => this.emit('sync:error', error));
 
     // Provide connection state to MutationQueue - prevents rollbacks during disconnection
     this.mutationQueue.setConnectionChecker(() => this.connectionState === 'connected');
@@ -337,7 +411,10 @@ export class SyncClient extends EventEmitter {
                 reason,
               });
             } else {
-              if (previousState) Object.assign(model, previousState);
+              if (previousState && typeof previousState === 'object') {
+                projectModelRow(model, previousState as Record<string, unknown>, this.mutationQueue.getOutstandingTransactions().filter((tx) => tx.id !== transaction.id));
+                this.reconcileModelOperations(model);
+              }
               this.objectPool.add(model, ModelScope.live);
             }
           }
@@ -957,6 +1034,7 @@ export class SyncClient extends EventEmitter {
     poolAction: () => void,
     writeOptions?: WriteOptions,
     capturedChangesOverride?: Record<string, unknown>,
+    origin?: MutationOrigin,
   ): Promise<void> | undefined {
     // No-op UPDATE guard (O(1)). An update with no dirty fields would travel
     // to the server, get dropped by `coalesceOperations` Rule 4 (empty input),
@@ -989,7 +1067,7 @@ export class SyncClient extends EventEmitter {
         : undefined;
 
     poolAction();
-    const confirmation = this.stageMutation(type, model, capturedChanges, writeOptions);
+    const confirmation = this.stageMutation(type, model, capturedChanges, writeOptions, origin);
     this.notifyObservers({
       type,
       modelType: model.getModelName(),
@@ -997,45 +1075,22 @@ export class SyncClient extends EventEmitter {
       modelId: model.id,
     });
     return confirmation;
-
-    // QueryProcessor uses `models:changed` to invalidate caches. Coalesce
-    // to one event per microtask: a paste of 100 rows should re-run
-    // affected queries ONCE, not 100×.
-    this.markModelChanged(model.getModelName());
   }
 
-  private pendingChangedTypes: Set<string> | null = null;
+  private readonly markModelChanged = createModelChangePublisher((models) => {
+    if (!this.isDisposed) this.emit('models:changed', models);
+  });
 
-  private markModelChanged(modelType: string): void {
-    if (!this.pendingChangedTypes) {
-      this.pendingChangedTypes = new Set();
-      const schedule =
-        typeof queueMicrotask === 'function'
-          ? queueMicrotask
-          : (cb: () => void) => Promise.resolve().then(cb);
-      schedule(() => {
-        const types = this.pendingChangedTypes;
-        this.pendingChangedTypes = null;
-        if (types && types.size > 0) this.emit('models:changed', types);
-      });
-    }
-    this.pendingChangedTypes.add(modelType);
-  }
-
-  /**
-   * Capture model changes immutably BEFORE any pool operations
-   * This prevents the fragile pattern of reading changes after state modification
-   */
+  /** Snapshot dirty fields before pool operations can clear them. */
   private captureModelChanges(model: Model): Record<string, unknown> | undefined {
     if (typeof model.getChanges !== 'function') return undefined;
     const changes = model.getChanges();
-    // Return a frozen copy to prevent accidental modification
     return Object.keys(changes).length > 0 ? Object.freeze({ ...changes }) : undefined;
   }
 
   /** Add new model (CREATE) - works offline */
-  add(model: Model, options?: WriteOptions): Promise<void> | undefined {
-    return this.mutate('create', model, () => { this.objectPool.add(model, ModelScope.live); }, options);
+  add(model: Model, options?: WriteOptions, origin?: MutationOrigin): Promise<void> | undefined {
+    return this.mutate('create', model, () => { this.objectPool.add(model, ModelScope.live); }, options, undefined, origin);
   }
 
   /** Update existing model (UPDATE) - works offline */
@@ -1043,6 +1098,7 @@ export class SyncClient extends EventEmitter {
     model: Model,
     options?: WriteOptions,
     capturedChanges?: Record<string, unknown>,
+    origin?: MutationOrigin,
   ): Promise<void> | undefined {
     return this.mutate(
       'update',
@@ -1050,6 +1106,7 @@ export class SyncClient extends EventEmitter {
       () => { this.objectPool.upsert(model, ModelScope.live); },
       options,
       capturedChanges,
+      origin,
     );
   }
 
@@ -1095,11 +1152,11 @@ export class SyncClient extends EventEmitter {
   }
 
   /** Delete model (DELETE) - works offline */
-  delete(model: Model, options?: WriteOptions): Promise<void> | undefined {
+  delete(model: Model, options?: WriteOptions, origin?: MutationOrigin): Promise<void> | undefined {
     // The queue owns cancellation and must retain creates as delete barriers.
     this.pendingDeletes.add(model.id);
     this.emit('optimistic:delete', model.id);
-    const confirmation = this.mutate('delete', model, () => this.objectPool.remove(model.id), options);
+    const confirmation = this.mutate('delete', model, () => this.objectPool.remove(model.id), options, undefined, origin);
     // Confirmation can precede the IndexedDB delta write. Keep the guard until
     // the persisted remove is applied, except when no durable row exists.
     void confirmation?.then(async () => {
@@ -1155,13 +1212,14 @@ export class SyncClient extends EventEmitter {
     model: Model,
     capturedChanges?: Record<string, unknown>,
     writeOptions?: WriteOptions,
+    origin?: MutationOrigin,
   ): Promise<void> | undefined {
     if (this.isDisposed) return Promise.resolve();
     if (!this.userId || !this.organizationId) {
-      this.mutationQueue.deferMutation(type, model, capturedChanges, writeOptions);
+      this.mutationQueue.deferMutation(type, model, capturedChanges, writeOptions, origin);
       return;
     }
-    const context = { userId: this.userId, organizationId: this.organizationId };
+    const context = { userId: this.userId, organizationId: this.organizationId, ...(origin?.undoScopeId ? { undoScopeId: origin.undoScopeId } : {}) };
     const staging = this.mutationQueue.enqueueModelMutation(
       type,
       model,
@@ -1213,103 +1271,19 @@ export class SyncClient extends EventEmitter {
    * local model has unsynced changes, so the two sides stay consistent.
    */
   resolveConflicts(localModel: Model, serverData: Record<string, unknown>): Model {
-    // No entry-point debug here: this runs once per incoming update delta,
-    // and a debug call's payload is BUILT even when the logger discards it —
-    // a per-delta model scan on the apply hot path. The outcome branches
-    // below log the cases worth reading.
-
-    // PRIORITY 1: Check for critical server states that must be respected.
-    // These states override any local changes to maintain data consistency.
-    // Checked inline — the collected-object form (`extractCriticalState`)
-    // only materializes on the rare force-accept branch, for its log line.
-    const shouldForceAcceptServer =
-      (serverData.deletedAt !== undefined && serverData.deletedAt !== null) ||
-      (serverData.archivedAt !== undefined && serverData.archivedAt !== null) ||
-      serverData.isActive === false;
-
-    if (shouldForceAcceptServer) {
-      this.runtime.logger.debug('Accepting server update - critical state change detected', {
-        modelId: localModel.id,
-        criticalStates: this.extractCriticalState(serverData),
-      });
-
-      // Force accept server state for critical changes
-      localModel.updateFromData(serverData);
-      localModel.clearChanges();
-      localModel.markAsSynced();
-      return localModel;
-    }
-
-    // Staging consumes dirty flags, but the queued patches still own those fields.
-    const localChanges = localModel.getChanges();
-    for (const transaction of this.mutationQueue.getOutstandingTransactions()) {
-      if (transaction.modelId !== localModel.id || transaction.type !== 'update') continue;
-      for (const field of Object.keys(transaction.data ?? {})) {
-        localChanges[field] = Reflect.get(localModel, field);
+    const projection = this.preparedOperationRows?.get(JSON.stringify([localModel.getModelName(), localModel.id]));
+    if (projection) return projectModelRow(localModel, serverData, this.mutationQueue.getOutstandingTransactions(), projection);
+    const materialized = { ...serverData };
+    if (serverData.deletedAt == null && serverData.archivedAt == null && serverData.isActive !== false) {
+      for (const field of this.modelOperations?.retainedFields(localModel.getModelName(), localModel.id) ?? []) {
+        materialized[field] = Reflect.get(localModel, field);
       }
     }
-    if (Object.keys(localChanges).length > 0) {
-      this.runtime.logger.debug('Merging server update with local dirty fields', {
-        modelId: localModel.id,
-        keptFields: Object.keys(localChanges || {}),
-      });
-
-      // Merge: server baseline + local dirty fields win
-      const merged: ModelData = { ...serverData, ...(localChanges || {}) };
-
-      // Preserve the most recent updatedAt without clearing dirty flags
-      if (serverData.updatedAt || localModel.updatedAt) {
-        // Safely get timestamp, handling both Date objects and strings
-        const localUpdatedAt = localModel.updatedAt
-          ? localModel.updatedAt instanceof Date
-            ? localModel.updatedAt.getTime()
-            : new Date(localModel.updatedAt).getTime()
-          : 0;
-        const serverUpdatedAt = toEpochMs(serverData.updatedAt);
-        const mergedUpdatedAt = new Date(Math.max(localUpdatedAt, serverUpdatedAt));
-        // updateFromData accepts Date or ISO string for dates
-        merged.updatedAt = mergedUpdatedAt;
-      }
-
-      localModel.updateFromData(merged);
-      // Intentionally DO NOT clearChanges here; pending tx will confirm and clear
-      return localModel;
+    const result = projectModelRow(localModel, materialized, this.mutationQueue.getOutstandingTransactions());
+    if (serverData.deletedAt == null && serverData.archivedAt == null && serverData.isActive !== false) {
+      this.reconcileModelOperations(localModel);
     }
-
-    // No local changes: fall back to LWW to converge. Accept server
-    // regardless of timestamp equality to stay in sync. Not logged — this is
-    // the common path for every collaborator update a client receives.
-    localModel.updateFromData(serverData);
-    localModel.clearChanges();
-    localModel.markAsSynced();
-    return localModel;
-  }
-
-  /**
-   * Extract the critical state fields from server data. These are the states
-   * that must be honored even when the local model has unsynced changes. The
-   * conflict resolver reads exactly these fields and no others.
-   */
-  private extractCriticalState(serverData: Record<string, unknown>): Record<string, unknown> {
-    const critical: Record<string, unknown> = {};
-
-    if (!serverData || typeof serverData !== 'object') {
-      return critical;
-    }
-
-    // Deletion/archival states - always critical
-    if (serverData.deletedAt !== undefined) {
-      critical.deletedAt = serverData.deletedAt;
-    }
-    if (serverData.archivedAt !== undefined) {
-      critical.archivedAt = serverData.archivedAt;
-    }
-
-    // Deactivation states are always critical.
-    if (serverData.isActive !== undefined && serverData.isActive === false) {
-      critical.isActive = false;
-    }
-    return critical;
+    return result;
   }
 
   /**
@@ -1405,6 +1379,7 @@ export class SyncClient extends EventEmitter {
    * Notify all observers
    */
   private notifyObservers(event: SyncEvent): void {
+    this.markModelChanged(event.modelType);
     for (const observer of this.observers) {
       if (observer.onSync) {
         try {
@@ -1448,6 +1423,7 @@ export class SyncClient extends EventEmitter {
    * Dispose and cleanup
    */
   dispose(): void {
+    this.modelOperations?.clear();
     this.isDisposed = true;
     this.disconnect();
     // The queue owns commit retry, replication-lag, offline-grace, and
@@ -1619,108 +1595,8 @@ export class SyncClient extends EventEmitter {
   onLocalTransaction(
     listener: (tx: QueuedMutation) => void,
   ): () => void {
-    this.mutationQueue.on('transaction:created', listener);
-    interface CommitEventOperation {
-      type: string;
-      model: string;
-      id: string;
-      input?: Record<string, unknown>;
-    }
-    const snapshotsByCommit = new Map<
-      string,
-      readonly (Record<string, unknown> | undefined)[]
-    >();
-    const onCommitStaging = (payload: {
-      clientTxId: string;
-      operations: readonly CommitEventOperation[];
-    }): void => {
-      snapshotsByCommit.set(
-        payload.clientTxId,
-        payload.operations.map((operation) => {
-          if (operation.type === 'CREATE') return undefined;
-          const resident = this.objectPool.get(operation.id);
-          return resident?.toJSON() as Record<string, unknown> | undefined;
-        }),
-      );
-    };
-    const onCommitSealFailed = (payload: { clientTxId: string }): void => {
-      snapshotsByCommit.delete(payload.clientTxId);
-    };
-    // Commit-lane writes (`ablo.commits.create` — the agent/atomic door) ride
-    // their own `commit:created` event: they have no optimistic pool apply,
-    // so they must not feed the echo tracker's `transaction:created` path.
-    // Enrich each operation with previous state captured from the pool HERE
-    // (the queue is pool-free) and hand the synthesized transaction to the
-    // same listener, so undo observes every write door — one stream.
-    const onCommitCreated = (payload: {
-      clientTxId: string;
-      operations: readonly CommitEventOperation[];
-    }): void => {
-      const stagedSnapshots = snapshotsByCommit.get(payload.clientTxId);
-      snapshotsByCommit.delete(payload.clientTxId);
-      const TYPE_BY_WIRE: Record<
-        string,
-        QueuedMutation['type']
-      > = {
-        CREATE: 'create',
-        UPDATE: 'update',
-        DELETE: 'delete',
-        ARCHIVE: 'archive',
-        UNARCHIVE: 'unarchive',
-      };
-      payload.operations.forEach((op, index) => {
-        const type = TYPE_BY_WIRE[op.type];
-        if (!type || !op.id) return;
-        const snapshot =
-          type === 'create'
-            ? undefined
-            : stagedSnapshots
-              ? stagedSnapshots[index]
-              : (this.objectPool.get(op.id)?.toJSON() as
-                  | Record<string, unknown>
-                  | undefined);
-        // A DELETE of a row the local graph never saw is not invertible —
-        // recording it would make undo "restore" an empty husk. Skip it.
-        if (type === 'delete' && !snapshot) return;
-        // UPDATE inverse must only revert the fields this op actually wrote;
-        // handing undo the FULL row would clobber concurrent edits to
-        // unrelated fields on revert.
-        const previousData =
-          type === 'update' && snapshot && op.input
-            ? Object.fromEntries(
-                Object.keys(op.input).map((key) => [key, snapshot[key]]),
-              )
-            : snapshot ?? null;
-        listener({
-          id: `${payload.clientTxId}_op${index}`,
-          type,
-          modelName: op.model,
-          modelId: op.id,
-          modelKey: op.model,
-          data: op.input ?? undefined,
-          previousData,
-          context: {
-            userId: this.userId ?? '',
-            organizationId: this.organizationId ?? '',
-          },
-          status: 'pending',
-          createdAt: Date.now(),
-          attempts: 0,
-          priority: 'normal',
-          priorityScore: 0,
-        });
-      });
-    };
-    this.mutationQueue.on('commit:staging', onCommitStaging);
-    this.mutationQueue.on('commit:seal_failed', onCommitSealFailed);
-    this.mutationQueue.on('commit:created', onCommitCreated);
-    return () => {
-      this.mutationQueue.off('transaction:created', listener);
-      this.mutationQueue.off('commit:staging', onCommitStaging);
-      this.mutationQueue.off('commit:seal_failed', onCommitSealFailed);
-      this.mutationQueue.off('commit:created', onCommitCreated);
-      snapshotsByCommit.clear();
-    };
+    return subscribeLocalTransactions(this.mutationQueue, (id) => this.objectPool.get(id)?.toJSON(),
+      () => ({ userId: this.userId ?? '', organizationId: this.organizationId ?? '' }), listener);
   }
 
   /**
@@ -1806,6 +1682,17 @@ export class SyncClient extends EventEmitter {
     });
   }
 
+  /** The operation owner prepares every semantic row before the pool reveals the frame. */
+  async applyPreparedDeltaBatch(changes: readonly AppliedChange[], apply: (changes: readonly AppliedChange[]) => void): Promise<boolean> {
+    try {
+      return await this.modelOperations?.withAcceptedBatch(changes, (patches) => {
+        this.preparedOperationRows = patches;
+        try { runInAction(() => { apply(changes); }); }
+        finally { this.preparedOperationRows = undefined; }
+      }) ?? false;
+    } catch (error) { this.emit('sync:error', error); throw error; }
+  }
+
   /**
    * Drop fresh adds beyond a headless cache's currently free capacity. The
    * rows are already durable; with no row-level consumer there is no recency
@@ -1883,6 +1770,9 @@ export class SyncClient extends EventEmitter {
 
     for (const result of dbResults) {
       const { modelName, modelId, action, transactionId, syncId } = result;
+
+      // Fence reads begun after the optimistic delete, including peer deletes.
+      if (action === 'remove') this.emit('sync:delete', modelId);
 
       // Every delta names the log position the row now reflects — recorded
       // before echo detection, because an own echo is exactly a position the

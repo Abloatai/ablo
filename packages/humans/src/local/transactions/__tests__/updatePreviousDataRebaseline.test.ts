@@ -38,11 +38,8 @@ describe('MutationQueue update previousData re-baselining', () => {
     queue.on('transaction:created', (tx) => seen.push(tx));
   });
 
-  // Drain the staged commit so the next update can't COALESCE into the prior
-  // still-pending transaction (mergeUpdateData mutates its `data` in place).
-  // This drains the local commit lane only — it does NOT simulate a sync-ack,
-  // so `modifiedProperties` stays dirty, which is exactly the window the fix
-  // targets (two commits of the same field before the server acks the first).
+  // Begin each dispatch separately while checking that a later write captures
+  // the prior local value rather than the original session baseline.
   const flushCommit = (count: number) =>
     waitFor(
       () =>

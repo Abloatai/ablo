@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AbloClaimedError } from '@abloatai/transaction';
-import { startResourceClaimGateway, type AdapterWorker } from '../src/index.ts';
+import { startResourceAdapter, startResourceClaimGateway, type AdapterWorker } from '../src/index.ts';
 
 test('contention returns promptly without queuing; unavailable errors stay distinct', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'claim-gateway-'));
@@ -106,4 +106,47 @@ test('realtime claim waits wake on authoritative grant, cancel on disconnect, an
     assert.equal(releases, 0);
   } finally { await gateway.close(); await rm(directory, { recursive: true, force: true }); }
   assert.equal(releases, 1);
+});
+
+
+test('invalid execution budgets fail before creating adapter resources', async () => {
+  for (const maxConcurrentProcesses of [0, -1, 1.5, 65, NaN, Infinity]) {
+    await assert.rejects(startResourceAdapter({stateDirectory: '/unused', mountpoint: '/unused', socketPath: '/unused', workspaceId: 'unused', workers: [], maxConcurrentProcesses}), /maxConcurrentProcesses must be an integer/);
+  }
+});
+
+test('project-file authority refresh is explicit, bound, cancellable and bounded', async () => {
+  const {createConnection} = await import('node:net');
+  const directory = await mkdtemp(join(tmpdir(), 'project-authority-'));
+  let validForMs = 30000, revoked = false, calls = 0;
+  const operationId = '12345678-1234-1234-1234-123456789abc';
+  const worker: AdapterWorker = {uid:1001, projectFiles:{authorize:async context => {
+    assert.equal(context.sourceWorkspaceId,'source'); assert.equal(context.workerUid,1001); assert.equal(context.operationId,operationId);
+    assert.equal(context.signal.aborted,false); calls++;
+    if(revoked) throw new Error('membership revoked');
+    return {validForMs};
+  }},client:{ready:async()=>{},identity:{organizationId:'org',projectId:'project',branchId:'branch',syncGroups:[],operations:[],participantKind:'agent',participantId:'writer',deliveryPartition:null},claims:{acquireResource:async()=>{throw new Error('authority refresh must not acquire a lease');}}}};
+  const reader:AdapterWorker={...worker,uid:1002,projectFiles:undefined,client:{...worker.client,identity:{...worker.client.identity!,participantId:'reader'}}};
+  const socketPath=join(directory,'gateway');
+  const gateway=await startResourceClaimGateway({socketPath,workspaceId:'source',workers:[worker,reader]});
+  const request=(uid=1001, operation: string | null = operationId)=>new Promise<{result?:{expires:number};error?:{code:string}}>((resolve,reject)=>{
+    const socket=createConnection(socketPath);let reply='';socket.on('error',reject);
+    socket.on('connect',()=>socket.write(JSON.stringify({owner:gateway.registrations[uid],action:'project_authorize',...(operation===null?{}:{operationId:operation})})+'\n'));
+    socket.on('data',chunk=>{reply+=chunk});socket.on('end',()=>resolve(JSON.parse(reply)));
+  });
+  try{
+    const lease=await request();assert.ok(lease.result!.expires>Date.now()/1000);assert.ok(lease.result!.expires<=Date.now()/1000+30);
+    assert.equal((await request(1002)).error?.code,'permission_denied');assert.equal(calls,1);
+    assert.equal((await request(1001, null)).error?.code, 'permission_denied');
+    assert.equal((await request(1001, 'wrong')).error?.code, 'permission_denied');
+    for(const invalid of [0,NaN,Infinity,60001]){validForMs=invalid;assert.equal((await request()).error?.code,'permission_denied');}
+    revoked=true;assert.ok((await request()).error); // No authority on transport/owner failure.
+  }finally{await gateway.close();await rm(directory,{recursive:true,force:true});}
+
+});
+
+test('gVisor rejects malformed rootfs configuration before opening a gateway', async () => {
+  for (const gvisorRootfs of ['', 'relative/image', '/image\0invalid']) {
+    await assert.rejects(startResourceAdapter({stateDirectory: '/unused', mountpoint: '/unused', socketPath: '/unused', workspaceId: 'unused', workers: [], gvisorRootfs}), /gvisorRootfs must be an absolute path/);
+  }
 });

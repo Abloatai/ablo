@@ -121,6 +121,16 @@ describe('SyncClient echo detection (architectural)', () => {
     expect(pool.get(model.id)?.disposed).toBe(false);
   });
 
+  it.each([false, true])('fences outstanding reads for a confirmed delete (own echo: %s)', (ownEcho) => {
+    const removed: string[] = [];
+    client.on('sync:delete', (id: string) => removed.push(id));
+    if (ownEcho) client.markTransactionPending('confirmed-delete');
+    client.applyDeltaBatchToPool([
+      { action: 'remove', modelName: 'EntryDetail', modelId: 'gone', transactionId: 'confirmed-delete' },
+    ], ENRICH_NOOP);
+    expect(removed).toEqual(['gone']);
+  });
+
   it('clears the read guard after the confirmed remove is applied', () => {
     const model = pool.createFromData({
       __typename: 'EntryDetail', id: 'confirmed-layer', entryId: 'entry-1',

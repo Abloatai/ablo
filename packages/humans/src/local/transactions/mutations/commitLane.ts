@@ -57,6 +57,7 @@ export interface CommitLaneContext {
   readonly dispatchCommit: (envelope: DurableCommitEnvelope) => Promise<MutationCommitResult>;
   readonly persistDurableCommitAcceptance: (envelope: DurableCommitEnvelope, result: MutationCommitResult) => Promise<DurableCommitEnvelope>;
   readonly removeDurableCommit: (idempotencyKey: string) => Promise<void>;
+  readonly reconcileSourceCommit: (envelope: DurableCommitEnvelope, correlationId: string) => void;
   readonly queuedCommitEchoSyncId: (transaction: CommitTransaction) => number | undefined;
   readonly completeQueuedCommit: (transaction: CommitTransaction, syncId: number) => void;
   readonly scheduleReplicationLagTimeout: (transactionId: string, clientTxId: string, correlationId?: string) => void;
@@ -164,7 +165,10 @@ export async function processCommitLane(ctx: CommitLaneContext): Promise<void> {
           tx.status = 'awaiting_delta';
           const echoSyncId = ctx.queuedCommitEchoSyncId(tx);
           if (echoSyncId !== undefined) ctx.completeQueuedCommit(tx, echoSyncId);
-          else ctx.scheduleReplicationLagTimeout(tx.id, tx.id, result.correlationId);
+          else {
+            ctx.scheduleReplicationLagTimeout(tx.id, tx.id, result.correlationId);
+            ctx.reconcileSourceCommit(tx.durableEnvelope, result.correlationId);
+          }
         } else {
           await ctx.removeDurableCommit(tx.id);
           ctx.noteAck(tx.lastSyncId);

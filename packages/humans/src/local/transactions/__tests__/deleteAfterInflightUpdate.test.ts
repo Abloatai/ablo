@@ -74,21 +74,22 @@ function memoryDatabase(): Database {
 }
 
 function scriptedExecutor(holdFirst: boolean, queuedFirst = false) {
-  const calls: { ops: { type: string; id: string }[] }[] = [];
+  const calls: { ops: { type: string; id: string }[]; key?: string }[] = [];
   let syncId = 0;
   let releaseFirst: (() => void) | undefined;
   const unreachable = (method: string) =>
     Promise.reject(new Error(`scriptedExecutor: unexpected ${method} call`));
   const executor: import('../../interfaces/index.js').MutationExecutor = {
-    commit: (operations) => {
+    commit: (operations, options) => {
       const index = calls.length;
-      calls.push({ ops: operations.map((op) => ({ type: op.type, id: op.id })) });
+      const sourceReplay = queuedFirst && index > 0 && options?.idempotencyKey === calls[0]?.key;
+      calls.push({ ops: operations.map((op) => ({ type: op.type, id: op.id })), key: options?.idempotencyKey });
       syncId += 1;
       const result = {
         lastSyncId: queuedFirst && index === 0 ? 0 : syncId,
         status: queuedFirst && index === 0 ? 'queued' as const : 'confirmed' as const,
         statusAt: '2026-08-05T10:00:00.058Z',
-        ...(queuedFirst && index === 0 ? { correlationId: 'create-echo' } : {}),
+        ...(queuedFirst && (index === 0 || sourceReplay) ? { correlationId: 'create-echo' } : {}),
       };
       if (holdFirst && index === 0) {
         // Held in flight until the test releases it — the window in which the
@@ -191,8 +192,11 @@ describe('delete after a pending write on the same row', () => {
     expect(calls).toHaveLength(1);
     queue.onDeltaReceived(2, undefined, 'create-echo');
     await created;
-    expect(await eventually(() => calls.length === 2, 3_000)).toBe(true);
-    expect(calls[1]?.ops.map(op => op.type)).toEqual(['DELETE']);
+    expect(await eventually(() => calls.length === 3, 3_000)).toBe(true);
+    // The echo verifies the whole create receipt before releasing the delete.
+    expect(calls[1]).toEqual(calls[0]);
+    expect(calls[2]?.ops.map(op => op.type)).toEqual(['DELETE']);
+    expect(calls[2]?.key).not.toBe(calls[0]?.key);
     await deleted;
   });
 

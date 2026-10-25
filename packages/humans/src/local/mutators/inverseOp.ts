@@ -42,6 +42,11 @@ export const inverseOpSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('createMany'), modelKey: z.string(), data: z.array(rowDataSchema) }),
   z.object({ kind: z.literal('updateMany'), modelKey: z.string(), patches: z.array(patchSchema) }),
   z.object({ kind: z.literal('deleteMany'), modelKey: z.string(), ids: z.array(z.string()) }),
+  z.object({
+    kind: z.literal('reverse-operation'), modelKey: z.string(), id: z.string(),
+    field: z.string(), domain: z.enum(['text', 'counter']), editId: z.string(),
+    patch: rowDataSchema,
+  }),
 ]);
 
 /** One undo entry = one mutator invocation's inverses + paired forwards. */

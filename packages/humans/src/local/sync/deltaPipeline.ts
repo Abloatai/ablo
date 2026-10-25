@@ -87,6 +87,8 @@ export interface DeltaPipelineContext {
   applyDeltaBatchToPool(results: AppliedChange[]): void;
   /** Optional whole-batch projection performed before bounded apply slicing. */
   projectDeltaBatchForPool?(results: readonly AppliedChange[]): readonly AppliedChange[];
+  /** Prepare and reveal a semantic frame as one action; false retains ordinary slicing. */
+  applyPreparedDeltaBatch?(results: readonly AppliedChange[], apply: (results: readonly AppliedChange[]) => void): Promise<boolean>;
   /** Acknowledges a sync id back to the server; a no-op when the socket is down. */
   acknowledge(syncId: number): void;
 
@@ -125,6 +127,16 @@ export interface DeltaPipelineContext {
  * public store surface.
  */
 const activeFlushes = new WeakMap<DeltaPipelineContext, Promise<void>>();
+/** Persistence can succeed before preparation fails; retry must still reveal those rows. */
+const unappliedChanges = new WeakMap<DeltaPipelineContext, Map<number, AppliedChange>>();
+const publicationGenerations = new WeakMap<DeltaPipelineContext, number>();
+
+/** Security clears invalidate detached work as well as queued and persisted projections. */
+export function clearPendingPublications(ctx: DeltaPipelineContext): void {
+  publicationGenerations.set(ctx, (publicationGenerations.get(ctx) ?? 0) + 1);
+  unappliedChanges.delete(ctx);
+  ctx.pendingDeltas = [];
+}
 
 /**
  * Handles a sync-group ('G' or 'S') delta whose handler rejected after the
@@ -332,11 +344,13 @@ async function drainPendingDeltas(ctx: DeltaPipelineContext): Promise<void> {
       ctx.batchTimer = null;
     }
 
+    const generation = publicationGenerations.get(ctx) ?? 0;
     const queuedDeltas = ctx.pendingDeltas;
     ctx.pendingDeltas = [];
     try {
       await flushDeltaBatch(ctx, queuedDeltas);
     } catch (error) {
+      if (generation !== (publicationGenerations.get(ctx) ?? 0)) continue;
       // Preserve the pre-existing retry contract. The failed detached batch
       // goes back ahead of deltas received while it was in flight.
       ctx.pendingDeltas = [...queuedDeltas, ...ctx.pendingDeltas];
@@ -457,6 +471,7 @@ async function flushDeltaBatchInner(
   ctx: DeltaPipelineContext,
   queuedDeltas: SyncDelta[],
 ): Promise<void> {
+  const generation = publicationGenerations.get(ctx) ?? 0;
   const stagePlugins = ctx.stagePlugins ?? [];
   pipelineDebug.phase = 'dedupe';
   const deduplicatedDeltas = timeDrainStage('dedupe', () => ctx.deduplicateDeltas(queuedDeltas));
@@ -513,7 +528,15 @@ async function flushDeltaBatchInner(
     )
   );
   pipelineDebug.persistsSettled += 1;
-  const dbResults = batch.results;
+  if (generation !== (publicationGenerations.get(ctx) ?? 0)) return;
+  const held = unappliedChanges.get(ctx);
+  const dbResults = held ? batch.results.map((result) => result.action === 'verify' && result.syncId !== undefined && result.syncId > 0
+    ? held.get(result.syncId) ?? result : result) : batch.results;
+  for (let index = 0; index < dbResults.length; index++) {
+    const operation = regularDeltas[index]?.operation;
+    const result = dbResults[index];
+    if (operation && result) result.operation = operation;
+  }
   runStage(stagePlugins, 'persist', { deltas: regularDeltas });
 
   // Apply the batch results to the in-memory graph. When a plugin has
@@ -530,31 +553,51 @@ async function flushDeltaBatchInner(
   // commit remains the atomic unit of visibility.
   const poolResults = ctx.projectDeltaBatchForPool?.(dbResults) ?? dbResults;
   const slices = sliceApplyChanges(poolResults, ctx.smartSyncOptions.applySliceDeltas);
-  await timeDrainStageAsync('apply', async () => {
-    const hasApplyPlugins = pluginsForStage(stagePlugins, 'apply').length > 0;
-    // Yield on a TIME budget, not per slice: a host yield costs milliseconds
-    // under load (measured ~7x throughput collapse when yielding every few
-    // deltas), so the yield decision amortizes it — only after the budget of
-    // uninterrupted apply work has been spent, and never before the first
-    // slice. Slices stay the atomicity unit; the budget only decides where
-    // the loop breathes.
-    let sliceStartedAt = performance.now();
-    for (const [index, slice] of slices.entries()) {
-      if (index > 0 && performance.now() - sliceStartedAt > APPLY_YIELD_BUDGET_MS) {
-        pipelineDebug.phase = `apply-yield-${index}`;
-        pipelineDebug.applyYields += 1;
-        await yieldToHost();
-        sliceStartedAt = performance.now();
+  try {
+    await timeDrainStageAsync('apply', async () => {
+      const hasApplyPlugins = pluginsForStage(stagePlugins, 'apply').length > 0;
+      const apply = (changes: readonly AppliedChange[]) => {
+        if (generation !== (publicationGenerations.get(ctx) ?? 0)) return;
+        if (hasApplyPlugins) runStage(stagePlugins, 'apply', { changes });
+        else ctx.applyDeltaBatchToPool([...changes]);
+      };
+      if (await ctx.applyPreparedDeltaBatch?.(poolResults, apply)) return;
+      // Yield on a TIME budget, not per slice: a host yield costs milliseconds
+      // under load (measured ~7x throughput collapse when yielding every few
+      // deltas), so the yield decision amortizes it — only after the budget of
+      // uninterrupted apply work has been spent, and never before the first
+      // slice. Slices stay the atomicity unit; the budget only decides where
+      // the loop breathes.
+      let sliceStartedAt = performance.now();
+      for (const [index, slice] of slices.entries()) {
+        if (index > 0 && performance.now() - sliceStartedAt > APPLY_YIELD_BUDGET_MS) {
+          pipelineDebug.phase = `apply-yield-${index}`;
+          pipelineDebug.applyYields += 1;
+          await yieldToHost();
+          sliceStartedAt = performance.now();
+        }
+        if (generation !== (publicationGenerations.get(ctx) ?? 0)) return;
+        pipelineDebug.phase = `apply-slice-${index}`;
+        pipelineDebug.applySlices += 1;
+        if (hasApplyPlugins) {
+          runStage(stagePlugins, 'apply', { changes: slice });
+        } else {
+          ctx.applyDeltaBatchToPool(slice);
+        }
       }
-      pipelineDebug.phase = `apply-slice-${index}`;
-      pipelineDebug.applySlices += 1;
-      if (hasApplyPlugins) {
-        runStage(stagePlugins, 'apply', { changes: slice });
-      } else {
-        ctx.applyDeltaBatchToPool(slice);
-      }
-    }
-  });
+    });
+  } catch (error) {
+    if (generation !== (publicationGenerations.get(ctx) ?? 0)) return;
+    const pending = held ?? new Map<number, AppliedChange>();
+    for (const change of dbResults) if (change.action !== 'verify' && change.syncId !== undefined && change.syncId > 0) pending.set(change.syncId, change);
+    if (pending.size) unappliedChanges.set(ctx, pending);
+    throw error;
+  }
+  if (generation !== (publicationGenerations.get(ctx) ?? 0)) return;
+  if (held) {
+    for (const change of dbResults) if (change.syncId !== undefined) held.delete(change.syncId);
+    if (!held.size) unappliedChanges.delete(ctx);
+  }
   pipelineDebug.phase = 'acknowledge';
 
   // Acknowledge and advance the sync cursor, gated on persistence.

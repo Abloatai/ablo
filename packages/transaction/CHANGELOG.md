@@ -1,5 +1,20 @@
 # @abloatai/transaction
 
+## 0.67.0
+
+### Versioned operations compose with ordinary writes
+
+Schema-declared text edits and integer increments now enter the ordinary model
+update and commit contracts. Creation retains values; text updates require
+versioned operations. Atomic commits can combine semantic operations on distinct
+rows with ordinary writes, retaining request identities for replay.
+
+Operation references and bounded history support reconciliation and undo without
+replacing another writer's accepted contribution. Compatible authority support
+and field-history migrations are required. Connected-source semantic writes and
+same-row semantic sequencing in one commit remain unsupported. See the
+[operation guide](https://github.com/Abloatai/ablo/blob/v0.67.0/packages/ablo/docs/operation-fields.md).
+
 ## 0.66.17
 
 ### Browser reloads preserve the active session

@@ -1473,6 +1473,12 @@ The signed Data Source returned a failure without a more specific code. Inspect 
 
 Ablo could not safely reach the registered direct data source before completing the write. The write remains pinned to direct; retry the same idempotency key after connectivity recovers.
 
+### subscription_delivery_unavailable
+
+`HTTP 503` · retryable
+
+Change subscription delivery is reconnecting. Retry shortly; the server checks the durable log before resuming notifications.
+
 ### sync_not_ready
 
 `client-only` · not sent over the network

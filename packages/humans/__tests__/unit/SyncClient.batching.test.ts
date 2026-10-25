@@ -63,4 +63,16 @@ describe('SyncClient model-write staging', () => {
     expect(commits).toHaveLength(1);
     expect(commits[0]?.operations).toHaveLength(3);
   });
+
+  it('invalidates local model queries for staged writes before confirmation', async () => {
+    await client.initialize('user-1', 'org-1');
+    const changed: string[][] = [];
+    client.on('models:changed', (models: Set<string>) => { changed.push([...models]); });
+    const first = client.add(createItemFixture({ id: 'first' }));
+    const second = client.add(createItemFixture({ id: 'second' }));
+    await Promise.resolve();
+    expect(changed).toEqual([['Item']]);
+    await client.syncNow();
+    await Promise.all([first, second]);
+  });
 });

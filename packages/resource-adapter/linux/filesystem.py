@@ -11,7 +11,8 @@ from store import Rejected
 
 
 class Filesystem(Operations):
-    def __init__(self, store, workers, operation=None):
+    def __init__(self, store, workers, operation=None, project_files=None):
+        self.project_files = project_files
         self.store, self.workers = store, workers
         self.operation = operation["id"] if operation else None
         self.owner_uid = operation["uid"] if operation else 0
@@ -42,6 +43,9 @@ class Filesystem(Operations):
                 claim = next((claim for claim in request["claims"] if claim["resource"] == "file:" + path), None)
                 if claim:
                     self.store.authorize(owner, claim["resource"], claim["claim"])
+                elif path != ".git" and self.project_files and self.project_files():
+                    # Only private staging; the trusted supervisor claims every net path before publication.
+                    self.store.capture(operation, path)
                 elif any(claim["resource"].startswith("ref:") for claim in request["claims"]):
                     peer = self.store.db.execute("SELECT * FROM leases WHERE resource=? AND active=1 AND expires>?",
                                                  ("file:" + path, time.time())).fetchone()
@@ -80,7 +84,12 @@ class Filesystem(Operations):
             parent = path.lstrip("/")
             if operation:
                 self.store.capture(operation, parent)
-            return [".", ".."] + [posixpath.basename(child) for child in self.store.children(parent, operation)]
+            # Supply d_type so name/type scans do not fall back to statting every file.
+            # Kind changes already advance the parent membership revision.
+            kinds = {"file": stat.S_IFREG, "directory": stat.S_IFDIR, "symlink": stat.S_IFLNK}
+            return [".", ".."] + [(posixpath.basename(child),
+                                   {"st_mode": kinds[self.store.metadata(child, operation)["kind"]]}, 0)
+                                  for child in self.store.children(parent, operation)]
 
     def open(self, path, flags):
         with self.store.lock:
@@ -215,6 +224,18 @@ class Filesystem(Operations):
             if self.store.file(path, operation):
                 raise FuseOSError(errno.EEXIST)
             self.store.stage(operation, path, "directory", None, mode & 0o777)
+
+    def chown(self, path, uid, gid):
+        with self.store.lock, self.store.db:
+            # Ownership is fixed by the admitted operation; the gofer repeats it after create.
+            if uid not in (-1, 2**32 - 1, self.owner_uid) or gid not in (-1, 2**32 - 1, self.owner_uid):
+                raise FuseOSError(errno.EPERM)
+            path = path.lstrip("/")
+            operation = self.mutation(path)
+            self.store.capture(operation, path)
+            if not self.store.file(path, operation):
+                raise FuseOSError(errno.ENOENT)
+            return 0
 
     def chmod(self, path, mode):
         with self.store.lock, self.store.db:

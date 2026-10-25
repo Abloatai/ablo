@@ -26,7 +26,7 @@ import type { Database, BootstrapResult, BootstrapRequirements } from './Databas
 import type { BootstrapData } from './sync/BootstrapFetcher.js';
 import type { InstanceCache } from './InstanceCache.js';
 import { ModelRegistry } from './ModelRegistry.js';
-import { PropertyType } from '@abloatai/transaction/types';
+import { validateModelWrite } from './transactions/operations/index.js';
 import {
   SyncWebSocket,
   type SyncDelta,
@@ -75,6 +75,7 @@ import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 import type { DeliveryPartitionRoute } from '@abloatai/transaction/auth/deliveryPartition';
 import { queryByClass as runQueryByClass, countModels } from './store/queryApi.js';
 import type { QueuedMutation } from './transactions/mutations/MutationQueue.js';
+import type { MutationOrigin } from './transactions/mutations/commitPayload.js';
 import type { CommitLatencySample } from './transactions/mutations/commitLatency.js';
 
 // ── Exported types ──────────────────────────────────────────────────────────
@@ -613,6 +614,9 @@ export class BaseSyncedStore<
       this.syncClient.onTransactionEvent('created', () => { this.incrementPendingChanges(); }),
       this.syncClient.onTransactionEvent('completed', () => { this.decrementPendingChanges(); }),
       this.syncClient.onTransactionEvent('failed', () => { this.decrementPendingChanges(); }),
+      this.syncClient.subscribe('sync:error', (error) => {
+        this.updateSyncStatus({ state: 'error', error: toAbloError(error) });
+      }),
     );
 
     // Set this store as the global Model store
@@ -882,15 +886,12 @@ export class BaseSyncedStore<
    * emit here, so undo is naturally local-only (you can't undo a teammate).
    */
   subscribeLocalMutations(handler: (mutation: LocalMutation) => void): () => void {
-    // Tap the MutationQueue directly via `onLocalTransaction`. The previous
-    // `syncClient.subscribe('transaction:created', …)` route registered the
-    // handler on SyncClient's OWN emitter, which never fires that event (only
-    // the queue's emitter does) — so undo recorded nothing. See
-    // `SyncClient.onLocalTransaction` for the full rationale.
+    // The primary transaction owner includes both model and commit-lane writes.
     return this.syncClient.onLocalTransaction((tx) => {
       if (!tx.modelName || !tx.modelId) return;
       handler({
         type: tx.type,
+        ...(tx.context.undoScopeId ? { undoScopeId: tx.context.undoScopeId } : {}),
         modelName: tx.modelName,
         modelId: tx.modelId,
         data: tx.data ?? null,
@@ -1155,6 +1156,7 @@ export class BaseSyncedStore<
   /** Narrow context the group-change leaf talks back through. */
   private groupChangeContext(): GroupChangeContext {
     return {
+      clearOperationSession: () => { this.syncClient.clearModelOperations(); deltaPipeline.clearPendingPublications(this.deltaPipelineContext); },
       runtime: this.runtime,
       database: this.database,
       objectPool: this.objectPool,
@@ -1247,7 +1249,7 @@ export class BaseSyncedStore<
       getAllPoolIds: () => this.objectPool.getAllIds(),
       get bootstrapDeltaQueue() { return store.bootstrapDeltaQueue; },
       set bootstrapDeltaQueue(queue) { store.bootstrapDeltaQueue = queue; },
-      applyDeltaFrame: (deltas) => { void this.applyDeltaFrame(deltas); },
+      applyDeltaFrame: (deltas) => { void this.applyDeltaFrame(deltas).catch(this.handleFlushError); },
     };
   }
 
@@ -1397,6 +1399,8 @@ export class BaseSyncedStore<
 
   /** Stop access and await deletion of this identity's local state. */
   async purge(): Promise<void> {
+    this.syncClient.clearModelOperations();
+    deltaPipeline.clearPendingPublications(this.deltaPipelineContext);
     // Clear the bearer first so no request started during teardown can carry
     // the terminal credential.
     this.auth?.setAuthToken(null);
@@ -1572,6 +1576,7 @@ export class BaseSyncedStore<
       projectDeltaBatchForPool: (results) =>
         this.syncClient.projectDeltaBatchForPool(results),
       applyDeltaBatchToPool: (results) => { this.applyChangesToPool(results); },
+      applyPreparedDeltaBatch: (results, apply) => this.syncClient.applyPreparedDeltaBatch(results, apply),
       acknowledge: (syncId) => { this.syncWebSocket.acknowledge(syncId); },
       get objectPool() { return store.objectPool; },
       // Dynamic-dispatch hooks — protected override points on this class.
@@ -1715,21 +1720,7 @@ export class BaseSyncedStore<
 
   /** Validate model against schema before save */
   protected validateModel(model: Model): void {
-    const modelName = model.getModelName();
-    const properties = this.modelRegistry.getPropertiesForModel(modelName);
-    const modelData = model.toJSON() as Record<string, unknown>;
-
-    for (const [propName, metadata] of properties) {
-      if (metadata.type === PropertyType.referenceModel) continue;
-      if (metadata.type === PropertyType.ephemeralProperty) continue;
-
-      if (!metadata.optional && (modelData[propName] === null || modelData[propName] === undefined)) {
-        throw new AbloValidationError(
-          `Required field ${propName} is missing on ${modelName}`,
-          { code: 'model_required_field_missing' },
-        );
-      }
-    }
+    validateModelWrite(model, this.modelRegistry);
   }
 
   /**
@@ -1744,7 +1735,7 @@ export class BaseSyncedStore<
    */
   async save<T extends { id: string; createdAt?: Date; updatedAt?: Date }>(
     entity: T,
-    options?: { skipValidation?: boolean }
+    options?: { skipValidation?: boolean } & MutationOrigin
   ): Promise<void> {
     const model = rowAsModel(entity);
     this.beforeSave(model);
@@ -1756,10 +1747,23 @@ export class BaseSyncedStore<
     const isCreate = !this.objectPool.get(model.id);
     if (isCreate) {
       model.updatedAt = new Date();
-      await this.syncClient.add(model);
+      await this.syncClient.add(model, undefined, options);
     } else {
-      await this.syncClient.update(model);
+      await this.syncClient.update(model, undefined, undefined, options);
     }
+  }
+
+  write(model: Model, patch: Record<string, unknown>, origin?: MutationOrigin): Promise<void> {
+    return this.syncClient.write(model, patch, undefined, () => {
+      this.beforeSave(model);
+      this.validateModel(model);
+      if (!model.createdAt) model.createdAt = new Date();
+      model.updatedAt = new Date();
+    }, origin);
+  }
+
+  inverseModelOperation(kind: 'text' | 'counter', target: import('@abloatai/transaction/commit').OperationTarget, editId: string) {
+    return this.syncClient.inverseModelOperation(kind, target, editId);
   }
 
   /** Save with an atomic server mutation (e.g., createSectionWithBlocks) */
@@ -1772,11 +1776,11 @@ export class BaseSyncedStore<
   }
 
   /** Delete a model. Accepts schema-inferred entity shapes (see `save`). */
-  async delete<T extends { id: string }>(entity: T): Promise<void> {
+  async delete<T extends { id: string }>(entity: T, origin?: MutationOrigin): Promise<void> {
     const model = rowAsModel(entity);
     this.pendingDeletes.add(model.id);
     // SyncClient.delete handles: pool remove, transaction queue
-    await this.syncClient.delete(model);
+    await this.syncClient.delete(model, undefined, origin);
   }
 
   /** Archive a model. Accepts schema-inferred entity shapes (see `save`). */

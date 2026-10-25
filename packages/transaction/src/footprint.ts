@@ -62,6 +62,8 @@ export const ABLO_REPLICATION_ROLE = 'ablo_replicator';
 export const ABLO_WRITE_ROLE = 'ablo_writer';
 /** The bookkeeping table that makes a retried write land once. */
 export const ABLO_IDEMPOTENCY_TABLE = 'ablo_idempotency';
+/** The durable fence ordering direct customer writes. */
+export const ABLO_CLAIM_FENCE_TABLE = 'ablo_claim_fence_watermark';
 /** The transactional outbox an endpoint source reports through. */
 export const ABLO_OUTBOX_TABLE = 'ablo_outbox';
 
@@ -192,6 +194,11 @@ export const ABLO_FOOTPRINT: readonly FootprintArtifact[] = [
     kind: 'table',
     name: ABLO_IDEMPOTENCY_TABLE,
     purpose: 'remembers which writes already landed, so a retry cannot duplicate one',
+  },
+  {
+    kind: 'table',
+    name: ABLO_CLAIM_FENCE_TABLE,
+    purpose: 'rejects stale claim holders inside the customer write transaction',
   },
   {
     kind: 'table',

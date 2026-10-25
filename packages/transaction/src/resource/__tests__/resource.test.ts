@@ -42,6 +42,23 @@ describe('external resources', () => {
     expect(calls).toBe(2);
   });
 
+  it('preserves exact publication witnesses when an applied reply was lost', async () => {
+    const operationId = randomUUID();
+    const publication = {version: 1, digest: 'a'.repeat(64), paths: ['new'],
+      premises: [{path:'new',kind:'file',revision:0}], requests:[{operationId,resource:'file:new'}],
+      claims:[{resource:'file:new',claim:'held',fence:7}]};
+    const receipt = {operationId,status:'applied',publication};
+    const requests: string[] = [];
+    const workspace: ResourceWorkspace = {request:async request => {
+      requests.push(String(request.action));
+      if(request.action === 'run')throw new Error('reply lost');
+      return receipt;
+    }};
+    await expect(runResourceOperation(workspace,{operationId,claims:[],argv:['edit']})).rejects.toMatchObject({code:'outcome_unknown'});
+    expect(await getResourceReceipt(workspace,operationId)).toEqual(receipt);
+    expect(requests).toEqual(['run','receipt']);
+  });
+
   it('rejects malformed and mismatched recovery receipts', async () => {
     const operationId = randomUUID();
     for (const response of [null, { operationId: randomUUID(), status: 'applied' }]) {

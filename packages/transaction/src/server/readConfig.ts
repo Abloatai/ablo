@@ -58,6 +58,9 @@ export interface ParentScope {
  * its own near-copy.
  */
 export interface ReadModelShape {
+  /** Client field names explicitly declared as versioned plain text. */
+  readonly textFields?: readonly string[];
+  readonly counterFields?: readonly string[];
   /**
    * Extra names accepted when a request looks up or filters this model. When the
    * physical table name is canonical, the descriptor's own name stays that table

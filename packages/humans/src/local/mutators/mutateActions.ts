@@ -1,6 +1,7 @@
 import { Model, modelAsRow } from '../Model.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
-import type { Schema, InferModel, InferCreate } from '@abloatai/transaction/schema/schema';
+import type { MutationOrigin } from '../transactions/mutations/commitPayload.js';
+import type { Schema, InferModel, InferCreate, InferUpdate } from '@abloatai/transaction/schema/schema';
 import type { ModelDef } from '@abloatai/transaction/schema/model';
 // Type-only — `SyncStoreContract` is the store interface; importing the type
 // does not pull the React `context` module's runtime.
@@ -19,7 +20,7 @@ import type { SyncStoreContract } from '../storeContract.js';
  * `ablo.<model>.update`, and `ablo.<model>.delete`.
  */
 type UpdatePatch<S extends Schema, K extends keyof S['models'] & string> =
-  { id: string } & Partial<InferModel<S, K>>;
+  { id: string } & Partial<InferUpdate<S, K>>;
 
 export interface MutateActions<S extends Schema, K extends keyof S['models'] & string> {
   /**
@@ -57,6 +58,7 @@ export function createMutateActions<
   modelKey: K,
   store: SyncStoreContract,
   organizationId: string,
+  origin?: MutationOrigin,
 ): MutateActions<S, K> {
   const modelDef = (schema.models as Record<string, ModelDef>)[modelKey];
   const typename = modelDef?.typename ?? modelKey;
@@ -116,24 +118,34 @@ export function createMutateActions<
       if (Array.isArray(data)) {
         if (data.length === 0) return [];
         const models = data.map((d) => buildModelForCreate(d, now));
-        await Promise.all(models.map((m) => store.save(m)));
+        await Promise.all(models.map((m) => store.save(m, origin)));
         return models.map((m) => modelAsRow<InferModel<S, K>>(m));
       }
       const model = buildModelForCreate(data, now);
-      await store.save(model);
+      await store.save(model, origin);
       return modelAsRow<InferModel<S, K>>(model);
     }) as MutateActions<S, K>['create'],
 
     update: (async (patch: UpdatePatch<S, K> | UpdatePatch<S, K>[]) => {
+      if (store.write) {
+        const writeOne = async (input: UpdatePatch<S, K>) => {
+          const { id, ...changes } = input;
+          const model = store.pool.get(id);
+          if (!model || model.getModelName() !== typename) throw new AbloValidationError(`Entity not found: ${typename}/${id}`, { code: 'entity_not_found' });
+          await store.write!(model, changes, origin);
+          return modelAsRow<InferModel<S, K>>(model);
+        };
+        return Array.isArray(patch) ? Promise.all(patch.map(writeOne)) : writeOne(patch);
+      }
       const now = new Date();
       if (Array.isArray(patch)) {
         if (patch.length === 0) return [];
         const models = patch.map((p) => applyPatch(p, now));
-        await Promise.all(models.map((m) => store.save(m)));
+        await Promise.all(models.map((m) => store.save(m, origin)));
         return models.map((m) => modelAsRow<InferModel<S, K>>(m));
       }
       const model = applyPatch(patch, now);
-      await store.save(model);
+      await store.save(model, origin);
       return modelAsRow<InferModel<S, K>>(model);
     }) as MutateActions<S, K>['update'],
 
@@ -145,12 +157,12 @@ export function createMutateActions<
           const m = store.pool.get(id);
           if (m) models.push(m);
         }
-        await Promise.all(models.map((m) => store.delete(m)));
+        await Promise.all(models.map((m) => store.delete(m, origin)));
         return;
       }
       const model = store.pool.get(idOrIds);
       if (!model) return;
-      await store.delete(model);
+      await store.delete(model, origin);
     }),
 
     archive: async (id) => {

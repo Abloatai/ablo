@@ -132,6 +132,7 @@ export {
   type Model,
   type Row,
   type InferCreate,
+  type InferUpdate,
   type InferRow,
   type InferModelNames,
   type BaseModelFields,

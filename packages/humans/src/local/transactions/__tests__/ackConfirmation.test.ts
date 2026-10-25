@@ -85,6 +85,109 @@ describe('ack-based transaction confirmation', () => {
     ctx.cleanup();
   });
 
+  async function acceptedSourceBatch() {
+    queue.dispose();
+    const outbox = new MemoryDurableWrites();
+    queue = new MutationQueue({ enablePersistence: true, retryBackoff: { baseMs: 1, capMs: 1 } });
+    queue.setCommitOutbox(outbox);
+    const key = 'whole-source-batch', correlationId = 'whole-source-correlation';
+    ctx.mocks.mutationExecutor.setStatus('queued');
+    ctx.mocks.mutationExecutor.setCorrelationId(correlationId);
+    const operations = ['first', 'second'].map(id => ({
+      type: 'UPDATE' as const, model: 'item', id, input: { title: 'next' }, where: { title: 'old' },
+    }));
+    await queue.enqueueCommit(key, operations);
+    await waitFor(() => outbox.records.get(commitEnvelopeRecordId(key))?.acceptedAt !== undefined);
+    const receipt = queue.waitForCommitReceipt(key);
+    const queued = { status: 'queued' as const, statusAt: new Date().toISOString(), lastSyncId: 0 as const, correlationId };
+    const confirmed = { ...queued, status: 'confirmed' as const, lastSyncId: 42 };
+    return { outbox, key, correlationId, operations, receipt, queued, confirmed };
+  }
+
+  it('retains the whole atomic write after a partial echo and replays its exact request', async () => {
+    const { outbox, key, correlationId, operations, receipt } = await acceptedSourceBatch();
+    let settled = false;void receipt.then(() => { settled = true; });
+    queue.onDeltaReceived(40, 'first', correlationId);
+    await waitFor(() => ctx.mocks.mutationExecutor.getCallsByMethod('commit').length === 2);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    expect(outbox.records.has(commitEnvelopeRecordId(key))).toBe(true);
+    ctx.mocks.mutationExecutor.setStatus('confirmed');ctx.mocks.mutationExecutor.setSyncId(42);
+    queue.onDeltaReceived(42, 'second', correlationId);
+    await expect(receipt).resolves.toMatchObject({ lastSyncId: 42 });
+    for (const call of ctx.mocks.mutationExecutor.getCallsByMethod('commit')) {
+      expect(call.operations).toEqual(operations);
+      expect(call.options?.idempotencyKey).toBe(key);
+    }
+    await waitFor(() => !outbox.records.has(commitEnvelopeRecordId(key)));
+  });
+
+  it('coalesces duplicate echoes and rechecks an echo arriving during a queued reply', async () => {
+    const { correlationId, receipt, queued, confirmed } = await acceptedSourceBatch();
+    let release!: () => void;
+    const pending = new Promise<typeof queued>(resolve => { release = () => resolve(queued); });
+    const dispatch = jest.spyOn(ctx.mocks.mutationExecutor, 'commit')
+      .mockReturnValueOnce(pending).mockResolvedValueOnce(confirmed);
+    queue.onDeltaReceived(40, 'first', correlationId);
+    queue.onDeltaReceived(40, 'first', correlationId);
+    queue.onDeltaReceived(42, 'second', correlationId);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    release();await expect(receipt).resolves.toMatchObject({ lastSyncId: 42 });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a failed receipt check without rolling back the accepted write', async () => {
+    const { correlationId, receipt, confirmed } = await acceptedSourceBatch();
+    const failed = jest.fn();queue.on('transaction:failed', failed);
+    const dispatch = jest.spyOn(ctx.mocks.mutationExecutor, 'commit')
+      .mockRejectedValueOnce(new AbloConnectionError('offline', { code: 'ws_not_connected' }))
+      .mockResolvedValueOnce(confirmed);
+    queue.onDeltaReceived(42, 'second', correlationId);
+    await expect(receipt).resolves.toMatchObject({ lastSyncId: 42 });
+    expect(dispatch).toHaveBeenCalledTimes(2);expect(failed).not.toHaveBeenCalled();
+  });
+
+  it('refuses a changed source identity without deleting the accepted envelope', async () => {
+    const { outbox, key, correlationId, receipt, confirmed } = await acceptedSourceBatch();
+    let settled = false;void receipt.then(() => { settled = true; });
+    const dispatch = jest.spyOn(ctx.mocks.mutationExecutor, 'commit')
+      .mockResolvedValueOnce({ ...confirmed, correlationId: 'different-source' }).mockResolvedValueOnce(confirmed);
+    queue.onDeltaReceived(40, 'first', correlationId);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toBe(false);expect(outbox.records.has(commitEnvelopeRecordId(key))).toBe(true);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    queue.onDeltaReceived(42, 'second', correlationId);
+    await expect(receipt).resolves.toMatchObject({ lastSyncId: 42 });
+  });
+
+  it('ignores a receipt arriving after disposal and leaves durable recovery intact', async () => {
+    const { outbox, key, correlationId, confirmed } = await acceptedSourceBatch();
+    let release!: () => void;
+    jest.spyOn(ctx.mocks.mutationExecutor, 'commit').mockReturnValueOnce(new Promise(resolve => {
+      release = () => resolve(confirmed);
+    }));
+    const complete = jest.fn();queue.on('transaction:completed', complete);
+    queue.onDeltaReceived(42, 'second', correlationId);queue.dispose();release();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(complete).not.toHaveBeenCalled();expect(outbox.records.has(commitEnvelopeRecordId(key))).toBe(true);
+  });
+
+  it('keeps every model-batch member pending until the retained batch receipt confirms', async () => {
+    ctx.mocks.mutationExecutor.setStatus('queued');
+    const correlationId = 'model-batch-correlation';ctx.mocks.mutationExecutor.setCorrelationId(correlationId);
+    const txs = await Promise.all(['first', 'second'].map(id => queue.update(createItemFixture({ id }), userContext, { title: 'next' })));
+    await waitFor(() => txs.every(tx => tx.status === 'awaiting_delta'));
+    expect(ctx.mocks.mutationExecutor.getCallsByMethod('commit')).toHaveLength(1);
+    queue.onDeltaReceived(40, txs[0].id, correlationId);
+    await waitFor(() => ctx.mocks.mutationExecutor.getCallsByMethod('commit').length === 2);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(txs.map(tx => tx.status)).toEqual(['awaiting_delta', 'awaiting_delta']);
+    ctx.mocks.mutationExecutor.setStatus('confirmed');ctx.mocks.mutationExecutor.setSyncId(42);
+    queue.onDeltaReceived(42, txs[1].id, correlationId);
+    await Promise.all(txs.map(tx => tx.confirmation));
+    expect(txs.map(tx => tx.status)).toEqual(['completed', 'completed']);
+  });
+
   it('confirms on the server ack alone — NO delta echo required', async () => {
     const item = createItemFixture();
     const tx = await queue.create(item, userContext);
@@ -136,6 +239,8 @@ describe('ack-based transaction confirmation', () => {
     queue.onDeltaReceived(10_001, clientTxId);
     expect(tx.status).toBe('awaiting_delta');
 
+    ctx.mocks.mutationExecutor.setStatus('confirmed');
+    ctx.mocks.mutationExecutor.setSyncId(10_002);
     queue.onDeltaReceived(10_002, tx.id, correlationId);
     await expect(tx.confirmation).resolves.toBeUndefined();
     expect(tx.status).toBe('completed');
@@ -169,7 +274,10 @@ describe('ack-based transaction confirmation', () => {
 
     const clientTxId = ctx.mocks.mutationExecutor.lastCall?.options?.idempotencyKey;
     if (typeof clientTxId !== 'string') throw new Error('missing commit idempotency key');
+    ctx.mocks.mutationExecutor.setStatus('confirmed');
+    ctx.mocks.mutationExecutor.setSyncId(10_003);
     queue.onDeltaReceived(10_003, tx.id, correlationId);
+    await waitFor(() => tx.status === 'completed');
     expect(tx.status).toBe('completed');
     await expect(queue.confirmationFor(item.getModelName(), item.id)).resolves.toBeUndefined();
   });
@@ -192,6 +300,8 @@ describe('ack-based transaction confirmation', () => {
     const persisted = outbox.records.get(commitEnvelopeRecordId(clientTxId));
     expect(typeof persisted?.acceptedAt).toBe('number');
     expect(persisted?.correlationId).toBe(correlationId);
+    ctx.mocks.mutationExecutor.setStatus('confirmed');
+    ctx.mocks.mutationExecutor.setSyncId(10_004);
     queue.onDeltaReceived(10_004, tx.id, correlationId);
     await waitFor(
       () => !outbox.records.has(commitEnvelopeRecordId(clientTxId)),
@@ -221,6 +331,8 @@ describe('ack-based transaction confirmation', () => {
     if (typeof clientTxId !== 'string') throw new Error('missing commit idempotency key');
     expect(outbox.records.has(commitEnvelopeRecordId(clientTxId))).toBe(true);
 
+    ctx.mocks.mutationExecutor.setStatus('confirmed');
+    ctx.mocks.mutationExecutor.setSyncId(10_005);
     queue.onDeltaReceived(10_005, tx.id, correlationId);
     await waitFor(
       () => !outbox.records.has(commitEnvelopeRecordId(clientTxId)),
@@ -354,6 +466,8 @@ describe('ack-based transaction confirmation', () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
+    ctx.mocks.mutationExecutor.setStatus('confirmed');
+    ctx.mocks.mutationExecutor.setSyncId(20_002);
     queue.onDeltaReceived(20_002, undefined, correlationId);
     await expect(receipt).resolves.toEqual({
       lastSyncId: 20_002,
@@ -397,7 +511,10 @@ describe('ack-based transaction confirmation', () => {
     expect(failed).not.toHaveBeenCalled();
     expect(outbox.records.has(commitEnvelopeRecordId(clientTxId))).toBe(true);
 
+    ctx.mocks.mutationExecutor.setStatus('confirmed');
+    ctx.mocks.mutationExecutor.setSyncId(20_003);
     queue.onDeltaReceived(20_003, undefined, correlationId);
+    await waitFor(() => !outbox.records.has(commitEnvelopeRecordId(clientTxId)));
     await expect(queue.waitForCommitReceipt(clientTxId)).resolves.toMatchObject({
       lastSyncId: 20_003,
     });
@@ -544,9 +661,13 @@ describe('ack-based transaction confirmation', () => {
     // Replication and the replayed forward use independent channels. Pin the
     // race where the WAL echo wins before the cached queued receipt returns.
     queue.onDeltaReceived(20_004, undefined, correlationId);
+    const queued = { status: 'queued' as const, statusAt: new Date().toISOString(), lastSyncId: 0 as const, correlationId };
+    jest.spyOn(ctx.mocks.mutationExecutor, 'commit').mockResolvedValueOnce(queued);
+    ctx.mocks.mutationExecutor.setStatus('confirmed');
+    ctx.mocks.mutationExecutor.setSyncId(20_004);
     await queue.restoreDurableCommits();
     await waitFor(
-      () => ctx.mocks.mutationExecutor.getCallsByMethod('commit').length === 2,
+      () => ctx.mocks.mutationExecutor.getCallsByMethod('commit').length >= 2,
     );
     await expect(queue.waitForCommitReceipt(clientTxId)).resolves.toMatchObject({
       lastSyncId: 20_004,

@@ -2,13 +2,29 @@
 import {
   Ablo, AbloProvider, createAbloReact, useAblo, useMutators, useUndoScope,
 } from '@abloatai/ablo/react';
-import { defineSchema, model, z } from '@abloatai/ablo/schema';
+import { defineSchema, model, field, z } from '@abloatai/ablo/schema';
 
 const schema = defineSchema({ items: model({ title: z.string() }) });
 const differentSchema = defineSchema({ users: model({ name: z.string() }) });
+const operationSchema = defineSchema({ documents: model({ body: field.text(), count: field.counter(), title: field.string() }) });
+const operationBinding = createAbloReact(operationSchema);
 const binding = createAbloReact(schema);
 type Models = (typeof schema)['models'];
 type Row = Ablo.Schema.InferRow<typeof schema, 'items'>;
+
+export function OperationTypeProbe() {
+  const client = operationBinding.useAbloClient();
+  const row = operationBinding.useAblo(ablo => ablo.documents, 'document-1');
+  row.data?.body satisfies string | undefined;
+  operationBinding.usePresence(ablo => ablo.documents, 'document-1');
+  const undo = useUndoScope(operationSchema, 'document');
+  undo satisfies useUndoScope.Result<typeof operationSchema>;
+  const basis = { id: 'edit', epoch: 'epoch', baseVersion: 0 };
+  void client?.documents.update({ id: 'document-1', data: { body: { $text: { ...basis, operation: ['text'] } }, title: 'title' } });
+  // @ts-expect-error Declared text update intent must survive through the React binding.
+  void client?.documents.update({ id: 'document-1', data: { body: 'replacement' } });
+  return null;
+}
 
 export function TypeProbe() {
   const client = binding.useAbloClient();

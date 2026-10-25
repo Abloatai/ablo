@@ -556,7 +556,7 @@ export class BootstrapFetcher {
       typeof navigator !== 'undefined' ? navigator.onLine : undefined;
     if (!syncGroupsOverride && navigatorOnline === false) {
       const cached = this.options.cacheScope
-        ? this.loadCachedBootstrap(this.options.cacheScope)
+        ? this.loadCachedBootstrap(this.options.cacheScope, lastSyncId)
         : null;
       if (cached) {
         this.runtime.logger.info('Using cached bootstrap (offline)');
@@ -623,7 +623,7 @@ export class BootstrapFetcher {
 
       // Transient failure after exhausting retries → cached fallback.
       const cached = !syncGroupsOverride && this.options.cacheScope
-        ? this.loadCachedBootstrap(this.options.cacheScope)
+        ? this.loadCachedBootstrap(this.options.cacheScope, lastSyncId)
         : null;
       if (cached) {
         this.runtime.observability.breadcrumb('Bootstrap cache fallback', 'sync.bootstrap', 'warning', {
@@ -1167,7 +1167,7 @@ export class BootstrapFetcher {
     return `ablo:bootstrap:v5:${JSON.stringify([orgId, this.options.baseUrl, [...new Set(this.options.syncGroups)].sort()])}`;
   }
   private saveCachedBootstrap(orgId: string, data: BootstrapData): void {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || data.type !== 'full') return;
     try {
       localStorage.setItem(this.getBootstrapCacheKey(orgId), JSON.stringify(data));
     } catch (e) {
@@ -1176,12 +1176,16 @@ export class BootstrapFetcher {
       });
     }
   }
-  private loadCachedBootstrap(orgId: string): BootstrapData | null {
+  private loadCachedBootstrap(orgId: string, lastSyncId?: number): BootstrapData | null {
+    // Warm replicas recover from IndexedDB; this response cache has no live updates.
+    if (lastSyncId !== undefined && lastSyncId > 0) return null;
     if (typeof window === 'undefined') return null;
     try {
       const raw = localStorage.getItem(this.getBootstrapCacheKey(orgId));
       if (!raw) return null;
-      return JSON.parse(raw) as BootstrapData;
+      const data = JSON.parse(raw) as BootstrapData;
+      // A cached delta batch cannot reconstruct a snapshot or prove its base cursor.
+      return data.type === 'full' ? data : null;
     } catch {
       return null;
     }

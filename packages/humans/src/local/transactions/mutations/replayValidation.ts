@@ -25,6 +25,7 @@ import {
   commitOutboxScopeSchema,
 } from '@abloatai/transaction/commit';
 import { readDependencySchema } from '@abloatai/transaction/coordination/schema';
+import { fieldIntentSchema } from '../operations/intent.js';
 
 /** The subset of a write's options that is stored with each transaction or queued mutation. */
 const persistedWriteOptionsSchema = z
@@ -58,12 +59,14 @@ export const persistedTransactionSchema = z
     modelId: z.string().min(1),
     modelKey: z.string().min(1).optional(),
     data: z.record(z.string(), z.unknown()).optional(),
+    fieldIntent: fieldIntentSchema.optional(),
     previousData: z.record(z.string(), z.unknown()).nullable().optional(),
     context: z.object({
       userId: z.string().min(1),
       organizationId: z.string().min(1),
       role: z.string().optional(),
       teamIds: z.array(z.string()).optional(),
+      undoScopeId: z.string().min(1).optional(),
     }),
     createdAt: z.number().optional(),
     batchId: z.string().optional(),
@@ -78,6 +81,7 @@ export type PersistedReplayableTransaction = z.infer<typeof persistedTransaction
 
 /** The `type` values of stored rows that belong to other parts of the client and are not replayable transactions. */
 const NON_REPLAYABLE_TYPES = new Set([
+  'operation_buffer',
   'queue',
   'awaiting_delta',
   'pending_mutation',
@@ -118,6 +122,7 @@ export function deserializePersistedTransaction(
     modelId: tx.modelId,
     modelKey: tx.modelKey ?? normalizeModelKey(tx.modelName),
     ...(tx.data !== undefined ? { data: tx.data } : {}),
+    ...(tx.fieldIntent !== undefined ? { fieldIntent: tx.fieldIntent } : {}),
     ...(tx.previousData !== undefined ? { previousData: tx.previousData } : {}),
     context: tx.context,
     status: 'pending',
@@ -150,6 +155,8 @@ export const persistedMutationSchema = z
     modelName: z.string().min(1),
     timestamp: z.string(),
     capturedChanges: z.record(z.string(), z.unknown()).optional(),
+    fieldIntent: fieldIntentSchema.optional(),
+    undoScopeId: z.string().min(1).optional(),
     writeOptions: persistedWriteOptionsSchema.optional(),
   })
   .loose();

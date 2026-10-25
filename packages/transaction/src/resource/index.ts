@@ -9,6 +9,12 @@ const receiptSchema = z.object({
   code: z.string().optional(), resources: z.array(z.string()).optional(),
   exitCode: z.number().int().optional(), output: z.string().optional(),
   reads: z.array(evidenceSchema).optional(),
+  publication: z.object({
+    version: z.literal(1), digest: z.string().regex(/^[a-f0-9]{64}$/), paths: z.array(z.string()),
+    premises: z.array(z.object({path: z.string(), kind: z.enum(['file', 'ref']), revision: z.number().int().nonnegative()})),
+    requests: z.array(z.object({operationId: z.string().uuid(), resource: z.string()})),
+    claims: z.array(claimSchema.omit({expires: true})),
+  }).optional(),
 });
 
 export type ResourceEvidence = z.infer<typeof evidenceSchema>;

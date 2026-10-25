@@ -22,6 +22,7 @@ import { RESOURCE_CLAIM_MODEL } from '../resource/claimTarget.js';
  */
 
 import { z } from 'zod';
+import { TEXT_HISTORY_TABLE } from '../commit/text/contract.js';
 import type { ComputedRecord, ModelDef, RelationRecord } from './model.js';
 import type { RelationDef } from './relation.js';
 import { AbloValidationError } from '../errors.js';
@@ -527,6 +528,16 @@ export type InferCreate<S extends Schema, ModelName extends keyof S['models']> =
         & Partial<Pick<BaseModelFields, 'id'>>
     : never;
 
+/** Update intent follows the field declaration; creation still takes values. */
+export type InferUpdate<S extends Schema, ModelName extends keyof S['models']> =
+  S['models'][ModelName] extends ModelDef<infer Shape>
+    ? { [K in keyof Shape]: Shape[K] extends { readonly __operationKind: 'text' }
+        ? { $text: import('../commit/text/contract.js').TextEdit }
+        : Shape[K] extends { readonly __operationKind: 'counter' }
+          ? z.input<Shape[K]> | { $increment: import('../commit/counter/index.js').CounterEdit }
+          : z.input<Shape[K]> }
+    : never;
+
 /**
  * Extract all model names from a schema.
  */
@@ -667,6 +678,9 @@ export function buildFieldRefs(
 ): Record<string, Record<string, FieldRef>> {
   const refs: Record<string, Record<string, FieldRef>> = {};
   for (const [model, def] of Object.entries(models)) {
+    if (def.tableName?.toLowerCase() === TEXT_HISTORY_TABLE) {
+      throw new AbloValidationError('The sync_text_fields journal is reserved by Ablo.', { code: 'invalid_options' });
+    }
     if ([model, def.typename, def.tableName].some(name => name?.toLowerCase() === RESOURCE_CLAIM_MODEL)) {
       throw new AbloValidationError('The resource claim namespace is reserved by Ablo.', { code: 'invalid_options' });
     }
@@ -828,7 +842,7 @@ function validateSessionSettings(settings: SessionSettings): void {
         { code: 'schema_definition_invalid', param: 'sessionSettings' },
       );
     }
-    if (RESERVED_SESSION_SETTINGS.includes(name)) {
+    if (RESERVED_SESSION_SETTINGS.includes(name.toLowerCase())) {
       throw new AbloValidationError(
         `[defineSchema] sessionSettings: \`${name}\` is a setting Ablo already ` +
           `manages on its write connection, so a mapping can't reassign it — ` +

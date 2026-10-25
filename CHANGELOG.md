@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.67.0
+
+### Versioned edits enter the ordinary commit path
+
+Ablo 0.67 adds opt-in plain-text edits and integer increments alongside ordinary
+field replacements. Writers can preserve concurrent contributions through
+versioned operations, and combine operations on distinct rows in one atomic
+commit. Existing ordinary fields retain their replacement behavior.
+
+Reactive field editors now use the normal model mutation journal, observable
+rows and UndoScope. Queued intent retains its identity through retries and
+restarts. Undo reverses accepted changes while preserving intervening peer
+edits; grouped undo and redo retain completed progress when a later step fails.
+Accepted semantic and ordinary rows publish together after reconciliation.
+
+Custom stores must now forward mutation undo provenance, and application models
+using the newly reserved sync_text_fields table name must be renamed. The new
+reactive field editor API replaces earlier development buffer state and undo
+methods with client persistence and UndoScope. Recover unresolved preview buffers
+with the SDK build that created them before upgrading. Opted-in text updates
+require versioned operations; creation still accepts strings. The [upgrade guide](https://github.com/Abloatai/ablo/blob/v0.67.0/packages/ablo/docs/migration.md)
+sets out the required changes and recovery limits.
+
+Browser refresh failures now preserve the newer saved replica and resume cursor.
+Late reads cannot restore confirmed deletions, and held claims survive a dropped
+connection when the server retains their leases. Revocation still clears local
+state and cancels delayed publication.
+
+Versioned operations require compatible server support and the field-history
+and accepted-operation migrations. They support Ablo-owned storage; connected
+customer sources remain unsupported. The internal field-history table is
+reserved. Installing this SDK does not deploy the server or change an
+application's schema.
+
+The optional native adapter supplies entry types during directory scans and
+supports an explicitly configured process limit from one to 64, with eight as
+the default. Explicit reads and publication keep their ownership checks. Upgrade
+the adapter with its matching SDK and follow the Linux runtime prerequisites in
+the [adapter guide](https://github.com/Abloatai/ablo/blob/v0.67.0/packages/resource-adapter/README.md).
+
+Trusted hosts can also opt into network-isolated, noninteractive gVisor commands
+with explicit memory budgets, or project-authorized file publication that
+acquires exact leases before committing. Both require trusted supervisor setup;
+the adapter guide links their operator prerequisites and verification limits.
+
+## 0.66.17
+
+### Browser reloads preserve the active session
+
+Browser clients now request replay from their saved position before acknowledging
+new socket delivery. Reloading a workspace with persisted data no longer triggers
+a premature acknowledgement that the native backend rejects. A rejected
+acknowledgement is handled as a connection failure rather than login expiry;
+authentication, revocation and server acknowledgement validation remain unchanged.
+
 ## 0.66.16
 
 ### Managed workspaces recover on replacement hosts

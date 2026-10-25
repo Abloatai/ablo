@@ -3,7 +3,7 @@ import { createConnection, createServer } from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseDurationMs } from '@abloatai/transaction/utils/duration';
 import type { AbloHttpClient, AbloWebSocketClient, HeldLease } from '@abloatai/transaction';
@@ -15,8 +15,13 @@ export { startResourceProcess, RESOURCE_PROFILE_HOME, type ResourceProcess } fro
 export { createResource, getResourceReceipt, getResourceChanges, ResourceError } from '@abloatai/transaction';
 export type { ResourceClaim, ResourceEvidence, ResourceReceipt, ResourceWorkspace, NativeResourceOperation } from '@abloatai/transaction';
 
+/** Required by trusted hosts before opting workers into dynamic publication. */
+export const RESOURCE_PROJECT_FILES = 'publication-v1';
+
 export interface AdapterWorker {
   readonly uid: number;
+  /** Trusted current project-write authority; absence preserves exact static grants. */
+  readonly projectFiles?: { readonly authorize: (context: { readonly sourceWorkspaceId: string; readonly workerUid: number; readonly operationId: string; readonly signal: AbortSignal }) => Promise<{ readonly validForMs: number }> };
   readonly client: Pick<AbloHttpClient<{}>, 'ready' | 'identity'> & {
     readonly claims: Pick<AbloHttpClient<{}>['claims'], 'acquireResource'>;
     readonly subscribe?: AbloWebSocketClient<{}>['subscribe'];
@@ -40,6 +45,7 @@ export async function startResourceClaimGateway(options: {
   let scope: string | undefined;
   for (const worker of options.workers) {
     const identity = worker.client.identity;
+    if (worker.projectFiles && typeof worker.projectFiles.authorize !== 'function') throw new Error('Project files require a current authority callback');
     if (!identity || !Number.isInteger(worker.uid) || worker.uid <= 0 || worker.uid >= 10000) throw new Error('Worker identity or UID is invalid');
     const current = JSON.stringify([identity.organizationId, identity.projectId, identity.branchId]);
     if (scope !== undefined && current !== scope) throw new Error('Workers must belong to the same tenant, project and branch');
@@ -60,8 +66,18 @@ export async function startResourceClaimGateway(options: {
     return (expires - skew) / 1000;
   };
   const leaseKey = (owner: string, resource: string) => JSON.stringify([owner, resource]);
-  const dispatch = async (request: { owner: string; action: string; resource: string; claim?: string; ttl?: string; waitMs?: number }, signal: AbortSignal, queued: () => void) => {
+  const dispatch = async (request: { owner: string; action: string; resource: string; operationId?: string; claim?: string; ttl?: string; waitMs?: number }, signal: AbortSignal, queued: () => void) => {
     const worker = workers.get(request.owner);
+    if (worker && request.action === 'project_authorize') {
+      if (!worker.projectFiles || typeof request.operationId !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(request.operationId)) throw new ResourceError('permission_denied');
+      const started = Date.now();
+      const lease = await worker.projectFiles.authorize({ sourceWorkspaceId: options.workspaceId, workerUid: worker.uid, operationId: request.operationId, signal });
+      if (signal.aborted) throw new ResourceError('permission_denied');
+      if (!lease || !Number.isFinite(lease.validForMs) || lease.validForMs <= skew || lease.validForMs > 60000) throw new ResourceError('permission_denied');
+      const expires = (started + lease.validForMs - skew) / 1000;
+      if (expires <= Date.now() / 1000) throw new ResourceError('permission_denied');
+      return { expires };
+    }
     if (!worker || typeof request.resource !== 'string' || request.resource.length > 4096) throw new ResourceError('permission_denied');
     const key = leaseKey(request.owner, request.resource);
     const ttl = parseDurationMs(request.ttl ?? '30s') / 1000;
@@ -191,7 +207,22 @@ export async function startResourceAdapter(options: {
   readonly workers: readonly AdapterWorker[];
   readonly seedDirectory?: string;
   readonly clockSkewMs?: number;
+  readonly maxConcurrentProcesses?: number;
+  /** Opt-in network-isolated gVisor commands; interactive native providers are rejected. */
+  readonly gvisorRootfs?: string;
+  /** Empty, root-owned cgroup2 subtree with a finite aggregate budget and supervisor reserve. */
+  readonly gvisorCgroupRoot?: string;
+  /** Trusted per-command memory budget, in whole MiB expressed as bytes. */
+  readonly gvisorMemoryLimitBytes?: number;
 }) {
+  if (options.gvisorRootfs !== undefined && (typeof options.gvisorRootfs !== 'string' || !isAbsolute(options.gvisorRootfs) || options.gvisorRootfs.includes('\0'))) throw new Error('gvisorRootfs must be an absolute path');
+  if (options.gvisorRootfs === undefined && (options.gvisorCgroupRoot !== undefined || options.gvisorMemoryLimitBytes !== undefined)) throw new Error('gVisor memory configuration requires gvisorRootfs');
+  if (options.gvisorRootfs !== undefined) {
+    if (typeof options.gvisorCgroupRoot !== 'string' || !isAbsolute(options.gvisorCgroupRoot) || options.gvisorCgroupRoot.includes('\0')) throw new Error('gvisorCgroupRoot must be an absolute delegated cgroup2 path');
+    if (!Number.isSafeInteger(options.gvisorMemoryLimitBytes) || options.gvisorMemoryLimitBytes! <= 0 || options.gvisorMemoryLimitBytes! % (1024 * 1024)) throw new Error('gvisorMemoryLimitBytes must be a positive whole number of MiB in bytes');
+  }
+  const slots = options.maxConcurrentProcesses ?? 8;
+  if (!Number.isInteger(slots) || slots < 1 || slots > 64) throw new Error('maxConcurrentProcesses must be an integer from 1 to 64');
   if (process.platform !== 'linux' || process.getuid?.() !== 0) throw new Error('The adapter requires a Linux supervisor running as root');
   const coordinatorPath = fileURLToPath(new URL('../bin/ablo-resource-coordinator', import.meta.url));
   await access(coordinatorPath).catch(() => { throw new Error('Build the Rust coordinator on the Linux host with npm run build:runtime before starting the adapter'); });
@@ -204,10 +235,13 @@ export async function startResourceAdapter(options: {
   const processHandle = spawn('python3', [daemon, '--state', options.stateDirectory,
     '--workspace', options.workspaceId, '--mount', options.mountpoint,
     '--socket', backendPath, '--gateway', join(options.stateDirectory, 'gateway/claims.sock'), '--mount-tag', mountTag,
-    ...(options.seedDirectory ? ['--seed', options.seedDirectory] : [])], { stdio: ['pipe', 'ignore', 'pipe'] });
+    '--project-file-uids', JSON.stringify(options.workers.filter(worker => worker.projectFiles).map(worker => worker.uid)),
+    ...(options.seedDirectory ? ['--seed', options.seedDirectory] : []),
+    ...(options.gvisorRootfs !== undefined ? ['--gvisor-rootfs', options.gvisorRootfs, '--gvisor-cgroup-root', options.gvisorCgroupRoot!,
+      '--gvisor-memory-limit-bytes', String(options.gvisorMemoryLimitBytes), '--gvisor-concurrency', String(slots)] : [])], { stdio: ['pipe', 'ignore', 'pipe'] });
   processHandle.stdin.on('error', () => undefined);
   processHandle.stdin.end(JSON.stringify(gateway.registrations) + '\n');
-  const coordinator = spawn(coordinatorPath, [options.socketPath, backendPath], { stdio: ['pipe', 'ignore', 'pipe'] });
+  const coordinator = spawn(coordinatorPath, [options.socketPath, backendPath, String(slots)], { stdio: ['pipe', 'ignore', 'pipe'] });
   coordinator.stdin.on('error', () => undefined);
   coordinator.stdin.end(JSON.stringify(gateway.registrations) + '\n');
   let diagnostics = '';

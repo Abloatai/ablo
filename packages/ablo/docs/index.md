@@ -69,6 +69,8 @@ interfaces.
 - [Installation](./installation.md) — install Ablo, declare the shared models,
   and create a client.
 - [Basic usage](./basic-usage.md) — read, write, and coordinate one operation.
+- [Operation fields](./operation-fields.md) — compose versioned text edits and
+  integer increments through model updates.
 - [Comparison](./comparison.md) — see how Ablo relates to PostgreSQL locks,
   Redis reservations, queues, workflow engines, and rolling your own.
 - [Choose the Ablo operation](./implement.md) — route an existing use case to

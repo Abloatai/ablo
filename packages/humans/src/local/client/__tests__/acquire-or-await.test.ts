@@ -76,6 +76,8 @@ function fakeCollaboration(
   overrides?: Partial<ModelCollaboration>,
 ): ModelCollaboration {
   const collaboration: ModelCollaboration = {
+    openText: jest.fn(() => Promise.reject(new Error('not used'))),
+      openCounter: jest.fn(() => Promise.reject(new Error('not used'))),
     presence: jest.fn(() => []),
     readPoint: jest.fn(() => Promise.reject(new Error('not used'))),
     commitBatch: jest.fn(() => Promise.reject(new Error('not used'))),

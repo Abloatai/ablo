@@ -11,7 +11,7 @@ describe('WsTransport delivery routing', () => {
     });
   });
 
-  it('echoes the late-bound server route on the held first upgrade', () => {
+  it.each(['baseUrl', 'url'] as const)('preserves the WebSocket endpoint and late-bound route with %s', (option) => {
     let openedUrl = '';
 
     class CapturingWebSocket {
@@ -41,14 +41,17 @@ describe('WsTransport delivery routing', () => {
     });
 
     const transport = new WsTransport({
-      baseUrl: 'https://sync.example.test',
+      [option]: 'https://sync.example.test',
       deferConnect: true,
     });
     transport.setDeliveryPartition({ index: 3, count: 8 });
     transport.allowConnect();
     transport.connect();
 
-    expect(new URL(openedUrl).searchParams.get('deliveryPartition')).toBe('3-8');
+    const endpoint = new URL(openedUrl);
+    expect(endpoint.origin).toBe('wss://sync.example.test');
+    expect(endpoint.pathname).toBe('/api/sync/ws');
+    expect(endpoint.searchParams.get('deliveryPartition')).toBe('3-8');
     transport.disconnect();
   });
 

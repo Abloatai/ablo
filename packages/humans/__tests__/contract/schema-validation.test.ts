@@ -119,6 +119,8 @@ describe('Contract: Schema DSL', () => {
       });
 
       it('rejects a mapping that reassigns an engine-reserved setting', () => {
+        expect(() => defineSchema(oneModel, { sessionSettings: { ROW_SECURITY: 'orgId' } }))
+          .toThrow();
         expect(() =>
           defineSchema(oneModel, {
             sessionSettings: { search_path: 'orgId' },

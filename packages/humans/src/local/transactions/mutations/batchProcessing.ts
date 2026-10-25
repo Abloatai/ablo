@@ -1,13 +1,14 @@
+import { buildModelBatchOperations } from './modelBatch.js';
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { MutationQueueConfig } from './MutationQueue.js';
-import type { MutationInput, QueuedMutation } from './commitPayload.js';
+import type { QueuedMutation } from './commitPayload.js';
 import type { MutationStore } from './MutationStore.js';
 import type { OptimisticUpdateEntry } from './localMutation.js';
 import type { DeltaConfirmationTracker } from './deltaConfirmation.js';
 import type { MutationCommitResult } from '@abloatai/transaction/commit';
 import type { DurableCommitEnvelope } from '@abloatai/transaction/commit';
 import { AbloError, AbloNotFoundError } from '@abloatai/transaction/errors';
-import { applyWriteOptions, collectQueuedReads, normalizeModelKey, TX_TYPE_TO_MUTATION_OP, type WriteOperationFields } from './commitPayload.js';
+import { applyWriteOptions, collectQueuedReads, TX_TYPE_TO_MUTATION_OP, type WriteOperationFields } from './commitPayload.js';
 import type { MutationOperationType } from '@abloatai/transaction/types';
 
 export interface BatchProcessingContext {
@@ -20,14 +21,11 @@ export interface BatchProcessingContext {
   readonly takeNextExecutionBatch: () => QueuedMutation[];
   readonly ensureDerivedFields: (transaction: QueuedMutation) => void;
   readonly ensureCommitEnvelope: (batch: QueuedMutation[]) => string;
+  readonly prepareUnsealedOperations: (batch: QueuedMutation[]) => Promise<void>;
+  readonly holdUnsealedOperations: (batch: QueuedMutation[], error: Error) => void;
   readonly executingCount: number;
   readonly setExecutingCount: (value: number) => void;
-  readonly inFlightByModel: Set<string>;
-  readonly pendingMergeByModel: Map<string, { data: MutationInput; sourceMutationIds: string[] }>;
-  readonly generateId: () => string;
-  readonly computePriorityScore: (type: QueuedMutation['type'], modelName: string) => number;
   readonly store: MutationStore;
-  readonly enqueue: (transaction: QueuedMutation) => void;
   readonly optimisticUpdates: Map<string, OptimisticUpdateEntry>;
   readonly commitMissingIds: Map<string, string[]>;
   readonly sourceMutationIdsFor: (batch: readonly QueuedMutation[]) => string[];
@@ -43,6 +41,7 @@ export interface BatchProcessingContext {
   readonly clearReplicationLagState: (transactionId: string) => void;
   readonly completeQueuedCommit: (transaction: import('./commitLane.js').CommitTransaction, syncId: number) => void;
   readonly queuedCommitMatchesCorrelation: (transaction: import('./commitLane.js').CommitTransaction, correlationId: string) => boolean;
+  readonly reconcileSourceCommit: (envelope: DurableCommitEnvelope, correlationId: string) => void;
   readonly recentDeltaCorrelations: Map<string, number>;
   readonly lastSeenSyncId: number;
   readonly scheduleProcessing: (immediate?: boolean) => void;
@@ -88,15 +87,19 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
           // retain both their original membership and operation order.
           batch = ctx.takeNextExecutionBatch();
           if (batch.length === 0) return;
-          const commitIdempotencyKey = ctx.ensureCommitEnvelope(batch);
-
           // Track executing count for backpressure
           ctx.setExecutingCount(ctx.executingCount + batch.length);
 
+          try {
+            await ctx.prepareUnsealedOperations(batch);
+          } catch (cause) {
+            ctx.holdUnsealedOperations(batch, cause instanceof Error ? cause : new Error(String(cause)));
+            return;
+          }
+          const commitIdempotencyKey = ctx.ensureCommitEnvelope(batch);
+
           // Mark all as executing
           for (const tx of batch) {
-            const key = `${tx.modelName}:${tx.modelId}`;
-            if (tx.type === 'update') ctx.inFlightByModel.add(key);
             ctx.store.updateStatus(tx.id, 'executing');
           }
 
@@ -150,7 +153,7 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                 durableEnvelope = await ctx.sealDurableCommit({
                   idempotencyKey: commitIdempotencyKey,
                   origin: 'model_batch',
-                  operations: batchOps.map(({ op }) => op),
+                  operations: buildModelBatchOperations(batchOps),
                   sourceMutationIds: ctx.sourceMutationIdsFor(batch),
                   commitOptions: { reads: collectQueuedReads(batch) },
                   createdAt: Math.min(...batch.map((transaction) => transaction.createdAt)),
@@ -187,8 +190,8 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
               const lastSyncId = result.lastSyncId;
 
               const missingIds = new Set(result.missingIds ?? []);
-              const settlingBatchOps: typeof batchOps = [];
-              for (const entry of batchOps) {
+              const settlingBatchOps = batchOps.filter(({ tx }) => !missingIds.has(tx.modelId));
+              for (const entry of [...batchOps].reverse()) {
                 const { tx } = entry;
                 if (missingIds.has(tx.modelId)) {
                   await ctx.handleFailure(
@@ -198,9 +201,7 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                       [tx.modelId],
                     ),
                   );
-                  continue;
                 }
-                settlingBatchOps.push(entry);
               }
 
               // A forwarded write has been accepted, but the source database
@@ -251,6 +252,8 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                   settlingBatchOps.every(({ tx }) => tx.status === 'completed')
                 ) {
                   await ctx.removeDurableCommit(commitIdempotencyKey);
+                } else if (settlingBatchOps.length > 0) {
+                  ctx.reconcileSourceCommit(durableEnvelope, result.correlationId);
                 }
               } else {
                 await ctx.removeDurableCommit(commitIdempotencyKey);
@@ -377,7 +380,7 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                   batchSize: batchOps.length,
                 });
 
-                for (const { tx, op } of batchOps) {
+                for (const { tx, op } of [...batchOps].reverse()) {
                   if (op.type === 'UPDATE' || op.type === 'DELETE') {
                     // Row already gone: the intended state holds, mark completed.
                     ctx.store.updateStatus(tx.id, 'completed');
@@ -395,43 +398,13 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                 }
               } else {
                 // Handle other batch failures - mark all as failed
-                for (const { tx } of batchOps) {
+                for (const { tx } of [...batchOps].reverse()) {
                   await ctx.handleFailure(tx, error as Error);
                 }
               }
             }
           }
 
-          // Handle post-execution merge for updates
-          for (const tx of batch) {
-            const key = `${tx.modelName}:${tx.modelId}`;
-            if (tx.type === 'update') {
-              ctx.inFlightByModel.delete(key);
-              const pending = ctx.pendingMergeByModel.get(key);
-              if (pending && Object.keys(pending.data).length > 0) {
-                // Create a single merged follow-up transaction
-                const followUp: QueuedMutation = {
-                  id: ctx.generateId(),
-                  type: 'update',
-                  modelName: tx.modelName,
-                  modelId: tx.modelId,
-                  modelKey: tx.modelKey ?? normalizeModelKey(tx.modelName),
-                  data: pending.data,
-                  previousData: undefined,
-                  context: tx.context,
-                  status: 'pending',
-                  createdAt: Date.now(),
-                  attempts: 0,
-                  priority: 'normal',
-                  priorityScore: ctx.computePriorityScore('update', tx.modelName),
-                  sourceMutationIds: pending.sourceMutationIds,
-                };
-                ctx.pendingMergeByModel.delete(key);
-                ctx.store.add(followUp);
-                ctx.enqueue(followUp);
-              }
-            }
-          }
         } finally {
           ctx.setIsProcessing(false);
 

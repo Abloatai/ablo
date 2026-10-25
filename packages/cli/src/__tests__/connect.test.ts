@@ -348,6 +348,9 @@ describe('connectSetupSql — the one prescriptive recipe (logical replication)'
 
   it('provisions the permanent direct ledger but no endpoint outbox', () => {
     expect(joined).toContain('CREATE TABLE IF NOT EXISTS "public"."ablo_idempotency"');
+    expect(joined).toContain('CREATE TABLE IF NOT EXISTS "public"."ablo_claim_fence_watermark"');
+    expect(joined).toContain(`GRANT SELECT, INSERT, UPDATE ON TABLE "public"."ablo_claim_fence_watermark" TO "${ABLO_WRITE_ROLE}";`);
+    expect(joined).toContain(`REVOKE DELETE ON TABLE "public"."ablo_claim_fence_watermark" FROM "${ABLO_WRITE_ROLE}";`);
     expect(joined).toContain('request_hash TEXT');
     expect(joined).toContain("expires_at   TIMESTAMPTZ NOT NULL DEFAULT 'infinity'");
     expect(joined).toContain(
