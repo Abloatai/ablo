@@ -1,5 +1,9 @@
 # @abloatai/transaction
 
+## 0.66.18
+
+This release uses the matching 0.66.18 browser and transaction packages.
+
 ## 0.66.17
 
 ### Browser reloads preserve the active session

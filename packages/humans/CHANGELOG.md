@@ -1,5 +1,16 @@
 # @abloatai/humans
 
+## 0.66.18
+
+### Failed refreshes preserve the saved replica
+
+Browser clients now retain their persisted rows and sync position when a
+bootstrap refresh fails. An older cached response can no longer replace a
+replica that has received live updates. Cold starts can still use a cached full
+snapshot; partial responses are no longer stored as standalone snapshots.
+Delayed bootstrap responses behind the durable cursor are rejected before
+replacing local data. Pending local writes remain in their existing journal.
+
 ## 0.66.17
 
 ### Browser reloads preserve the active session

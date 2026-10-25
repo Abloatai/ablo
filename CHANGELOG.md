@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.66.18
+
+### Failed refreshes preserve the saved replica
+
+Browser clients now retain their persisted rows and sync position when a
+bootstrap refresh fails. An older cached response can no longer replace a
+replica that has received live updates. Cold starts can still use a cached full
+snapshot; partial responses are no longer stored as standalone snapshots.
+Delayed bootstrap responses behind the durable cursor are rejected before
+replacing local data. Pending local writes remain in their existing journal.
+
+## 0.66.17
+
+### Browser reloads preserve the active session
+
+Browser clients now request replay from their saved position before acknowledging
+new socket delivery. Reloading a workspace with persisted data no longer triggers
+a premature acknowledgement that the native backend rejects. A rejected
+acknowledgement is handled as a connection failure rather than login expiry;
+authentication, revocation and server acknowledgement validation remain unchanged.
+
 ## 0.66.16
 
 ### Managed workspaces recover on replacement hosts
