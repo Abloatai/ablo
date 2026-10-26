@@ -40,7 +40,7 @@
     "directory": "packages/cli"
   },
   "dependencies": {
-    "@sentry/node": "^10.18.0",
+    "@sentry/node": "^10.76.2",
     "@abloatai/transaction": "0.67.0",
     "jiti": "^2.7.0",
     "zod": "^4.4.3",
