@@ -25,6 +25,7 @@
  */
 
 import http from 'http';
+import childProcess from 'child_process';
 import type { AddressInfo } from 'net';
 import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -302,6 +303,22 @@ rmSync(configPath, { recursive: true, force: true });
 });
 
 describe('ablo login — request routing across auth + dashboard hosts', () => {
+  it('passes the complete Windows approval URL as data without a command shell', async () => {
+    const { login } = await import('../login');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const spawn = jest.spyOn(childProcess, 'spawn').mockReturnValue(new childProcess.ChildProcess());
+    Object.defineProperty(process, 'platform', {value: 'win32'});
+    try {
+      await login(['--org', 'acme']);
+      expect(spawn).toHaveBeenCalledWith('rundll32.exe', [
+        'url.dll,FileProtocolHandler', `${dashHost.origin}/cli?user_code=${USER_CODE}&org=acme`,
+      ], expect.objectContaining({shell: false}));
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+      spawn.mockRestore();
+    }
+  });
+
   it('sends device endpoints to the auth host and the key handoff to the dashboard host', async () => {
     const openedUrls: string[] = [];
     const deps: LoginDeps = { openUrl: (u) => openedUrls.push(u) };
