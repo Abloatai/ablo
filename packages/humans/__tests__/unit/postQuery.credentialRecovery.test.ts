@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * postQuery × the auth-recovery backbone — the fix for the "Could not load
  * documents — apikey_expired ... forever" wedge: a 401 on the lazy-query lane
@@ -14,12 +15,7 @@ interface MockResponseInit {
 }
 
 function mockResponse({ status, body }: MockResponseInit): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: () => Promise.resolve(body),
-    clone: () => ({ json: () => Promise.resolve(body) }),
-  } as unknown as Response;
+  return new Response(JSON.stringify(body), { status });
 }
 
 const EXPIRED_401 = {

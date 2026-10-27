@@ -1,6 +1,6 @@
 {
   "name": "@ablo/resource-adapter",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "exports": {
@@ -31,7 +31,7 @@
     "test:coordinator": "node --conditions=@ablo/source --import tsx --test tests/coordinator.ts"
   },
   "dependencies": {
-    "@abloatai/transaction": "0.67.0"
+    "@abloatai/transaction": "0.67.1"
   },
   "devDependencies": {
     "@ablo/tsconfig": "*",

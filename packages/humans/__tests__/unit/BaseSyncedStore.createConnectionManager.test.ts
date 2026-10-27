@@ -21,36 +21,30 @@
  */
 
 import { BaseSyncedStore } from '../../src/local/BaseSyncedStore';
-import type { ConnectionManager } from '../../src/local/sync/ConnectionManager';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import { storeDependencies } from '../../src/local/testing/helpers/storeDependencies';
 
-// Tiny shell that exposes the protected factory. We instantiate via
-// Object.create to skip the real (heavy) constructor — the method
-// under test reads only `_syncServerUrl` from `this`.
-function makeShell(syncServerUrl: string): {
-  create: (kind?: 'user' | 'agent' | 'system') => ConnectionManager | null;
-} {
-  const shell = Object.create(BaseSyncedStore.prototype) as Record<string, unknown>;
-  shell._syncServerUrl = syncServerUrl;
-  const fn = (
-    BaseSyncedStore.prototype as unknown as {
-      createConnectionManager: (
-        this: unknown,
-        kind?: 'user' | 'agent' | 'system',
-      ) => ConnectionManager | null;
-    }
-  ).createConnectionManager;
-  return { create: (kind) => fn.call(shell, kind) };
+/** A real store, constructed from real collaborators, exposing the protected factory. */
+class FactoryProbe extends BaseSyncedStore {
+  connectionManagerFor(kind?: ParticipantKind) {
+    return this.createConnectionManager(kind);
+  }
+}
+
+function makeShell(syncServerUrl: string): FactoryProbe {
+  const deps = storeDependencies();
+  return new FactoryProbe({ ...deps, url: syncServerUrl });
 }
 
 describe('BaseSyncedStore.createConnectionManager — participant kind gate', () => {
   it('returns null for agent participants', () => {
     const shell = makeShell('ws://localhost:8080');
-    expect(shell.create('agent')).toBeNull();
+    expect(shell.connectionManagerFor('agent')).toBeNull();
   });
 
   it('returns a ConnectionManager for user participants', () => {
     const shell = makeShell('ws://localhost:8080');
-    const cm = shell.create('user');
+    const cm = shell.connectionManagerFor('user');
     expect(cm).not.toBeNull();
     expect(cm).toBeDefined();
     cm?.dispose();
@@ -62,7 +56,7 @@ describe('BaseSyncedStore.createConnectionManager — participant kind gate', ()
     // until we see a real divergence. The gate is intentionally
     // narrow: ONLY 'agent' is special-cased.
     const shell = makeShell('ws://localhost:8080');
-    const cm = shell.create('system');
+    const cm = shell.connectionManagerFor('system');
     expect(cm).not.toBeNull();
     cm?.dispose();
   });
@@ -70,7 +64,7 @@ describe('BaseSyncedStore.createConnectionManager — participant kind gate', ()
   it('returns a ConnectionManager when kind is undefined (backwards compatibility)', () => {
     // Older call sites that didn't pass `kind` shouldn't lose the FSM.
     const shell = makeShell('ws://localhost:8080');
-    const cm = shell.create(undefined);
+    const cm = shell.connectionManagerFor(undefined);
     expect(cm).not.toBeNull();
     cm?.dispose();
   });

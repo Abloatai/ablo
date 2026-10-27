@@ -71,7 +71,7 @@ const testSchema = defineSchema({
 describe('Architectural pin — one WebSocket per engine', () => {
   beforeEach(() => {
     wsConstructions.length = 0;
-    globalThis.WebSocket = CountingWS as unknown as typeof WebSocket;
+    Object.defineProperty(globalThis, 'WebSocket', { configurable: true, writable: true, value: CountingWS });
   });
 
   afterEach(() => {

@@ -1,0 +1,166 @@
+---
+title: "Multiplayer"
+description: "Let people see the same work, join it, and act on it together."
+sidebar:
+  icon: users
+---
+
+People and agents work in shared projects and conversations. A person
+opens the app and sees which conversations are running. A teammate joins a chat
+and appears among its viewers. An agent changes a task, and the people watching
+that project see the new state.
+
+Ablo connects these experiences through scoped shared data, reactive reads,
+presence, and coordinated writes. This guide follows a shared project from
+opening the app to joining a conversation, changing work, and reconnecting.
+
+## Start with what people share
+
+Share conversation summaries, project tasks, and task-to-conversation links
+with the browser. A summary contains the title and execution state needed
+to render the conversation list. The browser does not need the agent's full
+execution records or control credentials to show that an agent is running.
+
+Choose the smallest shared model that supports the screen. For example:
+
+| Experience | Shared state | Application responsibility |
+| --- | --- | --- |
+| See active conversations | Conversation summaries | Define titles and execution states |
+| Follow project work | Projects, tasks, and conversation links | Authorize task commands and transitions |
+| See who is viewing a chat | Presence on its summary record | Resolve participant IDs to names and avatars |
+| Return to open chats | Tabs scoped to the current person | Choose navigation and selection behavior |
+| Notice changed source views | Source heads and scoped snapshots | Load source through its authorized application boundary |
+
+This gives the interface a shared view without copying every application record
+into every browser. Use [Groups and shared context](/groups) to decide which
+rows belong together and when they load.
+
+## Give each person their view
+
+When the app opens, resolve the signed-in person and their account membership.
+The server checks repository and project access and issues a short-lived
+Ablo session. Its groups name the summaries, repositories, projects, and personal
+tabs that person may receive. Its permissions allow reads of the browser models.
+
+The browser schema declares subject rules connecting each row to the required
+group. Private tabs have a person-specific subject; project tasks have a
+project-specific subject. Sharing an account does not by itself grant every row.
+
+Use the same sequence in your app:
+
+1. Authenticate through your existing auth system.
+2. Resolve membership and resource access on the server.
+3. Issue a session containing those verified groups and allowed operations.
+4. Let Ablo deliver the rows that session is authorized to read.
+
+Keep the API key on the server. A browser filter can narrow a list, but the
+session grant and schema policy establish access. See [Sessions](/sessions)
+and [Identity](/identity) for the issuer and credential lifecycle.
+
+## Read shared state and show viewers
+
+Keep the reactive client at the application provider boundary, so moving
+between screens reuses it. Start with one client for the shared models your
+interface needs, using Ablo-managed IndexedDB persistence. Define your
+browser-visible models in `schema` and push the schema before connecting:
+
+```ts
+import { Ablo, createAbloReact } from '@abloatai/ablo/react';
+import { schema } from './schema';
+
+export function createClient() {
+  return Ablo({
+    schema,
+    session: { endpoint: '/api/ablo-session' },
+    persistence: 'indexeddb',
+  });
+}
+
+export const { AbloProvider, useAblo, usePresence } = createAbloReact(schema);
+```
+
+Create the client in your application's session owner and pass it to
+`<AbloProvider client={client}>`. Keep it across ordinary navigation and dispose
+it when that lifetime ends. The [React guide](/react#client-lifetime-and-account-switching)
+shows the complete setup and cleanup, including React Strict Mode.
+
+The conversation list reads the local graph, rather than fetching the list on
+every navigation. A selector updates when the shared rows change:
+
+```tsx
+const summaries = useAblo(ablo => ablo.conversationSummaries.local.list());
+```
+
+When someone opens a conversation, declare presence on that same summary:
+
+```tsx
+const sessions = usePresence(ablo => ablo.conversationSummaries, conversationId);
+const people = [...new Set(sessions
+  .filter(session => session.participant.kind === 'user')
+  .map(session => session.participant.id))];
+```
+
+Resolve those IDs through your application member directory to display names
+and avatars. Two tabs count as one person. The hook includes the current
+session, owns the viewing activity while mounted, and releases it on cleanup.
+After a connection disappears, its presence can remain until lease expiry.
+
+Viewing a conversation and running its agent are separate states. Show viewers
+from presence and “Running” from the application's recorded execution state.
+
+## Coordinate edits
+
+A browser replica can be read-only, with actions going through authenticated
+application commands. The server checks current authority and business rules
+before writing. This lets you keep existing server routes while adding a live
+shared interface.
+
+For example, changing a task follows this flow:
+
+1. The person submits a command through the application's server route.
+2. The server verifies access and reads the state needed for the decision.
+3. It writes through Ablo, carrying captured reads when the result depends on
+   those versions. Related model changes can go into one atomic commit.
+4. Authorized reactive clients receive the resulting shared state and rerender.
+
+For conversation and run transitions, capture the current run in your reads so
+a decision cannot silently apply to a replacement run. Choose which premises
+each command must preserve. See [Coordination](/coordination) for
+claims and guarded writes, and [Agents](/agents) for the worker side.
+
+## Keep source work at its owner
+
+When agents share a live checkout in a project workspace, ordinary file tools
+see saved peer changes in that checkout. Use Ablo for shared application state
+and claim records for exact-path ownership; use Git to record versions.
+
+A file claim asks cooperating writers to respect ownership. It does not make
+arbitrary shell writes merge safely. Agents still need fresh file reads, claim
+renewal during work, and release or expiry when finished. Keep those behaviors
+at your application's file-operation boundary. For Ablo-owned managed files,
+see [Managed filesystems and Git](/managed-filesystems).
+
+## Reconnect and refresh authority
+
+Persist browser read models in IndexedDB and let Ablo reconcile them. If newly
+visible resources require additional groups, refresh the session grant. One
+application pattern uses a shared discovery revision to trigger preparation of
+a new client, replacing the previous client after readiness. New scope requires
+fresh authority, not just a different local filter.
+
+Handle session expiry with an access-changed screen or reauthentication flow.
+Give transient startup failures a separate retry path. On logout or account
+switching, end the previous client lifetime before showing another account's data. Cached state never grants permission.
+
+## Verify the shared experience
+
+Open the app as two distinct people with access to the same project. Change a
+task and watch the other screen update; join the same conversation and check
+viewers. Repeat with two tabs for one person, an outsider, an account switch,
+and a disconnect while another participant changes shared state.
+
+The [account multiplayer example](/examples/account-multiplayer) is the small
+runnable reference for scoped sessions, two people, an agent, contention, and
+reconnect. Use it to build the underlying flow:
+share the state each screen needs, keep commands at their existing owner, and
+let the interface follow the shared result.

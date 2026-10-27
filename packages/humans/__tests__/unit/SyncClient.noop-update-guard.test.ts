@@ -23,6 +23,8 @@ import { InstanceCache as ObjectPool } from '../../src/local/InstanceCache';
 import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry';
 import { SyncClient } from '../../src/local/SyncClient';
 import { Database } from '../../src/local/Database';
+import { rowAsModel } from '../../src/local/Model';
+import { BootstrapFetcher } from '../../src/local/sync/BootstrapFetcher';
 import {
   registerTestModels,
   createTestConfig,
@@ -33,7 +35,7 @@ import {
 
 /** The synchronous pre-drain buffer `queueMutation` pushes onto. */
 function pendingCount(client: SyncClient): number {
-  return (client as unknown as { pendingMutations: unknown[] }).pendingMutations.length;
+  return client['pendingMutations'].length;
 }
 
 describe('SyncClient no-op UPDATE guard', () => {
@@ -49,12 +51,7 @@ describe('SyncClient no-op UPDATE guard', () => {
     registerTestModels(registry);
     ctx = createTestContext({ config: createTestConfig() });
     pool = new ObjectPool({ maxSize: 1000, gcInterval: 0, useWeakRefs: false }, registry);
-    database = {
-      saveTransaction: async () => undefined,
-      getPersistedTransactions: async () => [],
-      getStore: () => null,
-      clear: async () => undefined,
-    } as unknown as Database;
+    database = new Database(registry, new BootstrapFetcher({ baseUrl: 'http://sync.test/api' }), { inMemory: true });
     client = new SyncClient(pool, database);
   });
 
@@ -99,11 +96,11 @@ describe('SyncClient no-op UPDATE guard', () => {
     // `rowAsModel` only casts, so a plain object can reach `update`. The guard
     // uses `=== false`, so `undefined` falls through to the normal enqueue path
     // rather than silently dropping a potentially-real write.
-    const plain = {
+    const plain = rowAsModel({
       id: 'layer-noop-3',
       getModelName: () => 'EntryDetail',
       getChanges: () => ({ content: 'x' }),
-    } as unknown as Parameters<typeof client.update>[0];
+    });
 
     void client.update(plain);
 

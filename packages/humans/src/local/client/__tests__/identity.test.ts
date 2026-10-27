@@ -17,7 +17,7 @@ import { BaseSyncedStore } from '../../BaseSyncedStore.js';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { resolveParticipantIdentity } from '@abloatai/transaction/auth/identity';
 import { createAuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
-import type { BootstrapFetcher } from '../../sync/BootstrapFetcher.js';
+import { BootstrapFetcher } from '../../sync/BootstrapFetcher.js';
 import type { Logger } from '../../interfaces/index.js';
 
 // `auth/index.ts` is a barrel over `auth/runtime.ts`, and the subject
@@ -47,15 +47,14 @@ const mockCreateRefreshScheduler = createRefreshScheduler as jest.MockedFunction
 
 function buildBootstrapFetcher(): {
   helper: BootstrapFetcher;
-  setCacheScope: jest.Mock;
-  setSyncGroups: jest.Mock;
+  setCacheScope: jest.SpyInstance;
+  setSyncGroups: jest.SpyInstance;
 } {
-  const setCacheScope = jest.fn();
-  const setSyncGroups = jest.fn();
+  const helper = new BootstrapFetcher({ baseUrl: 'http://sync.test/api' });
   return {
-    helper: { setCacheScope, setSyncGroups } as unknown as BootstrapFetcher,
-    setCacheScope,
-    setSyncGroups,
+    helper,
+    setCacheScope: jest.spyOn(helper, 'setCacheScope'),
+    setSyncGroups: jest.spyOn(helper, 'setSyncGroups'),
   };
 }
 

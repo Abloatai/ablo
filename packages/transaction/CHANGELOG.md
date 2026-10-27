@@ -1,5 +1,18 @@
 # @abloatai/transaction
 
+## 0.67.1
+
+### Credential destinations share one validation rule
+
+Source connectors and authenticated network probes now validate their base URL
+before network use. Remote endpoints require HTTPS or WSS; embedded URL
+credentials are rejected. Loopback HTTP and WS remain supported for local
+development. Configure encrypted remote endpoints before upgrading.
+
+Schema migrations now validate lock-timeout overrides as duration values and
+make PostgreSQL string-literal handling explicit before running generated DDL.
+Invalid timeout overrides fall back to the existing five-second default.
+
 ## 0.67.0
 
 ### Versioned operations compose with ordinary writes

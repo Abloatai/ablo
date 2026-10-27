@@ -194,9 +194,9 @@ describe('useMutate.update', () => {
     expect((updated as { status: string }).status).toBe('done');
     expect(store.saveCalls).toHaveLength(2);
 
-    const fromPool = pool.get(id) as unknown as { title: string; status: string };
-    expect(fromPool.title).toBe('Updated');
-    expect(fromPool.status).toBe('done');
+    const fromPool = pool.getOfType<TestItem>(id, 'Item');
+    expect(fromPool?.title).toBe('Updated');
+    expect(fromPool?.status).toBe('done');
   });
 
   it('updates updatedAt timestamp', async () => {
@@ -208,8 +208,8 @@ describe('useMutate.update', () => {
     await new Promise((r) => setTimeout(r, 5));
     await items.update({ id, title: 'New' });
 
-    const fromPool = pool.get(id) as unknown as { updatedAt: Date };
-    expect(fromPool.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt);
+    const fromPool = pool.getOfType<TestItem>(id, 'Item');
+    expect(fromPool?.updatedAt?.getTime()).toBeGreaterThan(originalUpdatedAt);
   });
 
   it('throws if model not found in pool', async () => {

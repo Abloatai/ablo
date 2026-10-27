@@ -27,6 +27,13 @@ import { ABLO_SOURCE_HEADERS, signAbloSourceRequest } from '../endpoint/signing.
 import type { SourceEvent } from '../types.js';
 
 /** One queued delivery: a batch of source events plus its retry bookkeeping. */
+/** The one request the queue sends and the part of the answer it reads. The
+ *  global `fetch` fits; so does a test double that answers with a status. */
+export type PushFetch = (
+  url: string,
+  init: { readonly method: 'POST'; readonly headers: Record<string, string>; readonly body: string },
+) => Promise<Pick<Response, 'ok' | 'status'>>;
+
 export interface PushQueueItem {
   readonly id: string;
   readonly events: readonly SourceEvent[];
@@ -108,7 +115,7 @@ export interface PushQueueOptions {
   /** The most items the worker delivers per tick. Defaults to 50. */
   readonly batchSize?: number;
   /** A custom fetch implementation, for tests or runtimes without a global `fetch`. */
-  readonly fetch?: typeof fetch;
+  readonly fetch?: PushFetch;
   /** A custom clock source, mainly for tests. Defaults to `Date.now`. */
   readonly now?: () => number;
   /** Random jitter applied to each retry delay, as a fraction. Defaults to ±10%; set 0 to disable. */
@@ -135,7 +142,7 @@ export interface PushQueue {
 export function createPushQueue(options: PushQueueOptions): PushQueue {
   const tickIntervalMs = options.tickIntervalMs ?? 1000;
   const batchSize = options.batchSize ?? 50;
-  const fetchImpl = options.fetch ?? fetch;
+  const fetchImpl: PushFetch = options.fetch ?? fetch;
   const now = options.now ?? Date.now;
   const schedule = options.retrySchedule ?? STANDARD_WEBHOOKS_RETRY_SCHEDULE;
   const jitter = options.jitter ?? 0.1;
@@ -196,7 +203,7 @@ export function createPushQueue(options: PushQueueOptions): PushQueue {
       return;
     }
 
-    let response: Response;
+    let response: Awaited<ReturnType<PushFetch>>;
     try {
       response = await fetchImpl(options.endpoint, {
         method: 'POST',

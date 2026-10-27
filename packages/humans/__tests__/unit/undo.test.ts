@@ -34,7 +34,7 @@ import type { SyncStoreContract, LocalMutation } from '../../src/react/context';
 import { createTransaction } from '../../src/local/mutators/Transaction';
 import { createRecordingMutation } from '../../src/local/mutators/RecordingMutation';
 import { UndoManager, UndoScope } from '../../src/local/mutators/UndoManager';
-import { resolveOps, deepEqual } from '../../src/local/mutators/undoApply';
+import { resolveOps, deepEqual, type UndoFieldReader } from '../../src/local/mutators/undoApply';
 import type { InverseOp } from '../../src/local/mutators/inverseOp';
 import { ViewRegistry } from '../../src/local/views/ViewRegistry';
 import { createTestContext } from '../../src/local/testing';
@@ -161,7 +161,11 @@ afterEach(() => {
 });
 
 /** Read a item from the pool (asserting it's present is the caller's job). */
-const item = (id: string): TestItem => pool.get(id) as unknown as TestItem;
+const item = (id: string): TestItem => {
+  const found = pool.getOfType<TestItem>(id, 'Item');
+  if (!found) throw new Error(`expected item ${id} in the pool`);
+  return found;
+};
 /** Wait one microtask so the stream scope's per-tick flush runs. */
 const tick = (): Promise<void> => Promise.resolve();
 /** Seed a item without recording it on any undo scope. */
@@ -507,15 +511,15 @@ describe('UndoScope conflict resolution (e2e)', () => {
 // single field resolveOps reads: `pool.get(id).toJSON()`.
 
 describe('resolveOps (unit)', () => {
-  function storeWith(values: Record<string, Record<string, unknown>>): SyncStoreContract {
+  function storeWith(values: Record<string, Record<string, unknown>>): UndoFieldReader {
     return {
       pool: {
         get: (id: string) => {
           const v = values[id];
-          return v ? ({ toJSON: () => ({ id, ...v }) } as unknown as never) : undefined;
+          return v ? { toJSON: () => ({ id, ...v }) } : undefined;
         },
       },
-    } as unknown as SyncStoreContract;
+    };
   }
 
   it('deepEqual compares scalars, nested objects, and arrays', () => {

@@ -145,13 +145,13 @@ export async function buildSchemaSourceFromDb(opts: {
   const sql = postgres(opts.dbUrl, { max: 1, prepare: false, onnotice: () => {} });
   let rows: ColumnRow[];
   try {
-    rows = (await sql.unsafe(
+    rows = await sql.unsafe<ColumnRow[]>(
       `SELECT table_name, column_name, data_type, is_nullable
          FROM information_schema.columns
         WHERE table_schema = $1
         ORDER BY table_name, ordinal_position`,
       [opts.appSchema] as never[],
-    )) as unknown as ColumnRow[];
+    );
   } finally {
     await sql.end({ timeout: 2 });
   }

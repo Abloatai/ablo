@@ -106,7 +106,7 @@ const testSchema = defineSchema({
 describe('Agent-host WS reconnect after 1006 close', () => {
   beforeEach(() => {
     wsConstructions.length = 0;
-    globalThis.WebSocket = MockWS as unknown as typeof WebSocket;
+    Object.defineProperty(globalThis, 'WebSocket', { configurable: true, writable: true, value: MockWS });
   });
 
   afterEach(() => {
@@ -182,8 +182,7 @@ describe('Agent-host WS reconnect after 1006 close', () => {
     // Reach into the internal store to verify the manager is null.
     // The `_store` accessor is documented as "internal but stable" on
     // the engine return shape (Ablo.ts).
-    const internalStore = (engine as unknown as { _store: { connectionManager: unknown } })._store;
-    expect(internalStore.connectionManager).toBeNull();
+    expect(engine._store).toHaveProperty('connectionManager', null);
 
     await engine.dispose().catch(() => {});
   });

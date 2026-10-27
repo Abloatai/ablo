@@ -1,5 +1,13 @@
 # @abloatai/humans
 
+## 0.67.1
+
+### Reconnection probes enforce the credential boundary
+
+The client uses the updated authenticated network probe, which rejects plaintext
+remote destinations before reading or sending credentials. HTTPS and WSS remote
+endpoints and loopback development retain their existing behaviour.
+
 ## 0.67.0
 
 ### Reactive edits share the model journal

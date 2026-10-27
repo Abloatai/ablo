@@ -12,6 +12,7 @@ import {
   type ResolveCredentialContext,
 } from '@abloatai/transaction/auth/credentialPolicy';
 import { AbloAuthenticationError } from '@abloatai/transaction/errors';
+import { capabilityMintResponseSchema } from '../capability.js';
 
 describe('classifyCredentialKind', () => {
   it('maps each Ablo key prefix to its kind', () => {
@@ -57,7 +58,8 @@ function buildCtx(primitives: CredentialPrimitives): ResolveCredentialContext {
   };
 }
 
-const EXCHANGE_RESULT = {
+// Parsed through the wire schema so the fixture is the shape the route returns.
+const EXCHANGE_RESULT = capabilityMintResponseSchema.parse({
   capabilityId: 'cap_xyz',
   token: 'biscuit_exchanged',
   expiresAt: new Date('2030-01-01T00:00:00Z').toISOString(),
@@ -65,12 +67,12 @@ const EXCHANGE_RESULT = {
   scope: {
     organizationId: 'org_acme',
     syncGroups: ['org:org_acme'],
-    operations: ['*'],
+    operations: ['items.read'],
     participantKind: 'user' as const,
     participantId: 'u1',
   },
   userMeta: {},
-};
+});
 
 describe('resolveCredential — routing', () => {
   it('routes a pk_ key (no cap token) to the publishable route, no exchange', async () => {
@@ -96,9 +98,12 @@ describe('resolveCredential — routing', () => {
   });
 
   it('routes an sk_ key (no cap token) to the exchange route via exchangeApiKey', async () => {
-    const exchangeApiKey = jest.fn().mockResolvedValue(EXCHANGE_RESULT);
+    type ExchangeApiKey = CredentialPrimitives['exchangeApiKey'];
+    const exchangeApiKey = jest
+      .fn<ReturnType<ExchangeApiKey>, Parameters<ExchangeApiKey>>()
+      .mockResolvedValue(EXCHANGE_RESULT);
     const primitives = buildPrimitives({
-      exchangeApiKey: exchangeApiKey as unknown as CredentialPrimitives['exchangeApiKey'],
+      exchangeApiKey,
     });
 
     const cred = await resolveCredential(

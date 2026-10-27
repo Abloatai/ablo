@@ -112,7 +112,8 @@ describe('WS transport observability wiring', () => {
       organizationId: 'org1',
     });
     ws.connect();
-    const fake = (ws as unknown as { ws: FakeWebSocket }).ws;
+    const fake = ws['ws'];
+    if (!(fake instanceof FakeWebSocket)) throw new Error('expected the fake socket to be installed');
     return { ws, fake };
   }
 

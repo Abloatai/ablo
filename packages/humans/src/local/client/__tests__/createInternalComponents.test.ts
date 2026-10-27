@@ -13,7 +13,8 @@
 import { z } from 'zod';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
-import { createInternalComponents } from '../createInternalComponents.js';
+import { resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
+import { createInternalComponents, deriveInstantModels } from '../createInternalComponents.js';
 
 describe('createInternalComponents', () => {
   it('returns the full component graph wired in dependency order', () => {
@@ -50,33 +51,19 @@ describe('createInternalComponents', () => {
 
   it('derives bootstrap base URL from ws → http when not overridden', () => {
     const schema = defineSchema({ items: model({ title: z.string() }) });
-    const components = createInternalComponents({
-      schema,
-      url: 'wss://api.example.com',
-      options: {},
-    });
-    // BootstrapFetcher accepts the resolved baseUrl; we read the
-    // option through its public surface. Production callers don't
-    // peek inside; this test does so the contract is locked.
-    const helper = components.bootstrapHelper as unknown as {
-      options: { baseUrl: string };
-    };
+    const baseUrl = resolveBootstrapBaseUrl({ url: 'wss://api.example.com' });
     // `wss://` → `https://` because `replace(/^ws/, 'http')` keeps
     // the trailing `s`. Plain `ws://` → `http://`.
-    expect(helper.options.baseUrl).toBe('https://api.example.com/api');
+    expect(baseUrl).toBe('https://api.example.com/api');
   });
 
   it('passes through bootstrapBaseUrl override unchanged', () => {
     const schema = defineSchema({ items: model({ title: z.string() }) });
-    const components = createInternalComponents({
-      schema,
+    const baseUrl = resolveBootstrapBaseUrl({
       url: 'wss://api.example.com',
-      options: { bootstrapBaseUrl: 'https://custom.example.com/api' },
+      bootstrapBaseUrl: 'https://custom.example.com/api',
     });
-    const helper = components.bootstrapHelper as unknown as {
-      options: { baseUrl: string };
-    };
-    expect(helper.options.baseUrl).toBe('https://custom.example.com/api');
+    expect(baseUrl).toBe('https://custom.example.com/api');
   });
 
   it('defaults inMemory based on environment (window-defined → false)', () => {
@@ -113,17 +100,10 @@ describe('createInternalComponents', () => {
       defaulted: model({ title: z.string() }), // no load → instant
     });
 
-    const components = createInternalComponents({
-      schema,
-      url: 'wss://api.example.com',
-      options: {},
-    });
-    const helper = components.bootstrapHelper as unknown as {
-      options: { instantModels: string[] };
-    };
-    expect(helper.options.instantModels).toContain('eager');
-    expect(helper.options.instantModels).toContain('defaulted');
-    expect(helper.options.instantModels).not.toContain('lazyOne');
+    const instantModels = deriveInstantModels(schema);
+    expect(instantModels).toContain('eager');
+    expect(instantModels).toContain('defaulted');
+    expect(instantModels).not.toContain('lazyOne');
   });
 
   it('uses model.typename for instant-bootstrap when set', () => {
@@ -137,16 +117,9 @@ describe('createInternalComponents', () => {
         { typename: 'EntryDetail' }),
     });
 
-    const components = createInternalComponents({
-      schema,
-      url: 'wss://api.example.com',
-      options: {},
-    });
-    const helper = components.bootstrapHelper as unknown as {
-      options: { instantModels: string[] };
-    };
-    expect(helper.options.instantModels).toContain('EntryDetail');
-    expect(helper.options.instantModels).not.toContain('entryDetails');
+    const instantModels = deriveInstantModels(schema);
+    expect(instantModels).toContain('EntryDetail');
+    expect(instantModels).not.toContain('entryDetails');
   });
 
   it('bootstraps an instant model even when it is also lazyObservable', () => {
@@ -168,16 +141,9 @@ describe('createInternalComponents', () => {
         { typename: 'StillLazy', load: 'lazy', lazyObservable: true }),
     });
 
-    const components = createInternalComponents({
-      schema,
-      url: 'wss://api.example.com',
-      options: {},
-    });
-    const helper = components.bootstrapHelper as unknown as {
-      options: { instantModels: string[] };
-    };
-    expect(helper.options.instantModels).toContain('EntryDetail');
-    expect(helper.options.instantModels).toContain('EntryLayoutLayer');
-    expect(helper.options.instantModels).not.toContain('StillLazy');
+    const instantModels = deriveInstantModels(schema);
+    expect(instantModels).toContain('EntryDetail');
+    expect(instantModels).toContain('EntryLayoutLayer');
+    expect(instantModels).not.toContain('StillLazy');
   });
 });

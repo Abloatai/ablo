@@ -60,7 +60,8 @@ describe('openIDBWithTimeout', () => {
   it('rejects with IDBOpenTimeoutError(timeout) when the open fires no event (a wedged store)', async () => {
     // Model the real failure: a request that never fires success/error/blocked,
     // exactly like a wedged `ablo_databases` backing store. fake-indexeddb
-    // always settles, so we stub the open to hang.
+    // always settles, so we stub the open to hang. Recorded cast exception
+    // (ABL-1276): only a hand-built request can never fire.
     const realOpen = indexedDB.open;
     const hangingRequest = {
       onsuccess: null,
@@ -85,7 +86,7 @@ describe('openIDBWithTimeout', () => {
   it('closes a late-arriving success after a timeout instead of leaking the connection', async () => {
     // Stub an open we control: time out first, then deliver success late and
     // assert the helper closed the orphaned connection (a leak would hold a
-    // lock that wedges the store).
+    // lock that wedges the store). Recorded cast exception (ABL-1276), as above.
     const realOpen = indexedDB.open;
     let closed = false;
     const lateRequest = {

@@ -632,7 +632,7 @@ describe('Cross-model mutators', () => {
         }) => {
           const siblings = tx.read.items.list({ where: { workspaceId: args.workspaceId } });
           const nextOrder = siblings.reduce(
-            (max, t) => Math.max(max, (t as unknown as { order: number }).order ?? 0),
+            (max, t) => Math.max(max, t.order ?? 0),
             0,
           ) + 1;
           return tx.mutations.items.create({
@@ -653,6 +653,6 @@ describe('Cross-model mutators', () => {
       args: { workspaceId: 'p1', title: 'third' },
     });
 
-    expect((third as unknown as { order: number }).order).toBe(3);
+    expect(third.order).toBe(3);
   });
 });

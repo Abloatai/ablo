@@ -6,6 +6,19 @@ Ablo is pre-1.0, so a minor release may contain a breaking API change. Patch
 releases normally remain compatible within the same minor line. The 0.64.1
 release includes the explicit React and collaboration migrations below.
 
+## Upgrading to 0.67.1
+
+Source connector `baseURL` and authenticated network probe `baseUrl` overrides
+must use HTTPS or WSS for remote hosts. Overrides using plaintext HTTP or WS
+outside loopback are now rejected before credentials are read or a connection
+opens. Configure TLS on the remote endpoint before upgrading. HTTP and WS on
+loopback addresses remain supported for local development. URL-embedded usernames
+and passwords are rejected; keep the Ablo credential in the existing API-key
+option.
+
+Windows CLI login now opens its approval URL without a command shell. No CLI
+configuration change is required.
+
 ## Upgrading to 0.67.0
 
 Pin the Ablo, Transaction, Humans and CLI package family to 0.67.0 together.

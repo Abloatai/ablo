@@ -76,7 +76,7 @@ describe('AbloError hierarchy', () => {
   it('`cause` option preserves original error', () => {
     const original = new TypeError('network');
     const e = new AbloConnectionError('fetch failed', { cause: original });
-    expect((e as unknown as { cause: unknown }).cause).toBe(original);
+    expect(e.cause).toBe(original);
   });
 });
 

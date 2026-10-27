@@ -268,6 +268,6 @@ export function defineQueries<
     schema,
     // Cast back to Q: the rebuild only added `name` (already optional on
     // QueryDef) to each entry, so the shape is structurally unchanged.
-    queries: resolvedQueries as unknown as Q,
+    queries: resolvedQueries as Q,
   };
 }

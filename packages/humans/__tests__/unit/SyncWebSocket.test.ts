@@ -107,8 +107,11 @@ describe('SyncWebSocket', () => {
         dispatchEvent(): boolean { return true; }
       }
 
-      (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket =
-        RecordingWebSocket as unknown as typeof WebSocket;
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: RecordingWebSocket,
+      });
 
       try {
         const ws = new SyncWebSocket({
@@ -128,7 +131,11 @@ describe('SyncWebSocket', () => {
         expect(url.searchParams.get('authorization')).toBeNull();
         expect(protocolsSeen[0]).toEqual(['ablo.bearer.token-b', 'ablo.sync.v1']);
       } finally {
-        (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = originalWebSocket;
+        Object.defineProperty(globalThis, 'WebSocket', {
+          configurable: true,
+          writable: true,
+          value: originalWebSocket,
+        });
       }
     });
 

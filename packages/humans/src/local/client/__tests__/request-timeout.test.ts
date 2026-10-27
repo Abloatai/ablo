@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * HTTP transport request deadline — a stateless request must never hang
  * forever on a black-holed server (T1.12).
@@ -64,22 +65,17 @@ describe('HTTP transport request deadline', () => {
   });
 
   it('does not misreport a slow-but-successful request', async () => {
-    const okFetch = ((_url: string | URL | Request) =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        text: async () =>
-          JSON.stringify(
+    const okFetch: typeof fetch = () =>
+      Promise.resolve(
+        new Response(JSON.stringify(
             modelReadResponse({
               model: 'documents',
               id: 'doc-3',
               data: { id: 'doc-3' },
               stamp: 1,
             }),
-          ),
-        headers: { get: () => null },
-      } as unknown as Response)) as typeof fetch;
+          ), { status: 200, statusText: 'OK' }),
+      );
 
     const docs = createHttpTransport({
       apiKey: 'sk_test_unit',

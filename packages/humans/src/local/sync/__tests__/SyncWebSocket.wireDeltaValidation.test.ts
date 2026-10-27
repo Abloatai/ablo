@@ -145,7 +145,8 @@ describe('SyncWebSocket wire delta validation (T1.2)', () => {
       organizationId: 'org1',
     });
     ws.connect();
-    const fakeHolder = ws as unknown as { ws: FakeWebSocket };
+    const socket = ws['ws'];
+    if (!(socket instanceof FakeWebSocket)) throw new Error('expected the fake socket to be installed');
     const deltas: SyncDelta[] = [];
     const batches: SyncDelta[][] = [];
     const chunks: { position: number; deltas: SyncDelta[] }[] = [];
@@ -154,7 +155,7 @@ describe('SyncWebSocket wire delta validation (T1.2)', () => {
     ws.subscribe('delta_batch', (b) => batches.push(b));
     ws.subscribe('catchup_chunk', (chunk) => chunks.push(chunk));
     ws.subscribe('catchup_end', (end) => completions.push(end.currentSyncId));
-    return { ws, fake: fakeHolder.ws, spy, deltas, batches, chunks, completions };
+    return { ws, fake: socket, spy, deltas, batches, chunks, completions };
   }
 
   it('accepts one ordered catch-up exchange and ignores replayed or foreign chunks', () => {

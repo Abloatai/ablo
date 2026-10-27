@@ -1,19 +1,15 @@
+/** @jest-environment node */
 import { exchangeApiKey, resolveIdentity } from '@abloatai/transaction/auth';
 
 function jsonResponse(
   body: unknown,
   options: { ok?: boolean; status?: number; requestId?: string } = {},
 ): Response {
-  return {
-    ok: options.ok ?? true,
-    status: options.status ?? 200,
+  return new Response(JSON.stringify(body), {
+    status: options.status ?? (options.ok === false ? 401 : 200),
     statusText: options.ok === false ? 'Unauthorized' : 'OK',
-    headers: {
-      get: (name: string) =>
-        name.toLowerCase() === 'x-request-id' ? options.requestId ?? null : null,
-    },
-    json: async () => body,
-  } as unknown as Response;
+    headers: options.requestId === undefined ? {} : { 'x-request-id': options.requestId },
+  });
 }
 
 describe('auth wire schemas', () => {

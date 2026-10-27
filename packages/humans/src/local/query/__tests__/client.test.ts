@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * `postQuery` swallows HTTP failures (fire-and-forget — a throw here would
  * kill the Next.js router on an unhandled rejection), but the failure must
@@ -19,31 +20,13 @@ import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
 import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
 import type { Logger } from '../../interfaces/index.js';
 
-const batch = {
+const batch: QueryBatch = {
   queries: [{ model: 'File' }, { model: 'Folder' }],
-} as unknown as QueryBatch;
-
-/** Minimal fake of the Response surface `postQuery` touches (`ok`, `status`,
- *  `statusText`, `clone().json()`). The jest env has no global `Response`. */
-function fakeResponse(status: number, body: unknown, jsonThrows = false) {
-  const res = {
-    ok: status >= 200 && status < 300,
-    status,
-    statusText: `HTTP ${status}`,
-    json: async () => {
-      if (jsonThrows) throw new Error('not json');
-      return body;
-    },
-    clone() {
-      return res;
-    },
-  };
-  return res;
-}
+};
 
 function mockFetchOnce(status: number, body: unknown, jsonThrows = false): void {
-  global.fetch = (() =>
-    Promise.resolve(fakeResponse(status, body, jsonThrows))) as unknown as typeof fetch;
+  const text = jsonThrows ? 'not json' : JSON.stringify(body);
+  global.fetch = () => Promise.resolve(new Response(text, { status, statusText: `HTTP ${status}` }));
 }
 
 function spyLogger(): Logger & {

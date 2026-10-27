@@ -16,6 +16,9 @@ describe('BootstrapFetcher — shared auth source', () => {
           models: {},
           timestamp: Date.now(),
       };
+      // Recorded cast exception (ABL-1276): the offline-snapshot test needs jsdom
+      // for `localStorage`, and jsdom has no `Response` (undici cannot load there:
+      // no `ReadableStream`), so the fetch answers with the slice it reads.
       return Promise.resolve({
         ok: true,
         status: 200,

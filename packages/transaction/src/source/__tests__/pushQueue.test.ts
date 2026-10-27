@@ -10,6 +10,7 @@ import {
   createPushQueue,
   InMemoryPushQueueStorage,
   STANDARD_WEBHOOKS_RETRY_SCHEDULE,
+  type PushFetch,
 } from '../delivery/pushQueue.js';
 import type { SourceEvent } from '../index.js';
 
@@ -30,7 +31,7 @@ const sampleEvent = (id = 'evt_1'): SourceEvent => ({
 });
 
 function buildQueue(opts: {
-  fetchImpl: jest.Mock;
+  fetchImpl: PushFetch;
   storage?: InMemoryPushQueueStorage;
   now?: () => number;
 }) {
@@ -114,7 +115,7 @@ describe('createPushQueue', () => {
       endpoint: 'https://ablo.test/api/source/events',
       apiKey: 'sk_test_queue',
       storage,
-      fetch: fetchMock as unknown as typeof fetch,
+      fetch: fetchMock,
       retrySchedule: [0, 5, 10],
       tickIntervalMs: 1,
       jitter: 0,
@@ -162,7 +163,7 @@ describe('createPushQueue', () => {
       endpoint: 'https://ablo.test/api/source/events',
       apiKey: 'sk_test_queue',
       storage,
-      fetch: fetchMock as unknown as typeof fetch,
+      fetch: fetchMock,
       retrySchedule: [0, 5, 5],
       tickIntervalMs: 1,
       jitter: 0,
@@ -186,7 +187,7 @@ describe('createPushQueue', () => {
       endpoint: 'https://ablo.test/api/source/events',
       apiKey: 'sk_test_queue',
       storage,
-      fetch: fetchMock as unknown as typeof fetch,
+      fetch: fetchMock,
       // 2-attempt schedule so the test runs fast.
       retrySchedule: [0, 5],
       tickIntervalMs: 1,

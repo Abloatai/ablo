@@ -48,8 +48,7 @@ describe('MutationQueue — per-instance executor binding', () => {
     const queue = new MutationQueue();
     queue.setMutationExecutor(instanceExecutor);
 
-    const resolved = (queue as unknown as { mutationExecutor: MutationExecutor })
-      .mutationExecutor;
+    const resolved = queue['mutationExecutor'];
 
     expect(resolved).toBe(instanceExecutor);
     expect(resolved).not.toBe(singletonExecutor);
@@ -68,8 +67,7 @@ describe('MutationQueue — per-instance executor binding', () => {
     } as never);
 
     const queue = new MutationQueue();
-    const resolved = (queue as unknown as { mutationExecutor: MutationExecutor })
-      .mutationExecutor;
+    const resolved = queue['mutationExecutor'];
 
     expect(resolved).toBe(singletonExecutor);
   });
@@ -105,10 +103,8 @@ describe('MutationQueue — per-instance executor binding', () => {
     const queueB = new MutationQueue();
     queueB.setMutationExecutor(executorB);
 
-    const resolvedA = (queueA as unknown as { mutationExecutor: MutationExecutor })
-      .mutationExecutor;
-    const resolvedB = (queueB as unknown as { mutationExecutor: MutationExecutor })
-      .mutationExecutor;
+    const resolvedA = queueA['mutationExecutor'];
+    const resolvedB = queueB['mutationExecutor'];
 
     expect(resolvedA).toBe(executorA);
     expect(resolvedB).toBe(executorB);
