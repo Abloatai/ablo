@@ -199,6 +199,8 @@ async function applyStatements(
       try {
         await sql.begin(async (tx) => {
           await tx.unsafe(`SET LOCAL lock_timeout = '${lockTimeout}'`);
+          // The generated DDL quotes literals by doubling `'`, which is exact only under this setting.
+          await tx.unsafe(`SET LOCAL standard_conforming_strings = on`);
           await tx`SELECT pg_advisory_xact_lock(hashtext(${`provision:${targetSchema}`}))`;
           for (const [index, statement] of statements.entries()) {
             try {

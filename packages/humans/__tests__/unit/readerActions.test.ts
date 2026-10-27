@@ -165,7 +165,7 @@ describe('useReader.findMany', () => {
     const todos = reader.list({ where: { status: 'todo' } });
 
     expect(todos).toHaveLength(2);
-    expect(todos.every((t) => (t as unknown as TestItem).status === 'todo')).toBe(true);
+    expect(todos.every((t) => t.status === 'todo')).toBe(true);
   });
 
   it('uses FK index for single-field where on indexed field', () => {
@@ -178,7 +178,7 @@ describe('useReader.findMany', () => {
     const p1Items = reader.list({ where: { workspaceId: 'p1' } });
 
     expect(p1Items).toHaveLength(2);
-    expect(p1Items.map((t) => (t as unknown as TestItem).id).sort()).toEqual(['t1', 't3']);
+    expect(p1Items.map((t) => t.id).sort()).toEqual(['t1', 't3']);
   });
 
   it('falls back to full scan when where field is not indexed', () => {
@@ -200,7 +200,7 @@ describe('useReader.findMany', () => {
     const reader = createReaderActions(testSchema, 'items', store);
     const result = reader.list({
       where: { workspaceId: 'p1' },
-      filter: (t) => (t as unknown as TestItem).status === 'todo',
+      filter: (t) => t.status === 'todo',
     });
 
     expect(result).toHaveLength(2);
@@ -214,7 +214,7 @@ describe('useReader.findMany', () => {
     const reader = createReaderActions(testSchema, 'items', store);
     const sorted = reader.list({ orderBy: 'order', order: 'asc' });
 
-    expect(sorted.map((t) => (t as unknown as TestItem).order)).toEqual([1, 2, 3]);
+    expect(sorted.map((t) => t.order)).toEqual([1, 2, 3]);
   });
 
   it('sorts by orderBy desc', () => {
@@ -225,7 +225,7 @@ describe('useReader.findMany', () => {
     const reader = createReaderActions(testSchema, 'items', store);
     const sorted = reader.list({ orderBy: 'order', order: 'desc' });
 
-    expect(sorted.map((t) => (t as unknown as TestItem).order)).toEqual([3, 2, 1]);
+    expect(sorted.map((t) => t.order)).toEqual([3, 2, 1]);
   });
 
   it('applies limit', () => {
@@ -243,7 +243,7 @@ describe('useReader.findMany', () => {
     const reader = createReaderActions(testSchema, 'items', store);
     const result = reader.list({ orderBy: 'order', offset: 3, limit: 3 });
 
-    expect(result.map((t) => (t as unknown as TestItem).order)).toEqual([3, 4, 5]);
+    expect(result.map((t) => t.order)).toEqual([3, 4, 5]);
   });
 
   it('returns snapshot (not reactive to later changes)', () => {
@@ -275,7 +275,7 @@ describe('useReader.findFirst', () => {
       limit: 1,
     })[0];
 
-    expect((first as unknown as TestItem).id).toBe('t2');
+    expect(first?.id).toBe('t2');
   });
 
   it('returns undefined if no match', () => {

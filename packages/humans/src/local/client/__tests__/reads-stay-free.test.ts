@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * Reads are never blocked by a claim — the asymmetry at the heart of the
  * coordination model (coordination.md: "a claim serializes WRITERS, not
@@ -33,14 +34,7 @@ const HELD_INTENT = modelClaim({
 
 /** A fetch that always reports Item/t1 as claimed, and serves its row. */
 function fakeFetch(): typeof fetch {
-  const json = (body: unknown) =>
-    ({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      headers: { get: () => null },
-      text: async () => JSON.stringify(body),
-    }) as unknown as Response;
+  const json = (body: object) => new Response(JSON.stringify(body), { status: 200, statusText: 'OK' });
 
   return async (input: string | URL | Request) => {
     const url = typeof input === 'string' ? input : input.toString();

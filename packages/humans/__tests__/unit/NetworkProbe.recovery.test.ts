@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * NetworkProbe outcome routing — the probe maps an `/api/auth/check` response
  * into a single {@link ProbeOutcome} via the recovery taxonomy. The headline
@@ -11,18 +12,17 @@ import { probeNetwork } from '@abloatai/transaction/transport/connection';
 
 interface FetchResponse {
   status: number;
-  headers: { get: (k: string) => string | null };
+  headers?: Record<string, string>;
 }
 
 function mockFetchOnce(res: FetchResponse): void {
-  globalThis.fetch = jest.fn(async () => res as unknown as Response);
+  // A null-body status (204/304) cannot carry a body; every other one gets an empty one.
+  const body = res.status === 204 || res.status === 304 ? null : '';
+  globalThis.fetch = jest.fn(async () => new Response(body, { status: res.status, headers: res.headers }));
 }
 
 function withAuthFailure(status: number, code: string | null): FetchResponse {
-  return {
-    status,
-    headers: { get: (k: string) => (k.toLowerCase() === 'x-auth-failure' ? code : null) },
-  };
+  return { status, headers: code === null ? {} : { 'x-auth-failure': code } };
 }
 
 describe('probeNetwork — outcome routing', () => {
@@ -38,7 +38,7 @@ describe('probeNetwork — outcome routing', () => {
     probeNetwork({ baseUrl: 'https://mesh.example.com', getAuthToken: () => 'ek_x' });
 
   it('204 → reachable', async () => {
-    mockFetchOnce({ status: 204, headers: { get: () => null } });
+    mockFetchOnce({ status: 204 });
     expect((await probe()).outcome).toBe('reachable');
   });
 

@@ -114,6 +114,7 @@ export default defineConfig({
             "/implement",
             "/coordinate-existing-work",
             "/agents",
+            "/multiplayer",
             "/react",
             "/mcp",
             "/approaches/graphql/graphql-js",

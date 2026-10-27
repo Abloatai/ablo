@@ -28,6 +28,13 @@ describe('ddlLock — shared safe-DDL locking knobs', () => {
       ).toBe('2s');
       expect(resolveDdlLockTimeout({ ABLO_DDL_LOCK_TIMEOUT: '9s' })).toBe('9s');
     });
+
+    it('accepts only a Postgres duration, since the value is spliced into SET LOCAL', () => {
+      expect(resolveDdlLockTimeout({ ABLO_SCHEMA_LOCK_TIMEOUT: '1500' })).toBe('1500');
+      expect(resolveDdlLockTimeout({ ABLO_SCHEMA_LOCK_TIMEOUT: '2 min' })).toBe('2 min');
+      expect(resolveDdlLockTimeout({ ABLO_SCHEMA_LOCK_TIMEOUT: "5s'; DROP TABLE x; --" })).toBe('5s');
+      expect(resolveDdlLockTimeout({ ABLO_SCHEMA_LOCK_TIMEOUT: '' })).toBe('5s');
+    });
   });
 
   describe('resolveDdlMaxLockAttempts (the knob that had drifted between CLI and server)', () => {

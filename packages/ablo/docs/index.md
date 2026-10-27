@@ -51,7 +51,7 @@ interfaces.
     Know when a write reached the authoritative database and why a rejected write did not land.
   </Card>
 
-  <Card title="Humans and agents" icon="users" href="/react">
+  <Card title="Humans and agents" icon="users" href="/multiplayer">
     Coordinate stateless HTTP workers with live human interfaces over the same shared state.
   </Card>
 
@@ -84,5 +84,6 @@ index, or connect an assistant to the [documentation MCP server](./mcp.md). The
 coordination MCP package also ships its agent-facing skill as
 `@abloatai/mcp/skill.md`.
 
+For a live shared interface, start with [Multiplayer](./multiplayer.md).
 For a complete human-and-agent application, follow the
 [account multiplayer reference](./examples/account-multiplayer.md).

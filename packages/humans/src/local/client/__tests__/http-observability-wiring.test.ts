@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * HTTP transport ↔ observability WIRING.
  *
@@ -22,13 +23,10 @@ import {
 type Json = Record<string, unknown>;
 
 function resp(status: number, body: Json): Response {
-  return {
-    ok: status >= 200 && status < 300,
+  return new Response(JSON.stringify(body), {
     status,
     statusText: status === 409 ? 'Conflict' : status === 400 ? 'Bad Request' : 'OK',
-    text: async () => JSON.stringify(body),
-    headers: { get: () => null },
-  } as unknown as Response;
+  });
 }
 
 type Handler = (url: string, method: string) => Response;

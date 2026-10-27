@@ -777,7 +777,7 @@ export function defineSchema<const S extends SchemaRecord>(
   return {
     // Cast back to S: we only added values to optional fields that were
     // already part of ModelDef, so the shape is structurally unchanged.
-    models: resolvedModels as unknown as S,
+    models: resolvedModels as S,
     validators: validators as Schema<S>['validators'],
     fields: buildFieldRefs(resolvedModels) as Schema<S>['fields'],
     identityRoles: options?.identityRoles ?? [],

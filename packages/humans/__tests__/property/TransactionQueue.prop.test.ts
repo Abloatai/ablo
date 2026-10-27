@@ -109,7 +109,7 @@ describe('Property: MutationQueue Invariants', () => {
             model.propertyChanged('title', 'old', 'new');
           }
 
-          const tx = await (queue as unknown as Record<(typeof opTypes)[number], (m: Model, ctx: typeof USER_CTX) => Promise<{ priorityScore: number }>>)[opType](model, USER_CTX);
+          const tx = await queue[opType](model, USER_CTX);
 
           expect(tx.priorityScore).toBe(50);
           disposeQueue(queue);

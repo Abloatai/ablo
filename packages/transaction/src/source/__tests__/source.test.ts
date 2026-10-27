@@ -9,23 +9,6 @@ import {
   sourceEventForOperation,
 } from '../index.js';
 
-class TestResponse {
-  readonly status: number;
-  private readonly text: string;
-
-  constructor(body: string, init?: { status?: number }) {
-    this.text = body;
-    this.status = init?.status ?? 200;
-  }
-
-  async json(): Promise<unknown> {
-    return JSON.parse(this.text);
-  }
-}
-
-(globalThis as unknown as { Response: typeof Response }).Response =
-  TestResponse as unknown as typeof Response;
-
 const schema = defineSchema({
   files: model({
     path: z.string(),

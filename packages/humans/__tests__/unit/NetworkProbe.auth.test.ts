@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * NetworkProbe auth threading — visibility/network probes must authenticate the
  * same way bootstrap, identity resolve, and WebSocket reconnects do.
@@ -14,10 +15,7 @@ describe('NetworkProbe — bearer auth', () => {
     lastInit = undefined;
     globalThis.fetch = jest.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       lastInit = init;
-      return {
-        status: 204,
-        headers: { get: () => null },
-      } as unknown as Response;
+      return new Response(null, { status: 204 });
     });
   });
 

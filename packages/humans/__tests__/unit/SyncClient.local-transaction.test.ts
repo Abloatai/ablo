@@ -27,6 +27,7 @@ import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry'
 import { SyncClient } from '../../src/local/SyncClient';
 import type { MutationQueue, QueuedMutation } from '../../src/local/transactions/mutations/MutationQueue';
 import { Database } from '../../src/local/Database';
+import { BootstrapFetcher } from '../../src/local/sync/BootstrapFetcher';
 import {
   registerTestModels,
   createTestConfig,
@@ -55,12 +56,7 @@ describe('SyncClient.onLocalTransaction (undo stream relay)', () => {
     registerTestModels(registry);
     ctx = createTestContext({ config: createTestConfig() });
     pool = new ObjectPool({ maxSize: 1000, gcInterval: 0, useWeakRefs: false }, registry);
-    database = {
-      saveTransaction: async () => undefined,
-      getPersistedTransactions: async () => [],
-      getStore: () => null,
-      clear: async () => undefined,
-    } as unknown as Database;
+    database = new Database(registry, new BootstrapFetcher({ baseUrl: 'http://sync.test/api' }), { inMemory: true });
     client = new SyncClient(pool, database);
   });
 

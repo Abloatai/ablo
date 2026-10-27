@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.67.1
+
+### Credentials stay on encrypted remote connections
+
+Source connectors and authenticated network probes now apply the SDK's existing
+credential-destination checks before opening a socket or reading credentials.
+Remote HTTP and WS overrides that were previously accepted are now rejected;
+configure HTTPS or WSS before upgrading. Loopback connections remain available
+for local development.
+
+Windows CLI login now opens the approval URL without a command shell. Query
+parameters remain part of the URL, including when an organisation is selected.
+The [upgrade guide](https://github.com/Abloatai/ablo/blob/v0.67.1/packages/ablo/docs/migration.md)
+sets out the affected configuration and unchanged local-development behaviour.
+
+Schema migrations now validate lock-timeout overrides as duration values and
+make PostgreSQL string-literal handling explicit before running generated DDL.
+Invalid timeout overrides fall back to the existing five-second default.
+
 ## 0.67.0
 
 ### Versioned edits enter the ordinary commit path

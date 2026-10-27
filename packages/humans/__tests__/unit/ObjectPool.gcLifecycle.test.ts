@@ -9,6 +9,7 @@
  *  2. `BaseSyncedStore.disconnect()` calls `stopGC()` on its pool.
  */
 import { BaseSyncedStore } from '../../src/local/BaseSyncedStore';
+import { storeDependencies } from '../../src/local/testing/helpers/storeDependencies';
 import { InstanceCache as ObjectPool } from '../../src/local/InstanceCache';
 import { ModelRegistry } from '../../src/local/ModelRegistry';
 import { createTestContext } from '../../src/local/testing/mocks/MockSyncContext';
@@ -61,25 +62,12 @@ describe('BaseSyncedStore.disconnect stops pool GC', () => {
   });
 
   it('calls objectPool.stopGC() during disconnect', async () => {
-    // Bypass the heavy constructor — disconnect() only touches the fields
-    // stubbed here (same pattern as BaseSyncedStore.bootstrap-mode.test.ts).
-    const stopGC = jest.fn();
-    const stub = Object.create(BaseSyncedStore.prototype) as BaseSyncedStore;
-    const w = stub as unknown as Record<string, unknown>;
-    w.credentialLifecycle = { stop: jest.fn() };
-    w.batchTimer = null;
-    w.pendingDeltas = [];
-    w.disposers = [];
-    w.connectionManager = null;
-    // The connection is a constructor dependency now; disconnect() closes it.
-    w.syncWebSocket = { disconnect: jest.fn(), getLastSyncId: () => 0 };
-    w.database = { updateWorkspaceMetadata: jest.fn() };
-    w.syncClient = { disconnect: jest.fn() };
-    w.queryProcessor = { clearCache: jest.fn() };
-    w.objectPool = { stopGC };
-    w.updateSyncStatus = jest.fn();
+    // A real store over real collaborators; only the pool's GC stop is observed.
+    const deps = storeDependencies();
+    const stopGC = jest.spyOn(deps.objectPool, 'stopGC');
+    const store = new BaseSyncedStore(deps);
 
-    await stub.disconnect();
+    await store.disconnect();
 
     expect(stopGC).toHaveBeenCalledTimes(1);
   });

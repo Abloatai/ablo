@@ -1,5 +1,18 @@
 # @abloatai/cli
 
+## 0.67.1
+
+### Login URLs keep their query parameters
+
+Windows login now opens the approval page directly through the operating system,
+without passing its URL through a command shell. Query ampersands remain URL data
+when an organisation is selected. The terminal still prints the approval URL if
+the browser cannot open.
+
+Schema migrations now validate lock-timeout overrides as duration values and
+make PostgreSQL string-literal handling explicit before running generated DDL.
+Invalid timeout overrides fall back to the existing five-second default.
+
 ## 0.67.0
 
 ### SDK 0.67 accompanies the command-line tools

@@ -30,9 +30,16 @@ const DEFAULT_MAX_LOCK_ATTEMPTS = 5;
  *  passed in explicitly so tests can supply their own values. */
 export type DdlLockEnv = Readonly<Record<string, string | undefined>>;
 
-/** `lock_timeout` for the DDL transaction (a Postgres duration string). */
+/** A Postgres duration: an integer with an optional unit. Both callers splice the
+ *  value into `SET LOCAL lock_timeout = '…'`, which takes no bind parameter, so
+ *  this grammar is what keeps the setting from becoming SQL. */
+const LOCK_TIMEOUT_GRAMMAR = /^\d+\s*(us|ms|s|min|h|d)?$/;
+
+/** `lock_timeout` for the DDL transaction (a Postgres duration string). A value
+ *  outside the duration grammar falls back to the default. */
 export function resolveDdlLockTimeout(env: DdlLockEnv = process.env): string {
-  return env.ABLO_SCHEMA_LOCK_TIMEOUT ?? env.ABLO_DDL_LOCK_TIMEOUT ?? DEFAULT_LOCK_TIMEOUT;
+  const raw = env.ABLO_SCHEMA_LOCK_TIMEOUT ?? env.ABLO_DDL_LOCK_TIMEOUT;
+  return raw !== undefined && LOCK_TIMEOUT_GRAMMAR.test(raw) ? raw : DEFAULT_LOCK_TIMEOUT;
 }
 
 /** How many times the whole DDL transaction is attempted on `55P03` lock

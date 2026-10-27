@@ -26,7 +26,6 @@
  * so nothing is dropped and single-user undo behaves exactly as before.
  */
 
-import type { SyncStoreContract } from '../storeContract.js';
 import type { InverseOp } from './inverseOp.js';
 import { deepEqual } from '@abloatai/transaction/utils/json';
 
@@ -69,12 +68,14 @@ function buildEstablished(paired: InverseOp[]): Map<string, Record<string, unkno
   return map;
 }
 
+/** The one store read undo replay makes: a row's current fields, by id. */
+export interface UndoFieldReader {
+  readonly pool: { get(id: string): { toJSON(): Record<string, unknown> } | undefined };
+}
+
 /** Read the live value of a field from the store's pool, or `undefined`. */
-function readCurrentField(store: SyncStoreContract, id: string, field: string): unknown {
-  const model = store.pool.get(id);
-  if (!model) return undefined;
-  const json = (model as { toJSON?: () => Record<string, unknown> }).toJSON?.();
-  return json ? json[field] : undefined;
+function readCurrentField(store: UndoFieldReader, id: string, field: string): unknown {
+  return store.pool.get(id)?.toJSON()[field];
 }
 
 type Patch = { id: string } & Record<string, unknown>;
@@ -110,7 +111,7 @@ function replayValue(value: unknown, established: unknown, current: unknown): un
  * Returns `null` when no effective change survives.
  */
 function filterStalePatch(
-  store: SyncStoreContract,
+  store: UndoFieldReader,
   patch: Patch,
   established: Record<string, unknown> | undefined,
 ): Patch | null {
@@ -142,7 +143,7 @@ function filterStalePatch(
 export function resolveOps(
   apply: InverseOp[],
   paired: InverseOp[],
-  store: SyncStoreContract,
+  store: UndoFieldReader,
   policy: UndoConflictPolicy,
 ): InverseOp[] {
   if (policy === 'last-writer-wins') return apply;

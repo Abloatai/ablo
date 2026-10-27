@@ -39,6 +39,7 @@ import { InstanceCache as ObjectPool, ModelScope } from '../../src/local/Instanc
 import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry';
 import { SyncClient } from '../../src/local/SyncClient';
 import { Database } from '../../src/local/Database';
+import { BootstrapFetcher } from '../../src/local/sync/BootstrapFetcher';
 import { MutationQueue } from '../../src/local/transactions/mutations/MutationQueue';
 import {
   registerTestModels,
@@ -100,7 +101,7 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
   let client: SyncClient;
   let ctx: TestContextResult;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetFixtureCounter();
     registry = new ModelRegistry();
     setActiveRegistry(registry);
@@ -113,14 +114,16 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
       registry,
     );
 
-    database = {
-      saveTransaction: () => Promise.resolve(undefined),
-      getPersistedTransactions: () => Promise.resolve([]),
-      sealTransactionRecord: () => Promise.resolve(undefined),
-      removeTransaction: () => Promise.resolve(),
-      getStore: () => null,
-      clear: () => Promise.resolve(undefined),
-    } as unknown as Database;
+    database = new Database(registry, new BootstrapFetcher({ baseUrl: 'http://sync.test/api' }), { inMemory: true });
+    // The commit path persists each transaction, so the store must be open.
+    await database.open({
+      participantId: 'user-1',
+      participantKind: 'user',
+      organizationId: 'org-1',
+      projectId: null,
+      branchId: 'br-1',
+      branchRoot: true,
+    });
 
     client = new SyncClient(pool, database);
 

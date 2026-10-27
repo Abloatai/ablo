@@ -36,6 +36,7 @@ import { InstanceCache as ObjectPool, ModelScope } from '../../src/local/Instanc
 import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry';
 import { SyncClient } from '../../src/local/SyncClient';
 import { Database } from '../../src/local/Database';
+import { BootstrapFetcher } from '../../src/local/sync/BootstrapFetcher';
 import {
   registerTestModels,
   createTestConfig,
@@ -80,12 +81,7 @@ describe('SyncClient echo detection (architectural)', () => {
 
     // Stub Database — applyDeltaBatchToPool doesn't touch IDB itself
     // (that's processDeltaBatch's job), but the constructor needs one.
-    database = {
-      saveTransaction: async () => undefined,
-      getPersistedTransactions: async () => [],
-      getStore: () => null,
-      clear: async () => undefined,
-    } as unknown as Database;
+    database = new Database(registry, new BootstrapFetcher({ baseUrl: 'http://sync.test/api' }), { inMemory: true });
 
     client = new SyncClient(pool, database);
   });
@@ -353,6 +349,6 @@ describe('SyncClient echo detection (architectural)', () => {
 
     // Reconciliation keeps the newer tracked local edit — zIndex stays at 10.
     const after = pool.get(layerId)!;
-    expect((after as unknown as { zIndex: number }).zIndex).toBe(10);
+    expect(after).toHaveProperty('zIndex', 10);
   });
 });

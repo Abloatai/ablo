@@ -96,14 +96,13 @@ describe('MutationQueue commit lane', () => {
     // Slow the executor so we can observe ordering
     const order: string[] = [];
     const origCommit = mocks.mutationExecutor.commit.bind(mocks.mutationExecutor);
-    (mocks.mutationExecutor as unknown as { commit: typeof origCommit }).commit =
-      async (operations, options) => {
-        const id = (operations[0]?.id ?? 'unknown');
-        order.push(`enter:${id}`);
-        await new Promise((r) => setTimeout(r, 20));
-        order.push(`exit:${id}`);
-        return origCommit(operations, options);
-      };
+    jest.spyOn(mocks.mutationExecutor, 'commit').mockImplementation(async (operations, options) => {
+      const id = (operations[0]?.id ?? 'unknown');
+      order.push(`enter:${id}`);
+      await new Promise((r) => setTimeout(r, 20));
+      order.push(`exit:${id}`);
+      return origCommit(operations, options);
+    });
 
     void queue.enqueueCommit('tx-A', [OP('A')]);
     void queue.enqueueCommit('tx-B', [OP('B')]);

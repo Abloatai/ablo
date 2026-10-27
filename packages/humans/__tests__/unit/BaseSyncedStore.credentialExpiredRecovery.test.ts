@@ -25,10 +25,8 @@
  * every handler under test are real.
  */
 
-import { BaseSyncedStore } from '../../src/local/BaseSyncedStore';
-import { globalRuntime } from '../../src/local/context.js';
-import { SubscriptionManager } from '../../src/local/sync/SubscriptionManager';
-import { CredentialLifecycle } from '../../src/local/sync/credentialLifecycle';
+import { BaseSyncedStore, type UserContext } from '../../src/local/BaseSyncedStore';
+import { storeDependencies } from '../../src/local/testing/helpers/storeDependencies';
 import { ClaimLog } from '../../src/local/coordination/ClaimLog.js';
 import { initRuntime, resetRuntime } from '../../src/local/context.js';
 import {
@@ -38,7 +36,6 @@ import {
   emptyConfig,
 } from '../../src/local/RuntimeContext.js';
 import { SyncWebSocket } from '../../src/local/sync/SyncWebSocket';
-import { TerminalSessionLifecycle } from '../../src/local/sync/terminalSessionLifecycle';
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -71,104 +68,57 @@ async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** A real store whose seed-and-connect step and socket a test can reach. */
+class RecoveryProbe extends BaseSyncedStore {
+  protected override updateSyncStatus(): void {}
+  seedAndConnect(context: UserContext, lastSyncId: number): void {
+    this.setupWebSocketSync(context, lastSyncId);
+  }
+  get socket(): SyncWebSocket {
+    return this.syncWebSocket;
+  }
+}
+
 interface Shell {
-  store: BaseSyncedStore;
+  store: RecoveryProbe;
   refresher: jest.Mock;
-  databaseClear: jest.Mock;
-  objectPoolClear: jest.Mock;
+  databaseClear: jest.SpyInstance;
+  objectPoolClear: jest.SpyInstance;
   sessionErrorListener: jest.Mock;
   syncWebSocket: () => SyncWebSocket;
 }
 
 /**
- * Minimal store shell for `setupWebSocketSync`. `Object.create` skips the
- * heavy constructor (and class property initializers), so every field the
- * method + handlers under test touch is provided explicitly.
+ * A real store over real collaborators. The credential refresher and the
+ * session-error listener go in through the store's public hooks, and the two
+ * purge targets are spied, so the recovery branch runs exactly as shipped.
  */
 function makeShell(refreshResult: string | null): Shell {
+  const deps = storeDependencies('http://localhost:8080');
+  // The connection is a constructor dependency, held closed as the host builds it.
+  const ws = new SyncWebSocket({ baseUrl: 'http://localhost:8080', deferConnect: true });
+  const store = new RecoveryProbe({ ...deps, syncWebSocket: ws });
   const refresher = jest.fn(() => Promise.resolve(refreshResult));
-  const databaseClear = jest.fn(() => Promise.resolve());
-  const objectPoolClear = jest.fn();
+  store.setCredentialRefresher(refresher);
   const sessionErrorListener = jest.fn();
-
-  const shell = Object.create(BaseSyncedStore.prototype) as Record<string, unknown>;
-  shell.runtime = globalRuntime;
-  shell._syncServerUrl = 'http://localhost:8080';
-  // The connection is a constructor dependency now — the shell holds a real
-  // one, held closed exactly as the host builds it.
-  const ws = new SyncWebSocket({
-    baseUrl: 'http://localhost:8080',
-    deferConnect: true,
-  });
-  shell.syncWebSocket = ws;
-  shell.areaOfInterest = new SubscriptionManager({ transport: ws, sweepIntervalMs: 0 });
-  // `Object.create` skips the class field initializers, so anything the real
-  // constructor would have defaulted has to be set here too.
-  shell._collaborationEvents = [];
-  shell.auth = undefined;
-  shell.dataReady = false;
-  shell.disposers = [];
-  shell.sessionErrorListeners = new Set([sessionErrorListener]);
-  shell.database = { clear: databaseClear };
-  shell.objectPool = { clear: objectPoolClear };
-  shell.syncClient = {
-    markConnected: () => {
-      /* test stub */
-    },
-    disconnect: () => {
-      /* test stub */
-    },
-    onTransactionEvent: () => () => {
-      /* unsubscribe */
-    },
-  };
-  shell.updateSyncStatus = jest.fn();
-  shell.syncStatus = { state: 'idle' };
-  shell.terminalSessionLifecycle = new TerminalSessionLifecycle({
-    runtime: globalRuntime,
-    listeners: shell.sessionErrorListeners as Set<(error: Error) => void>,
-    purgeAuthenticatedState: async () => {
-      await databaseClear();
-      objectPoolClear();
-    },
-    updateSyncStatus: shell.updateSyncStatus as (updates: object) => void,
-  });
-  // Real lifecycle — the single-flight + tri-state contract under test.
-  const lifecycle = new CredentialLifecycle({
-    setAuthToken: () => {
-      /* test stub */
-    },
-    nudgeReconnect: () => {
-      /* test stub */
-    },
-    reportSessionExpired: () => {
-      /* test stub */
-    },
-  });
-  lifecycle.setRefresher(refresher);
-  shell.credentialLifecycle = lifecycle;
-
-  const store = shell as unknown as BaseSyncedStore;
+  store.subscribeSessionError(sessionErrorListener);
   return {
     store,
     refresher,
-    databaseClear,
-    objectPoolClear,
+    databaseClear: jest.spyOn(deps.database, 'purgePersistence').mockResolvedValue(undefined),
+    objectPoolClear: jest.spyOn(deps.objectPool, 'clear').mockImplementation(() => undefined),
     sessionErrorListener,
-    syncWebSocket: () => {
-      const ws = (shell as { syncWebSocket?: SyncWebSocket }).syncWebSocket;
-      if (!ws) throw new Error('expected setupWebSocketSync to set syncWebSocket');
-      return ws;
-    },
+    syncWebSocket: () => store.socket,
   };
 }
 
 /** Agent context: `createConnectionManager` returns null → no FSM, the
  *  recovery branch must reconnect the socket directly. */
-const AGENT_CONTEXT = {
+const AGENT_CONTEXT: UserContext = {
   userId: 'u1',
   organizationId: 'org1',
-  kind: 'agent' as const,
+  branchId: 'br1',
+  kind: 'agent',
 };
 
 function setup(refreshResult: string | null): Shell & { socket: FakeWebSocket } {
@@ -194,14 +144,9 @@ function setup(refreshResult: string | null): Shell & { socket: FakeWebSocket } 
   (globalThis as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
 
   const shell = makeShell(refreshResult);
-  const driver = shell.store as unknown as {
-    wireSocketEvents(): void;
-    setupWebSocketSync(context: typeof AGENT_CONTEXT, lastSyncId: number): void;
-  };
-  // Construction-time wiring first, then the seed-and-connect step — the
-  // same order the real constructor + initialize() run them in.
-  driver.wireSocketEvents();
-  driver.setupWebSocketSync(AGENT_CONTEXT, 0);
+  // The constructor already wired the socket events; this is the seed-and-connect
+  // step initialize() runs next.
+  shell.store.seedAndConnect(AGENT_CONTEXT, 0);
 
   const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
   if (!socket?.onopen) throw new Error('expected setupWebSocketSync to construct an open socket');

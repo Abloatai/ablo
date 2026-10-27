@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [3400325]
+  - @abloatai/transaction@0.67.1
+
 ## 0.1.5
 
 ### Native commands gain explicit isolation and publication modes

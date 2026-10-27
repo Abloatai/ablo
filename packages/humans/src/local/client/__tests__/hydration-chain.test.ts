@@ -462,12 +462,12 @@ describe('Schema computed getters', () => {
       id: 'c1',
       title: 'My Chat',
       metadata: JSON.stringify({ icon: 'rocket', color: '#FF0000', type: 'workspace-chat' }),
-    }) as unknown as Record<string, unknown>;
+    });
 
     expect(m).not.toBeNull();
-    expect(m.metadataObject).toEqual({ icon: 'rocket', color: '#FF0000', type: 'workspace-chat' });
-    expect(m.icon).toBe('rocket');
-    expect(m.displayTitle).toBe('My Chat');
+    expect(m).toHaveProperty('metadataObject', { icon: 'rocket', color: '#FF0000', type: 'workspace-chat' });
+    expect(m).toHaveProperty('icon', 'rocket');
+    expect(m).toHaveProperty('displayTitle', 'My Chat');
   });
 
   it('displayTitle falls back when title is empty', () => {
@@ -480,9 +480,9 @@ describe('Schema computed getters', () => {
       id: 'c2',
       title: '',
       metadata: '{}',
-    }) as unknown as Record<string, unknown>;
+    });
 
-    expect(m.displayTitle).toBe('Untitled');
+    expect(m).toHaveProperty('displayTitle', 'Untitled');
   });
 
   it('metadataObject returns {} for null/invalid metadata', () => {
@@ -498,11 +498,11 @@ describe('Schema computed getters', () => {
 
     const { pool } = setupWithComputed({ metadataObject });
 
-    const m1 = pool.createFromData({ __typename: 'TestChat', id: 'c3', title: 'A', metadata: null }) as unknown as Record<string, unknown>;
-    expect(m1.metadataObject).toEqual({});
+    const m1 = pool.createFromData({ __typename: 'TestChat', id: 'c3', title: 'A', metadata: null });
+    expect(m1).toHaveProperty('metadataObject', {});
 
-    const m2 = pool.createFromData({ __typename: 'TestChat', id: 'c4', title: 'B', metadata: 'not-json' }) as unknown as Record<string, unknown>;
-    expect(m2.metadataObject).toEqual({});
+    const m2 = pool.createFromData({ __typename: 'TestChat', id: 'c4', title: 'B', metadata: 'not-json' });
+    expect(m2).toHaveProperty('metadataObject', {});
   });
 
   it('chained computed: icon reads from metadataObject (same as production schema)', () => {
@@ -534,13 +534,13 @@ describe('Schema computed getters', () => {
       id: 'c5',
       title: 'Test',
       metadata: JSON.stringify({ type: 'workspace-chat', icon: 'rocket', color: '#00FF00' }),
-    }) as unknown as Record<string, unknown>;
+    });
 
     expect(m).not.toBeNull();
-    expect(m.metadataObject).toEqual({ type: 'workspace-chat', icon: 'rocket', color: '#00FF00' });
-    expect(m.icon).toBe('rocket');
-    expect(m.color).toBe('#00FF00');
-    expect(m.displayTitle).toBe('Test');
+    expect(m).toHaveProperty('metadataObject', { type: 'workspace-chat', icon: 'rocket', color: '#00FF00' });
+    expect(m).toHaveProperty('icon', 'rocket');
+    expect(m).toHaveProperty('color', '#00FF00');
+    expect(m).toHaveProperty('displayTitle', 'Test');
 
     // Verify chaining works: icon falls back when metadata has no icon
     const m2 = pool.createFromData({
@@ -548,10 +548,10 @@ describe('Schema computed getters', () => {
       id: 'c6',
       title: '',
       metadata: '{}',
-    }) as unknown as Record<string, unknown>;
+    });
 
-    expect(m2.icon).toBe('message-circle');
-    expect(m2.color).toBe('#8B5CF6');
-    expect(m2.displayTitle).toBe('Untitled');
+    expect(m2).toHaveProperty('icon', 'message-circle');
+    expect(m2).toHaveProperty('color', '#8B5CF6');
+    expect(m2).toHaveProperty('displayTitle', 'Untitled');
   });
 });

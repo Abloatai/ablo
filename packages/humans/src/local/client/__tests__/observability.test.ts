@@ -227,10 +227,8 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
     });
 
     expect(m).not.toBeNull();
-    const fields = m as unknown as TestFields;
-    expect(fields.contentJSON).toBeDefined();
-    expect(fields.contentJSON?.type).toBe('doc');
-    expect(fields.contentJSON?.content).toHaveLength(1);
+    expect(m).toHaveProperty('contentJSON.type', 'doc');
+    expect(m).toHaveProperty('contentJSON.content.length', 1);
   });
 
   it('leaves string-serialized contentJSON as-is (no automatic JSON.parse)', async () => {
@@ -257,11 +255,10 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
       contentJSON: serialized,
     });
 
-    const fields = m as unknown as TestFields;
     // Currently: the SDK stores the raw string — no JSON.parse happens in
     // the ingest path. If this assertion flips (future behavior change),
     // update consumer code accordingly.
-    expect(typeof fields.contentJSON).toBe('string');
+    expect(m).toHaveProperty('contentJSON', expect.any(String));
   });
 
   it('updateFromData does NOT record outbound changes (hydration must not echo)', () => {

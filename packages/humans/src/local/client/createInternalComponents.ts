@@ -154,7 +154,7 @@ export function createInternalComponents<S extends SchemaRecord>(
  * bootstrap and fetched on demand instead. The default strategy is
  * `'instant'`, which includes the model.
  */
-function deriveInstantModels<S extends SchemaRecord>(
+export function deriveInstantModels<S extends SchemaRecord>(
   schema: Schema<S>,
 ): string[] {
   const schemaModels =

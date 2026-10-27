@@ -91,19 +91,27 @@ export interface PrismaDataSourceOptions {
 
 const lowerFirst = (s: string): string => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
+function isPrismaDelegate(value: Partial<PrismaDelegate> | undefined): value is PrismaDelegate {
+  return (
+    typeof value?.findUnique === 'function' &&
+    typeof value.findMany === 'function' &&
+    typeof value.create === 'function' &&
+    typeof value.update === 'function' &&
+    typeof value.delete === 'function'
+  );
+}
+
 /**
- * Resolves a model's Prisma delegate by name. This is the one unavoidable cast in
- * the adapter, and it reflects a real limit of the type system rather than a
- * shortcut. Writes inside `prisma.$transaction(tx => …)` must go through the
- * transactional client `tx`, and the model is known only as a runtime string.
- * Prisma keys its client by fixed property names (`{ item: ItemDelegate; … }`), so
- * a dynamic `tx[name]` lookup is `unknown` to the compiler: there is no static key
- * to infer from a string. The cast is checked at runtime immediately afterward by
- * confirming that `findMany` is a function on the resolved delegate.
+ * Resolves a model's Prisma delegate by name. Writes inside
+ * `prisma.$transaction(tx => …)` must go through the transactional client `tx`,
+ * and the model is known only as a runtime string. Prisma keys its client by fixed
+ * property names (`{ item: ItemDelegate; … }`), so a dynamic lookup has no static
+ * type: the property may be any part of a delegate or absent, and it is admitted
+ * only once every method the adapter calls is confirmed to be a function.
  */
 function delegateFor(client: PrismaRaw, name: string): PrismaDelegate {
-  const delegate = (client as unknown as Record<string, PrismaDelegate | undefined>)[name];
-  if (!delegate || typeof delegate.findMany !== 'function') {
+  const delegate: Partial<PrismaDelegate> | undefined = Reflect.get(client, name);
+  if (!isPrismaDelegate(delegate)) {
     throw new AbloValidationError(`prismaDataSource: no Prisma delegate "${name}" on the client`, { code: 'source_adapter_misconfigured' });
   }
   return delegate;

@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * HTTP `create` returns the row, not a bare receipt — matching the WebSocket
  * client (whose `create` already returns `T`). The returned row is the
@@ -14,13 +15,10 @@ import {
 type Json = Record<string, unknown>;
 
 function resp(status: number, body: Json): Response {
-  return {
-    ok: status >= 200 && status < 300,
+  return new Response(JSON.stringify(body), {
     status,
     statusText: 'OK',
-    text: async () => JSON.stringify(body),
-    headers: { get: () => null },
-  } as unknown as Response;
+  });
 }
 
 type Handler = (url: string, method: string, init?: RequestInit) => Response;

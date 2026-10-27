@@ -14,101 +14,78 @@
  *    database reports a non-`local` requirement.
  *  - `forceFullRebootstrap()` is a no-op for `'none'` participants.
  *
- * The test drives `initialize()` as a generator with mocked deps,
- * skipping the heavy constructor via `Object.create`. We aren't
- * exercising IDB / WS / pool semantics — those are covered elsewhere
- * — only the bootstrap-skip decision.
+ * The test drives `initialize()` as a generator over a real store whose
+ * collaborators are real and spied: only the bootstrap-skip decision is
+ * under test, so the database and socket calls answer canned values.
  */
 
-import { LogPosition } from '../../src/local/logPosition.js';
 import { BaseSyncedStore, type UserContext } from '../../src/local/BaseSyncedStore';
-import { globalRuntime } from '../../src/local/context.js';
-import type { Database } from '../../src/local/Database';
-import type { SyncClient } from '../../src/local/SyncClient';
+import type { BootstrapResult } from '../../src/local/Database';
+import { storeDependencies } from '../../src/local/testing/helpers/storeDependencies';
 
 type GenStep = IteratorResult<Promise<unknown>, { success: boolean; error?: Error }>;
 
-interface InitDeps {
-  database: jest.Mocked<Pick<Database,
-    | 'open'
-    | 'getLastSyncId'
-    | 'requiredBootstrap'
-    | 'bootstrapFromServer'
-    | 'markRequiresFullBootstrap'
-  >>;
-  syncClient: jest.Mocked<Pick<SyncClient, 'initialize' | 'hydrateFromDatabase'>>;
+/** The store under test, with the side paths `initialize()` leaves to the
+ *  host stubbed and its protected state readable. */
+class ProbeStore extends BaseSyncedStore {
+  readonly webSocketSync = jest.fn();
+  protected override setupWebSocketSync(): void {
+    this.webSocketSync();
+  }
+  protected override updateSyncStatus(): void {}
+  protected override executeBootstrapWithTimeout<T>(bootstrapFn: () => Promise<T>): Promise<T> {
+    return bootstrapFn();
+  }
+  protected override async performBackgroundBootstrap(): Promise<void> {}
+  get isDataReady(): boolean {
+    return this.dataReady;
+  }
+  get isInitialized(): boolean {
+    return this.initialized;
+  }
+  setUserContext(context: UserContext): void {
+    this.userContext = context;
+  }
+  rebootstrap(): void {
+    this.forceFullRebootstrap();
+  }
 }
 
-function makeDeps(overrides?: {
-  requirementsType?: 'full' | 'partial' | 'local';
-}): InitDeps {
+function makeDeps(overrides?: { requirementsType?: 'full' | 'partial' | 'local' }) {
   const requirementsType = overrides?.requirementsType ?? 'full';
-  return {
-    database: {
-      open: jest.fn().mockResolvedValue(undefined),
-      getLastSyncId: jest.fn().mockResolvedValue(0),
-      requiredBootstrap: jest.fn().mockResolvedValue({ type: requirementsType }),
-      bootstrapFromServer: jest.fn().mockResolvedValue({
-        bootstrapData: { type: 'full', models: {} },
-        deltaResults: [],
-      }),
-      markRequiresFullBootstrap: jest.fn(),
-    },
-    syncClient: {
-      initialize: jest.fn().mockResolvedValue(undefined),
-      hydrateFromDatabase: jest.fn().mockResolvedValue(undefined),
-      position: new LogPosition(),
-    } as unknown as InitDeps['syncClient'],
+  const collaborators = storeDependencies();
+  const { database, syncClient, syncWebSocket } = collaborators;
+  const bootstrapResult: BootstrapResult = {
+    modelsLoaded: 0,
+    modelsStored: 0,
+    bootstrapData: { type: 'full', models: {}, lastSyncId: 0, timestamp: 0 },
   };
+  const spies = {
+    open: jest.spyOn(database, 'open').mockResolvedValue(undefined),
+    getLastSyncId: jest.spyOn(database, 'getLastSyncId').mockResolvedValue(0),
+    requiredBootstrap: jest
+      .spyOn(database, 'requiredBootstrap')
+      .mockResolvedValue({ type: requirementsType, modelsToLoad: [], lastSyncId: 0, syncGroups: [] }),
+    bootstrapFromServer: jest.spyOn(database, 'bootstrapFromServer').mockResolvedValue(bootstrapResult),
+    markRequiresFullBootstrap: jest.spyOn(database, 'markRequiresFullBootstrap').mockImplementation(() => undefined),
+    initialize: jest.spyOn(syncClient, 'initialize').mockResolvedValue(undefined),
+    hydrateFromDatabase: jest.spyOn(syncClient, 'hydrateFromDatabase').mockResolvedValue(undefined),
+  };
+  // initialize() reads the connection as already open, so bootstrapMode:'none' resolves at once.
+  jest.spyOn(syncWebSocket, 'isConnected').mockReturnValue(true);
+  return { ...collaborators, spies };
 }
 
-interface StoreStub {
-  database: InitDeps['database'];
-  syncClient: InitDeps['syncClient'];
-  objectPool: { size: number };
-  lastAckedId: number;
-  highestProcessedSyncId: number;
-  initialized: boolean;
-  dataReady: boolean;
-  userContext: UserContext | null;
-  setupWebSocketSync: jest.Mock;
-  updateSyncStatus: jest.Mock;
-  executeBootstrapWithTimeout: jest.Mock;
-  performBackgroundBootstrap: jest.Mock;
-  initialize: BaseSyncedStore['initialize'];
-  forceFullRebootstrap: () => void;
-}
+type InitDeps = ReturnType<typeof makeDeps>;
 
-function makeStore(deps: InitDeps): StoreStub {
-  // Bypass the real constructor — we only need fields the
-  // initialize() generator reads. The intersection types on
-  // Database/SyncClient/etc. make a strongly-typed assignment
-  // unwieldy, so each field is filled via an `unknown` cast and the
-  // returned shape exposes only what the test uses.
-  const stub = Object.create(BaseSyncedStore.prototype) as StoreStub;
-  const w = stub as unknown as Record<string, unknown>;
-  w.runtime = globalRuntime;
-  w.database = deps.database;
-  w.syncClient = deps.syncClient;
-  w.objectPool = { size: 0 };
-  // The connection is a constructor dependency now; initialize() reads it as
-  // already connected so the bootstrapMode:'none' wait resolves immediately.
-  w.syncWebSocket = { isConnected: () => true, disconnect: () => undefined };
-  // lastAckedId/highestProcessedSyncId are getters delegating to
-  // syncClient.position now — the stub provides a real LogPosition above.
-  w.initialized = false;
-  w.dataReady = false;
-  w.userContext = null;
-  w.setupWebSocketSync = jest.fn();
-  w.updateSyncStatus = jest.fn();
-  // If executeBootstrapWithTimeout fires, it would call
-  // bootstrapFromServer for us — but we want to assert directly
-  // against bootstrapFromServer, so just delegate the inner fn.
-  w.executeBootstrapWithTimeout = jest.fn(
-    async (fn: () => Promise<unknown>) => fn(),
-  );
-  w.performBackgroundBootstrap = jest.fn();
-  return stub;
+function makeStore(deps: InitDeps): ProbeStore {
+  return new ProbeStore({
+    syncClient: deps.syncClient,
+    database: deps.database,
+    objectPool: deps.objectPool,
+    modelRegistry: deps.modelRegistry,
+    syncWebSocket: deps.syncWebSocket,
+  });
 }
 
 async function drive(
@@ -130,6 +107,7 @@ describe('BaseSyncedStore.initialize — bootstrapMode', () => {
     const ctx: UserContext = {
       userId: 'agent:test',
       organizationId: 'org_1',
+      branchId: 'br_1',
       kind: 'agent',
       bootstrapMode: 'none',
       syncGroups: ['org:org_1'],
@@ -138,12 +116,12 @@ describe('BaseSyncedStore.initialize — bootstrapMode', () => {
     const result = await drive(store.initialize(ctx));
 
     expect(result.success).toBe(true);
-    expect(deps.database.bootstrapFromServer).not.toHaveBeenCalled();
-    expect(deps.database.requiredBootstrap).toHaveBeenCalledTimes(1);
+    expect(deps.spies.bootstrapFromServer).not.toHaveBeenCalled();
+    expect(deps.spies.requiredBootstrap).toHaveBeenCalledTimes(1);
     // Live-delta path must still be wired up.
-    expect(store.setupWebSocketSync).toHaveBeenCalledTimes(1);
-    expect(store.dataReady).toBe(true);
-    expect(store.initialized).toBe(true);
+    expect(store.webSocketSync).toHaveBeenCalledTimes(1);
+    expect(store.isDataReady).toBe(true);
+    expect(store.isInitialized).toBe(true);
   });
 
   it('still bootstraps when bootstrapMode is "full" (default user behavior)', async () => {
@@ -152,6 +130,7 @@ describe('BaseSyncedStore.initialize — bootstrapMode', () => {
     const ctx: UserContext = {
       userId: 'user_1',
       organizationId: 'org_1',
+      branchId: 'br_1',
       kind: 'user',
       bootstrapMode: 'full',
       syncGroups: ['org:org_1'],
@@ -160,7 +139,7 @@ describe('BaseSyncedStore.initialize — bootstrapMode', () => {
     const result = await drive(store.initialize(ctx));
 
     expect(result.success).toBe(true);
-    expect(deps.database.bootstrapFromServer).toHaveBeenCalledTimes(1);
+    expect(deps.spies.bootstrapFromServer).toHaveBeenCalledTimes(1);
   });
 
   it('skips bootstrap when requirements are local even with bootstrapMode "full"', async () => {
@@ -170,13 +149,14 @@ describe('BaseSyncedStore.initialize — bootstrapMode', () => {
     const ctx: UserContext = {
       userId: 'user_1',
       organizationId: 'org_1',
+      branchId: 'br_1',
       kind: 'user',
       bootstrapMode: 'full',
       syncGroups: ['org:org_1'],
     };
 
     await drive(store.initialize(ctx));
-    expect(deps.database.bootstrapFromServer).not.toHaveBeenCalled();
+    expect(deps.spies.bootstrapFromServer).not.toHaveBeenCalled();
   });
 });
 
@@ -184,32 +164,34 @@ describe('BaseSyncedStore.forceFullRebootstrap — bootstrapMode guard', () => {
   it('no-ops when bootstrapMode is "none"', () => {
     const deps = makeDeps();
     const store = makeStore(deps);
-    store.userContext = {
+    store.setUserContext({
       userId: 'agent:test',
       organizationId: 'org_1',
+      branchId: 'br_1',
       kind: 'agent',
       bootstrapMode: 'none',
-    };
+    });
 
-    store.forceFullRebootstrap();
+    store.rebootstrap();
 
-    expect(deps.database.markRequiresFullBootstrap).not.toHaveBeenCalled();
+    expect(deps.spies.markRequiresFullBootstrap).not.toHaveBeenCalled();
   });
 
   it('marks the database when bootstrapMode is "full"', () => {
     const deps = makeDeps();
     const store = makeStore(deps);
-    store.userContext = {
+    store.setUserContext({
       userId: 'user_1',
       organizationId: 'org_1',
+      branchId: 'br_1',
       kind: 'user',
       bootstrapMode: 'full',
-    };
+    });
     // forceFullRebootstrap calls into syncWebSocket?.disconnect()
     // and onConnectionEvent?.(...) — both optional, leave undefined.
-    store.forceFullRebootstrap();
+    store.rebootstrap();
 
-    expect(deps.database.markRequiresFullBootstrap).toHaveBeenCalledTimes(1);
+    expect(deps.spies.markRequiresFullBootstrap).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -218,7 +200,7 @@ it('never restores persisted rows or pending writes after persistence validation
   const deps = makeDeps();
   const store = makeStore(deps);
   const error = new Error('Persistence authority mismatch');
-  deps.database.open.mockRejectedValue(error);
+  deps.spies.open.mockRejectedValue(error);
   const gen = store.initialize({
     userId: 'user', organizationId: 'org', branchId: 'branch',
     syncGroups: ['account:b'], operations: ['items.read'],
@@ -226,10 +208,10 @@ it('never restores persisted rows or pending writes after persistence validation
   const opening = gen.next();
   await expect(opening.value).rejects.toBe(error);
   expect(gen.throw(error)).toEqual({ done: true, value: { success: false, error } });
-  expect(deps.database.open).toHaveBeenCalledWith(expect.objectContaining({
+  expect(deps.spies.open).toHaveBeenCalledWith(expect.objectContaining({
     syncGroups: ['account:b'], operations: ['items.read'],
   }));
-  expect(deps.syncClient.initialize).not.toHaveBeenCalled();
-  expect(deps.syncClient.hydrateFromDatabase).not.toHaveBeenCalled();
-  expect(store.dataReady).toBe(false);
+  expect(deps.spies.initialize).not.toHaveBeenCalled();
+  expect(deps.spies.hydrateFromDatabase).not.toHaveBeenCalled();
+  expect(store.isDataReady).toBe(false);
 });

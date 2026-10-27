@@ -49,11 +49,9 @@ async function bench(
   const queue = new MutationQueue({ batchDelay: 0, maxBatchSize: n + 10 });
 
   let microtaskCommits = 0;
-  interface CommitInternals { commitCreatedTransactions: () => void; createdTransactions: unknown[] }
-  const internals = queue as unknown as CommitInternals;
-  const origCommit = internals.commitCreatedTransactions.bind(queue);
-  internals.commitCreatedTransactions = () => {
-    if (internals.createdTransactions.length > 0) microtaskCommits++;
+  const origCommit = queue['commitCreatedTransactions'].bind(queue);
+  queue['commitCreatedTransactions'] = () => {
+    if (queue['createdTransactions'].length > 0) microtaskCommits++;
     origCommit();
   };
 
