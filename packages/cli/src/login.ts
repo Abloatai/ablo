@@ -82,9 +82,10 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Best-effort OS browser open. Always print the URL as a fallback. */
 function openBrowser(url: string): void {
   const cmd =
-    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'rundll32.exe' : 'xdg-open';
   try {
-    const child = spawn(cmd, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' });
+    const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url];
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true, shell: false });
     child.on('error', () => {});
     child.unref();
   } catch {

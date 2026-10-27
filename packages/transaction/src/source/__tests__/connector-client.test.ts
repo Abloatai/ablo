@@ -74,3 +74,16 @@ describe('source connector ownership fencing', () => {
     );
   });
 });
+
+
+describe('source connector credential destination', () => {
+  it.each(['http://remote.example', 'ws://remote.example', 'https://user:password@remote.example'])('rejects %s before opening a credential-bearing socket', baseURL => {
+    const webSocket = jest.fn<() => ConnectorWebSocket>();
+    expect(() => createSourceConnector({baseURL, apiKey: 'sk_fixture', handler: async () => new Response('{}'), webSocket})).toThrow();
+    expect(webSocket).not.toHaveBeenCalled();
+  });
+
+  it.each(['http://127.0.0.1:8080', 'ws://localhost:8080', 'wss://remote.example'])('retains supported local or secure destinations: %s', baseURL => {
+    expect(() => createSourceConnector({baseURL, apiKey: 'sk_fixture', handler: async () => new Response('{}')})).not.toThrow();
+  });
+});
