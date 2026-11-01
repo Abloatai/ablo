@@ -1,5 +1,7 @@
 # @abloatai/cli
 
+## 0.67.2
+
 ## 0.67.1
 
 ### Login URLs keep their query parameters

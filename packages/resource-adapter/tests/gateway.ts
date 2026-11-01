@@ -150,3 +150,11 @@ test('gVisor rejects malformed rootfs configuration before opening a gateway', a
     await assert.rejects(startResourceAdapter({stateDirectory: '/unused', mountpoint: '/unused', socketPath: '/unused', workspaceId: 'unused', workers: [], gvisorRootfs}), /gvisorRootfs must be an absolute path/);
   }
 });
+
+
+test('source removal accepts only its fixed root capability', async () => {
+  for (const sourceFileRemoval of ['atomic-v0', '', 1, true, {}]) {
+    await assert.rejects(startResourceAdapter({stateDirectory:'/unused',mountpoint:'/unused',socketPath:'/unused',workspaceId:'unused',workers:[],
+      sourceFileRemoval:sourceFileRemoval as 'atomic-v1'}), /Invalid source file removal capability/);
+  }
+});

@@ -756,8 +756,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   }
 
   /**
-   * Replays one byte-identical, idempotent HTTP commit until mutation-log
-   * replay reports the source echo as confirmed. `queued` is acceptance only:
+   * Reads the accepted commit's record until its source echo is confirmed.
+   * `queued` is acceptance only:
    * this loop never clears the durable envelope and never converts it into a
    * successful `wait: 'confirmed'` result.
    */
@@ -788,34 +788,53 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             }, remaining)
           : null;
       try {
-        const raw = await requestRaw(
-          request.path,
-          {
-            method: request.method,
-            idempotencyKey: request.idempotencyKey,
-            ...(request.sealedProtocolVersion !== undefined
-              ? { sealedProtocolVersion: request.sealedProtocolVersion }
-              : {}),
-            body: request.body,
-            signal: confirmationController.signal,
-          },
+        const record = await requestJson(
+          `/v1/commits/${encodeURIComponent(request.idempotencyKey)}`,
+          { method: 'GET', cache: 'no-store', signal: confirmationController.signal },
+          commitRecordSchema.nullable(),
           true
         );
-        const next = parseSuccessfulCommitResponse(raw, request.idempotencyKey);
-        observeCommitReceipt(request, next);
-        if (next.correlationId !== correlationId) {
-          throw new AbloIdempotencyError(
-            'The same HTTP commit replay returned different source correlation evidence.',
-            { code: 'idempotency_conflict' }
-          );
+        if (record !== null) {
+          if (
+            record.id !== request.idempotencyKey ||
+            record.receipt.clientTxId !== request.idempotencyKey ||
+            record.status === 'rejected' ||
+            record.correlationId !== correlationId ||
+            record.actor.id !== initial.authority.participantId ||
+            record.actor.kind !== initial.authority.participantKind ||
+            record.authority.participantId !== initial.authority.participantId ||
+            record.authority.participantKind !== initial.authority.participantKind ||
+            record.authority.organizationId !== initial.authority.organizationId ||
+            record.authority.projectId !== initial.authority.projectId ||
+            record.authority.branchId !== initial.authority.branchId
+          ) {
+            throw new AbloConnectionError(
+              'The HTTP commit record does not match the accepted write.',
+              { code: 'malformed_response' }
+            );
+          }
+          const next = parseSuccessfulCommitResponse({
+            ...current,
+            status: record.status,
+            statusAt: record.statusAt,
+            lastSyncId: record.lastSyncId,
+            serverTxId: String(record.lastSyncId),
+          }, request.idempotencyKey);
+          observeCommitReceipt(request, next);
+          current = next;
         }
-        current = next;
       } catch (error) {
         if (
           confirmationController.signal.aborted ||
           (deadlineAt !== null && Date.now() >= deadlineAt)
         ) {
           throw replicationLagTimeout(request, current, requestTimeoutMs);
+        }
+        if (isDefinitiveHttpRejection(error)) {
+          throw new AbloConnectionError(
+            'The accepted commit could not be confirmed by its record; its write remains pending.',
+            { code: 'malformed_response', cause: error }
+          );
         }
         throw error;
       } finally {
@@ -927,8 +946,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   /**
    * A flush is stronger than startup replay: it promises that every retained
    * envelope has reached a definitive outcome, not merely that the server
-   * accepted it for forwarding. Poll queued receipts through mutation-log
-   * replay and leave their envelopes intact if the confirmation deadline
+   * accepted it for forwarding. Poll queued commit records and leave their
+   * envelopes intact if the confirmation deadline
    * expires.
    */
   async function confirmReplayedHttpCommits(

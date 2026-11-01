@@ -9,9 +9,41 @@ import time
 import uuid
 
 from store import Rejected, canonical
+from sandbox_masks import SANDBOX_MASKS
 
 HOME = "/tmp/ablo-native-profile"
 LIMIT = 16 * 1024 * 1024
+FILESYSTEM_PROFILE_BUDGET = "filesystem-profile-64m-v2"
+FILESYSTEM_PROFILE_LIMIT = 64 * 1024 * 1024
+
+
+def filesystem_budget(peer, request, configured_argv):
+    """Root dispatch selects a fixed budget for one configured filesystem command."""
+    mode = request.get("streamBudget")
+    if "streamBudget" not in request:
+        return None
+    if (peer != 0 or request.get("interactive") is not True or request.get("action") != "run"
+            or mode != FILESYSTEM_PROFILE_BUDGET or not configured_argv
+            or request.get("argv") != configured_argv or "env" in request):
+        raise Rejected("capability_unavailable")
+    return mode
+
+
+def filesystem_sandbox_masks(peer, request, configured_argv, configured_mode):
+    if "sandboxMasks" not in request:
+        return None
+    if (configured_mode != SANDBOX_MASKS or request["sandboxMasks"] != SANDBOX_MASKS
+            or filesystem_budget(peer, request, configured_argv) != FILESYSTEM_PROFILE_BUDGET):
+        raise Rejected("capability_unavailable")
+    return SANDBOX_MASKS
+
+
+def validate_filesystem_argv(argv):
+    if argv is not None and (not isinstance(argv, list) or not argv
+            or not all(isinstance(arg, str) and arg and "\0" not in arg for arg in argv)
+            or not os.path.isabs(argv[0])):
+        raise ValueError("Invalid trusted filesystem command")
+    return argv
 
 
 def await_domain_exit(uid):
@@ -37,13 +69,41 @@ def await_domain_exit(uid):
 
 
 class ProcessChannel:
-    def __init__(self, connection, source):
+    def __init__(self, connection, source, stream_budget=None, sandbox_masks=None):
+        if stream_budget not in (None, FILESYSTEM_PROFILE_BUDGET):
+            raise Rejected("capability_unavailable")
+        if sandbox_masks not in (None, SANDBOX_MASKS) or sandbox_masks and stream_budget != FILESYSTEM_PROFILE_BUDGET:
+            raise Rejected("capability_unavailable")
+        self.sandbox_masks = sandbox_masks
+        self.stream_budget = stream_budget
         self.connection, self.source = connection, source
         self.lock = threading.Lock()
         self.decision = threading.Event()
         self.action = None
         self.failed = False
         self.counts = {"stdin": 0, "stdout": 0, "stderr": 0}
+
+    def limit(self, name):
+        return FILESYSTEM_PROFILE_LIMIT if self.stream_budget and name != "stderr" else LIMIT
+
+    def fail(self, error, stream):
+        # First cause only; never send exception text, paths, identifiers or payloads.
+        with self.lock:
+            if self.failed:
+                return
+            self.failed = True
+            self.action = "abort"
+            self.decision.set()
+            code = getattr(error, "code", None)
+            reason = {"stream_overflow": "stream_overflow", "stream_disconnected": "socket_lost",
+                      "stream_frame": "frame_overflow"}.get(code,
+                      "socket_lost" if isinstance(error, OSError) else "protocol_error")
+            diagnostic = {"reason": reason, "stream": stream,
+                          **{name + "Bytes": value for name, value in self.counts.items()}}
+            try:
+                self.connection.sendall(canonical({"diagnostic": diagnostic}).encode() + b"\n")
+            except OSError:
+                pass
 
     def send(self, frame):
         with self.lock:
@@ -56,19 +116,19 @@ class ProcessChannel:
                 if not data:
                     return
                 self.counts[name] += len(data)
-                if self.counts[name] > LIMIT:
+                if self.counts[name] > self.limit(name):
                     raise Rejected("stream_overflow")
                 self.send({"stream": name, "data": base64.b64encode(data).decode()})
-        except Exception:
-            self.failed = True
-            self.action = "abort"
-            self.decision.set()
+        except Exception as error:
+            self.fail(error, name)
 
     def input(self, pipe):
         try:
             while not self.decision.is_set():
                 raw = self.source.readline(1024 * 1024 + 1)
-                if not raw or len(raw) > 1024 * 1024 or not raw.endswith(b"\n"):
+                if len(raw) > 1024 * 1024:
+                    raise Rejected("stream_frame")
+                if not raw or not raw.endswith(b"\n"):
                     raise Rejected("stream_disconnected")
                 frame = json.loads(raw)
                 if frame.get("action") in ("complete", "abort"):
@@ -78,7 +138,7 @@ class ProcessChannel:
                 if frame.get("action") == "stdin":
                     data = base64.b64decode(frame["data"], validate=True)
                     self.counts["stdin"] += len(data)
-                    if self.counts["stdin"] > LIMIT:
+                    if self.counts["stdin"] > self.limit("stdin"):
                         raise Rejected("stream_overflow")
                     pipe.write(data)
                     pipe.flush()
@@ -86,10 +146,8 @@ class ProcessChannel:
                     pipe.close()
                 else:
                     raise Rejected("stream_invalid")
-        except Exception:
-            self.failed = True
-            self.action = "abort"
-            self.decision.set()
+        except Exception as error:
+            self.fail(error, "stdin")
 
 
 class Profile:

@@ -60,6 +60,57 @@ const make = () =>
     transport: 'http',
   });
 
+describe('accepted HTTP commit confirmation', () => {
+  const id = 'confirmation/key';
+  const queued = () => ({...confirmedCommitReceiptResponse({clientTxId:id}),authority:TEST_AUTHORITY,
+    status:'queued',lastSyncId:0,correlationId:'echo-confirmation',...COMMIT_TIMES,
+    operationResults:[{transactionId:'op-1',outcome:'created',row:{id:'generated',title:'kept'}}]});
+  const record = (confirmed = true) => ({id,attempts:[{id:'attempt',observedAt:COMMIT_TIMES.createdAt,transport:'http',kind:'execution'}],
+    actor:{kind:'agent',id:TEST_AUTHORITY.participantId},authority:TEST_AUTHORITY,claims:[],...COMMIT_TIMES,
+    status:confirmed?'confirmed':'queued',lastSyncId:confirmed?42:0,correlationId:'echo-confirmation',reads:[],operations:[],
+    receipt:{clientTxId:id,serverTxId:'0',ops:1}});
+
+  it('uploads once, then polls records without a body and retains returned rows', async () => {
+    const calls:{method:string;path:string;body:unknown}[]=[];
+    let polls=0;
+    const client=Ablo({schema,apiKey:'sk_test_confirm',baseURL:'https://api.example.test',transport:'http',fetch:(input,init)=>{
+      const path=new URL(String(input)).pathname,method=init?.method??'GET';
+      calls.push({method,path,body:init?.body});
+      if(method==='POST')return Promise.resolve(jsonResponse(queued()));
+      polls+=1;
+      return Promise.resolve(jsonResponse(polls===1?null:record(polls>=3)));
+    }});
+    await expect(client.commits.create({idempotencyKey:id,operations:[{action:'create',model:'items',id:'generated',data:{title:'kept'}}],wait:'confirmed'}))
+      .resolves.toMatchObject({status:'confirmed',lastSyncId:42,operationResults:[{row:{id:'generated',title:'kept'}}]});
+    expect(calls.filter(call=>call.method==='POST')).toHaveLength(1);
+    expect(calls.filter(call=>call.method==='GET')).toEqual(Array(3).fill({method:'GET',path:'/api/v1/commits/confirmation%2Fkey',body:undefined}));
+  });
+
+  it.each(['id','receipt','correlation','actor','kind','authorityActor','authorityKind','organization','project','branch','rejected'])(
+    'refuses a record with different %s evidence', async field=>{
+      const changed=record();
+      if(field==='id')changed.id='other';
+      if(field==='receipt')changed.receipt.clientTxId='other';
+      if(field==='correlation')changed.correlationId='other';
+      if(field==='actor')changed.actor.id='other';
+      if(field==='kind')changed.actor.kind='user';
+      if(field==='authorityActor')changed.authority={...TEST_AUTHORITY,participantId:'other'};
+      if(field==='authorityKind')changed.authority={...TEST_AUTHORITY};
+      if(field==='authorityKind')Object.assign(changed.authority,{participantKind:'user'});
+      if(field==='organization')changed.authority={...TEST_AUTHORITY,organizationId:'other'};
+      if(field==='project')changed.authority={...TEST_AUTHORITY,projectId:'other'};
+      if(field==='branch')changed.authority={...TEST_AUTHORITY,branchId:'other'};
+      if(field==='rejected'){
+        Object.assign(changed,{status:'rejected',lastSyncId:0,receipt:{...changed.receipt,error:{code:'entity_not_found',message:'Rejected'}}});
+        Reflect.deleteProperty(changed,'correlationId');
+      }
+      const client=Ablo({schema,apiKey:'sk_test_confirm',baseURL:'https://api.example.test',transport:'http',fetch:(_input,init)=>
+        Promise.resolve(jsonResponse(init?.method==='POST'?queued():changed))});
+      await expect(client.commits.create({idempotencyKey:id,operations:[{action:'update',model:'items',id:'row',data:{title:'kept'}}],wait:'confirmed'}))
+        .rejects.toMatchObject({code:'malformed_response'});
+    });
+});
+
 describe("Ablo({ transport: 'http' }) facade shape", () => {
   it('exposes typed model proxies with the full HTTP surface', () => {
     const items = make().items;

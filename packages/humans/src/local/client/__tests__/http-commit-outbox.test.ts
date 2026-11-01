@@ -101,6 +101,19 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+function sourceResponse(input: RequestInfo | URL, init: RequestInit | undefined, receipt: Record<string, unknown>): Response {
+  if (init?.method !== 'GET') return response(receipt);
+  const id=decodeURIComponent(new URL(String(input)).pathname.split('/').pop()!);
+  return response({
+    id, ...COMMIT_FIXTURE_TIMES,
+    status:receipt.status,lastSyncId:receipt.lastSyncId,correlationId:receipt.correlationId,
+    actor:{kind:EFFECTIVE_AUTHORITY_FIXTURE.participantKind,id:EFFECTIVE_AUTHORITY_FIXTURE.participantId},
+    authority:EFFECTIVE_AUTHORITY_FIXTURE,claims:[],reads:[],operations:[],
+    attempts:[{id:'attempt',transport:'http',kind:'execution',observedAt:COMMIT_FIXTURE_TIMES.createdAt}],
+    receipt:{clientTxId:id,serverTxId:String(receipt.lastSyncId),ops:receipt.ops},
+  });
+}
+
 function commitResponse(init: RequestInit | undefined, lastSyncId = 1): Response {
   const clientTxId = new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
   return response({
@@ -233,7 +246,7 @@ describe('stateless HTTP commit outbox', () => {
       fetch: (_input, init) => {
         const clientTxId =
           new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
-        return Promise.resolve(response({
+        return Promise.resolve(sourceResponse(_input, init, {
           object: 'commit_receipt',
           clientTxId,
           serverTxId: `server-${clientTxId}`,
@@ -259,7 +272,7 @@ describe('stateless HTTP commit outbox', () => {
     expect(outbox.records.size).toBe(1);
   });
 
-  it('polls the identical sealed request until wait confirmed is promoted', async () => {
+  it('polls the record after an accepted same-key retry without reuploading while waiting', async () => {
     const outbox = new MemoryCommitOutbox();
     const attempts: { key: string | null; body: string }[] = [];
     let responseNumber = 0;
@@ -276,7 +289,7 @@ describe('stateless HTTP commit outbox', () => {
           key: clientTxId,
           body: typeof init?.body === 'string' ? init.body : '',
         });
-        return Promise.resolve(response({
+        return Promise.resolve(sourceResponse(_input, init, {
           object: 'commit_receipt',
           clientTxId,
           serverTxId: `server-${clientTxId}`,
@@ -306,10 +319,11 @@ describe('stateless HTTP commit outbox', () => {
       wait: 'confirmed',
     })).resolves.toMatchObject({ status: 'confirmed', lastSyncId: 42 });
     expect(attempts).toHaveLength(3);
-    expect(new Set(attempts.map((attempt) => attempt.key))).toEqual(
+    expect(new Set(attempts.slice(0,2).map((attempt) => attempt.key))).toEqual(
       new Set(['http-forwarded-promote']),
     );
-    expect(new Set(attempts.map((attempt) => attempt.body)).size).toBe(1);
+    expect(new Set(attempts.slice(0,2).map((attempt) => attempt.body)).size).toBe(1);
+    expect(attempts[2]).toEqual({key:'missing-key',body:''});
     expect(outbox.records.size).toBe(0);
   });
 
@@ -327,7 +341,7 @@ describe('stateless HTTP commit outbox', () => {
         attempts += 1;
         const clientTxId =
           new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
-        return Promise.resolve(response({
+        return Promise.resolve(sourceResponse(_input, init, {
           object: 'commit_receipt',
           clientTxId,
           serverTxId: `server-${clientTxId}`,
@@ -367,12 +381,34 @@ describe('stateless HTTP commit outbox', () => {
     expect(outbox.records.size).toBe(0);
   });
 
+  it.each(['missing', 'mismatched', 'unauthorized'])(
+    'retains accepted intent when a record lookup is %s', async failure => {
+      const outbox=new MemoryCommitOutbox();
+      let uploads=0;
+      const client=createHttpTransport({apiKey:'sk_test_outbox',baseURL:'https://api.example.test',
+        commitOutbox:outbox,commitOutboxScope:OUTBOX_SCOPE,timeoutMs:20,fetch:(input,init)=>{
+          if(init?.method==='POST'){
+            uploads++;
+            return Promise.resolve(response({object:'commit_receipt',clientTxId:'retained-lookup',serverTxId:'0',
+              success:true,status:'queued',correlationId:'original-echo',lastSyncId:0,ops:1}));
+          }
+          if(failure==='missing')return Promise.resolve(response(null));
+          if(failure==='unauthorized')return Promise.resolve(response({type:'AbloAuthenticationError',code:'apikey_revoked',message:'Revoked'},401));
+          return Promise.resolve(sourceResponse(input,init,{status:'confirmed',lastSyncId:42,correlationId:'different-echo',ops:1}));
+        }});
+      await expect(client.commits.create({idempotencyKey:'retained-lookup',operations:[{action:'update',model:'items',id:'item-1',data:{title:'safe'}}],wait:'confirmed'}))
+        .rejects.toMatchObject({code:failure==='missing'?'replication_lag_timeout':'malformed_response'});
+      expect(uploads).toBe(1);
+      expect(outbox.records.size).toBe(1);
+    },
+  );
+
   it('retains queued envelopes when startup replay has no echo yet', async () => {
     const outbox = new MemoryCommitOutbox();
     const queuedReply = (_input: RequestInfo | URL, init?: RequestInit) => {
       const clientTxId =
         new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
-      return Promise.resolve(response({
+      return Promise.resolve(sourceResponse(_input, init, {
         object: 'commit_receipt',
         clientTxId,
         serverTxId: `server-${clientTxId}`,
@@ -420,7 +456,7 @@ describe('stateless HTTP commit outbox', () => {
       fetch: (_input, init) => {
         const clientTxId =
           new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
-        return Promise.resolve(response({
+        return Promise.resolve(sourceResponse(_input, init, {
           object: 'commit_receipt',
           clientTxId,
           serverTxId: `server-${clientTxId}`,
@@ -466,7 +502,7 @@ describe('stateless HTTP commit outbox', () => {
         responseNumber += 1;
         const clientTxId =
           new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
-        return Promise.resolve(response({
+        return Promise.resolve(sourceResponse(_input, init, {
           object: 'commit_receipt',
           clientTxId,
           serverTxId: `server-${clientTxId}`,
@@ -786,7 +822,7 @@ describe('stateless HTTP commit outbox', () => {
       fetch: (_input, init) => {
         const clientTxId =
           new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
-        return Promise.resolve(response({
+        return Promise.resolve(sourceResponse(_input, init, {
           object: 'commit_receipt',
           clientTxId,
           serverTxId: `server-${clientTxId}`,
@@ -869,7 +905,7 @@ describe('stateless HTTP commit outbox', () => {
       fetch: (_input, init) => {
         const clientTxId =
           new Headers(init?.headers).get('Idempotency-Key') ?? 'missing-key';
-        return Promise.resolve(response({
+        return Promise.resolve(sourceResponse(_input, init, {
           object: 'commit_receipt',
           clientTxId,
           serverTxId: `server-${clientTxId}`,

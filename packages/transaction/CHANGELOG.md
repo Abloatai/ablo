@@ -1,5 +1,13 @@
 # @abloatai/transaction
 
+## 0.67.2
+
+### Accepted writes use smaller confirmation requests
+
+HTTP clients now follow an accepted commit through its record instead of repeatedly sending the mutation body. This reduces network traffic while the client waits for confirmation. Returned rows, scoped evidence, timeout handling and durable recovery remain available.
+
+Deploy server support for confirmation on single-record reads before upgrading HTTP clients to this version.
+
 ## 0.67.1
 
 ### Credential destinations share one validation rule
