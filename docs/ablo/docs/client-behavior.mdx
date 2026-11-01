@@ -270,6 +270,17 @@ deadline is exhausted, the same actionable error reaches the caller. Do not
 blindly retry validation, permission, idempotency, or stale-context errors
 without changing the request.
 
+Once an HTTP write is accepted as `queued`, waiting for `confirmed` polls
+`GET /api/v1/commits/{id}` without sending the mutation body again. The record
+read confirms only when every correlated authoritative source change is visible;
+a missing record or partial echo is not confirmation. The initial returned rows
+remain available to the caller. A failed lookup or confirmation timeout retains
+the durable write for recovery, which can still replay the exact original request.
+
+Deploy confirmation-on-read support on the server before adopting this SDK
+update. Older servers leave records queued until commit replay or the slower
+abandoned-receipt sweep updates them.
+
 ## Logging
 
 Pass a logger when you need SDK logs in your own observability pipeline:

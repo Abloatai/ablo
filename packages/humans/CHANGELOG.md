@@ -1,5 +1,7 @@
 # @abloatai/humans
 
+## 0.67.2
+
 ## 0.67.1
 
 ### Reconnection probes enforce the credential boundary

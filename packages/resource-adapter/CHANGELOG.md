@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [536253f]
+  - @abloatai/transaction@0.67.2
+
 ## 0.1.6
 
 ### Patch Changes

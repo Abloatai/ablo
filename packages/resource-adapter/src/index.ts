@@ -11,12 +11,13 @@ import { AbloClaimedError, ResourceError } from '@abloatai/transaction';
 import { bindProcessTransport } from './process.js';
 import { connect } from './connection.js';
 export type { ResourceChanges } from './connection.js';
-export { startResourceProcess, RESOURCE_PROFILE_HOME, type ResourceProcess } from './process.js';
+export { startResourceProcess, RESOURCE_PROFILE_HOME, RESOURCE_FILESYSTEM_PROFILE_BUDGET, RESOURCE_SANDBOX_MASKS, type ResourceProcess, type ResourceProcessOptions, type ResourceProcessDiagnostic } from './process.js';
 export { createResource, getResourceReceipt, getResourceChanges, ResourceError } from '@abloatai/transaction';
 export type { ResourceClaim, ResourceEvidence, ResourceReceipt, ResourceWorkspace, NativeResourceOperation } from '@abloatai/transaction';
 
 /** Required by trusted hosts before opting workers into dynamic publication. */
 export const RESOURCE_PROJECT_FILES = 'publication-v1';
+export const SOURCE_FILE_REMOVAL = 'atomic-v1';
 
 export interface AdapterWorker {
   readonly uid: number;
@@ -208,6 +209,10 @@ export async function startResourceAdapter(options: {
   readonly seedDirectory?: string;
   readonly clockSkewMs?: number;
   readonly maxConcurrentProcesses?: number;
+  /** Root-selected filesystem command; only this exact argv may use the fixed profile budget. */
+  readonly filesystemProfileArgv?: readonly string[];
+  readonly filesystemSandboxMasks?: 'srt-root-masks-v1';
+  readonly sourceFileRemoval?: typeof SOURCE_FILE_REMOVAL;
   /** Opt-in network-isolated gVisor commands; interactive native providers are rejected. */
   readonly gvisorRootfs?: string;
   /** Empty, root-owned cgroup2 subtree with a finite aggregate budget and supervisor reserve. */
@@ -221,6 +226,11 @@ export async function startResourceAdapter(options: {
     if (typeof options.gvisorCgroupRoot !== 'string' || !isAbsolute(options.gvisorCgroupRoot) || options.gvisorCgroupRoot.includes('\0')) throw new Error('gvisorCgroupRoot must be an absolute delegated cgroup2 path');
     if (!Number.isSafeInteger(options.gvisorMemoryLimitBytes) || options.gvisorMemoryLimitBytes! <= 0 || options.gvisorMemoryLimitBytes! % (1024 * 1024)) throw new Error('gvisorMemoryLimitBytes must be a positive whole number of MiB in bytes');
   }
+  if (options.filesystemProfileArgv !== undefined && (!Array.isArray(options.filesystemProfileArgv) || !options.filesystemProfileArgv.length
+    || options.filesystemProfileArgv.some(arg => typeof arg !== 'string' || !arg || arg.includes('\0')) || !isAbsolute(options.filesystemProfileArgv[0]!))) throw new Error('Invalid trusted filesystem command');
+  if (options.sourceFileRemoval !== undefined && options.sourceFileRemoval !== SOURCE_FILE_REMOVAL) throw new Error('Invalid source file removal capability');
+  if (options.filesystemSandboxMasks !== undefined && (options.filesystemSandboxMasks !== 'srt-root-masks-v1' || !options.filesystemProfileArgv)) throw new Error('Invalid trusted sandbox mask configuration');
+  if (options.filesystemProfileArgv && options.gvisorRootfs) throw new Error('Filesystem profile streams require the native backend');
   const slots = options.maxConcurrentProcesses ?? 8;
   if (!Number.isInteger(slots) || slots < 1 || slots > 64) throw new Error('maxConcurrentProcesses must be an integer from 1 to 64');
   if (process.platform !== 'linux' || process.getuid?.() !== 0) throw new Error('The adapter requires a Linux supervisor running as root');
@@ -236,6 +246,9 @@ export async function startResourceAdapter(options: {
     '--workspace', options.workspaceId, '--mount', options.mountpoint,
     '--socket', backendPath, '--gateway', join(options.stateDirectory, 'gateway/claims.sock'), '--mount-tag', mountTag,
     '--project-file-uids', JSON.stringify(options.workers.filter(worker => worker.projectFiles).map(worker => worker.uid)),
+    ...(options.filesystemProfileArgv ? ['--filesystem-profile-argv', JSON.stringify(options.filesystemProfileArgv)] : []),
+    ...(options.sourceFileRemoval ? ['--source-file-removal', options.sourceFileRemoval] : []),
+    ...(options.filesystemSandboxMasks ? ['--filesystem-sandbox-masks', options.filesystemSandboxMasks] : []),
     ...(options.seedDirectory ? ['--seed', options.seedDirectory] : []),
     ...(options.gvisorRootfs !== undefined ? ['--gvisor-rootfs', options.gvisorRootfs, '--gvisor-cgroup-root', options.gvisorCgroupRoot!,
       '--gvisor-memory-limit-bytes', String(options.gvisorMemoryLimitBytes), '--gvisor-concurrency', String(slots)] : [])], { stdio: ['pipe', 'ignore', 'pipe'] });

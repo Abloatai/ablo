@@ -69,6 +69,43 @@ its private view. Expiry is shortened by the configured clock-skew bound
 extending a grant. Deployments must maintain that server/adapter skew bound.
 Long native operations renew their grants, and renewal failure stops admission.
 
+## Bounded filesystem profile streams
+
+Ordinary interactive streams retain a 16 MiB decoded-byte ceiling per direction.
+A trusted Linux root supervisor may opt one exact filesystem command into
+`filesystem-profile-64m-v2`: 64 MiB each for stdin/stdout; stderr remains 16 MiB.
+Set `startResourceAdapter({filesystemProfileArgv: [...]})` to its fixed absolute
+executable and arguments. This native-backend option is incompatible with gVisor.
+Never derive this command from worker input or provide an environment override.
+
+Only root interactive dispatch of that exact command can use
+`startResourceProcess(workspace, operation, {streamBudget:
+RESOURCE_FILESYSTEM_PROFILE_BUDGET, onDiagnostic})`. The module export, daemon
+`ready.filesystemProfileBudget` and started acknowledgement must agree before the
+stream can proceed. An operation-payload budget field, unconfigured command,
+nonroot caller or incompatible component fails closed. The Rust coordinator's
+existing root-only interactive dispatch remains required.
+
+`onDiagnostic` receives a fixed reason, stream name and decoded-byte counters;
+it receives no paths, payloads or identities. Observer failures do not change
+receipts. Overflow aborts the stream and may produce `stream_failed`; retrieve
+the original receipt and never replay an uncertain mutation automatically.
+Frame, buffer, deadline, claim, profile and publication rules are unchanged.
+The fixed ceiling is for bounded profile traffic, not arbitrary-size transfers.
+V2 replaces the 32 MiB V1 capability; mixed versions fail closed. Metered native
+filesystem stdout reached 33,562,184 bytes during a bounded self-repair/test turn,
+while a peer completed at 29,184,203. The fixed doubled ceiling requires explicit
+review; it is not adaptive and does not qualify a subsequent native run.
+Generated four-cycle read/rewrite traffic exceeds 32 MiB in each direction;
+additional traffic above 64 MiB must still abort. Ordinary stderr/stdio stay at
+16 MiB, including under the filesystem capability.
+
+Run `python3 -m unittest discover -s tests -p test_process_budget.py` for actual
+socket bounds and dispatch rejection checks. The coordinated consumer's
+[generated cross-boundary checks](https://github.com/Abloatai/lobby/blob/882ead36dee090c45688b08ea5666711341f356e/docs/ops/remote-native-workers.md#bounded-filesystem-candidate-and-companion-source-boundary)
+cover JavaScript, Python, WebSocket and SFTP with controlled admission/receipts.
+These checks do not qualify native FUSE, models, hosted recovery or a release.
+
 ## Optional gVisor commands
 
 `startResourceAdapter` accepts `gvisorRootfs` for network-isolated, noninteractive
@@ -557,3 +594,78 @@ becoming stale after its own successful write.
 For explicitly project-authorized native CRUD without a pre-enumerated file list,
 see [project-file publication](../../docs/ops/project-file-publication.md).
 This opt-in still acquires exact server-backed leases before atomic publication.
+
+### Source-owned SRT mountpoints (review candidate)
+
+Root configuration `filesystemSandboxMasks: 'srt-root-masks-v1'` requires the
+existing exact `filesystemProfileArgv` and native backend. Ready advertises
+`filesystemSandboxMasks`; trusted `startResourceProcess(..., {streamBudget:
+'filesystem-profile-64m-v2', sandboxMasks: 'srt-root-masks-v1'})` checks it and
+requires matching started metadata. Numeric/path/command overrides are unavailable.
+The process handle's `sandboxMaskPaths` is the bounded list of created deny
+mountpoints, not permission to delete arbitrary files. The worker adds those
+fixed destinations to its read-only SRT denies, keeps them mounted while native
+descendants exist, then stops/reaps the entire namespace and unmounts/reaps SSHFS
+before requesting complete. The ordinary 16 MiB and filesystem 64 MiB bounds are
+unchanged. No worker-supplied list of paths is accepted by this mode.
+
+Before launching SFTP the adapter prepares the SRT 0.0.75 mandatory cwd deny
+plan in normal private staging: nine dangerous root filenames, `.vscode`,
+`.idea`, `.claude/commands`, `.claude/agents`, and `.git/hooks`/`.git/config` when
+`.git` is a directory. It creates only the first absent component of each path;
+pre-existing entries remain unowned and untouched. Symlinks reject preparation.
+Missing intermediate components are empty directories, which must be denied as
+whole subtrees in the worker policy. Unsupported custom missing source deny
+paths require a separately reviewed plan; consumers must reject those policies.
+
+SQLite TEMP creation records bind exact staged rows to operation/profile.
+TEMP triggers at the single owning staging table permanently invalidate records
+on insert, update or delete, including delete/recreate, identical restoration,
+metadata changes and descendant mutations. FUSE inode numbers are not identity
+proof. All records validate before any removal. Cleanup occurs only after source
+process/UID teardown and FUSE unmount succeed, before normal publication; missing
+records, dirty rows, wrong profile, expiry, or removal failure reject. Publication
+and publication freeze independently require clean lifecycle evidence. A crash
+loses ephemeral ownership and the existing startup path aborts interrupted
+operations; no cleanup is inferred or replayed. Existing accepted files can never
+be cleaned by this primitive, even if empty and mode0444. There is no maintenance
+or generic delete endpoint. Strict recovery of previously accepted files remains
+a separate explicitly authorized normal-claim/durability operation.
+
+### Exact source removal (root host only)
+
+`SOURCE_FILE_REMOVAL = 'atomic-v1'` and root
+`startResourceAdapter({sourceFileRemoval: SOURCE_FILE_REMOVAL, ...})` enable the
+narrow `source_file_removal` coordinator action. Its phases are inspect, prepare,
+commit, abort and release; there is no command/argv or worker UID route. Other
+values and worker/authority/interactive/argv envelopes reject. Rebuild the Rust
+coordinator as well as JavaScript/Python; an old coordinator rejects this action.
+
+The trusted durable gate supplies the canonical exact-file request, its SHA-256,
+real account/user principal, actual adapter workspace, fresh short write expiry
+and normal operation-scoped maintenance claims. Preparation validates every
+regular-file path/revision/mode/size/hash (including nonsymlink ancestors), records
+captured reads and original intent in existing operation rows without allocating
+a UID, and fences native admission. The gate durably retains that intent before
+commit. Commit revalidates every file and claim and uses existing atomic staging
+and publication. All-entry failure rolls back. Abort can retain a rejection for
+an original bound request that never prepared; it cannot undo a terminal result.
+Revisions are nonnegative JSON safe integers, never strings. The shared
+`tests/source-removal-numeric.json` pins canonical bytes/digest to Coding
+`b7118cb62176b4ae4130aad9b8c1196b24fd0512`; string, fractional and unsafe revisions reject.
+No credentials enter intent or receipts. Original-ID lookup binds both digest and
+principal before returning any prior result. Root release is permitted only for a
+terminal operation, after the gate durably retains its result. This low-level
+protocol is not a substitute for the gate's live epoch/head/frontier, journal
+quiescence and fresh operator authorization checks.
+
+Unknown results remain fenced. Same-ID host reconciliation must reconstruct the
+actual durable head/checkpoint and verify the original intent, principal, digest
+and source before accepting any terminal receipt. A locally applied receipt alone
+is insufficient. The SDK can CAS a bound recovery outcome onto the retained head
+without capturing dirty source, seal admission and let existing retirement capture
+only profiles/latest ledger before authoritative restore. It heartbeats the exact
+original claims and checks write authorization immediately before deletion head
+publication; lost/expired/replaced claims cannot publish the deletion. Restart
+converts a prepared running operation to an interrupted rejection without replay. Neither this feature nor mask ownership classifies historical files
+as safe to delete. Exact entry selection and recovery execution stay operator-owned.

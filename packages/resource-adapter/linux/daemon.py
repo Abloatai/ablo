@@ -20,7 +20,9 @@ from gvisor import Gvisor
 from git import initialize_refs, validate_git_publication
 from store import Rejected, Store, canonical, path_name
 from publication import publish_project
-from process import ProcessChannel, Profile, HOME, await_domain_exit
+from process import ProcessChannel, Profile, HOME, await_domain_exit, FILESYSTEM_PROFILE_BUDGET, filesystem_budget, validate_filesystem_argv, filesystem_sandbox_masks
+from sandbox_masks import SANDBOX_MASKS
+from file_removal import execute as remove_files, CAPABILITY as FILE_REMOVAL, ACTION as REMOVAL_ACTION
 
 
 def resource_path(resource):
@@ -38,8 +40,16 @@ def resource_path(resource):
 
 
 class Adapter:
-    def __init__(self, store, workers, gateway, mountpoint, mount_tag, gvisor_rootfs=None, gvisor_cgroup_root=None, gvisor_memory_limit=None, gvisor_concurrency=8, *, project_file_uids=()):
+    def __init__(self, store, workers, gateway, mountpoint, mount_tag, gvisor_rootfs=None, gvisor_cgroup_root=None, gvisor_memory_limit=None, gvisor_concurrency=8, *, project_file_uids=(), filesystem_profile_argv=None, filesystem_sandbox_masks=None, source_file_removal=None):
         self.store, self.workers, self.gateway, self.mountpoint = store, workers, gateway, mountpoint
+        self.filesystem_profile_argv = validate_filesystem_argv(filesystem_profile_argv)
+        if filesystem_sandbox_masks not in (None, SANDBOX_MASKS) or filesystem_sandbox_masks and not filesystem_profile_argv:
+            raise ValueError("Invalid trusted sandbox mask configuration")
+        self.filesystem_sandbox_masks = filesystem_sandbox_masks
+        if source_file_removal not in (None, FILE_REMOVAL): raise ValueError('Invalid source file removal capability')
+        self.source_file_removal = source_file_removal
+        if filesystem_profile_argv and gvisor_rootfs is not None:
+            raise ValueError("Filesystem profile streams require the native backend")
         self.mount_tag = mount_tag
         self.gvisor = Gvisor(gvisor_rootfs, mountpoint, gvisor_cgroup_root, gvisor_memory_limit, gvisor_concurrency) if gvisor_rootfs is not None else None
         if any(uid not in workers for uid in project_file_uids):
@@ -112,8 +122,18 @@ class Adapter:
 
     def _execute(self, owner, request, channel=None):
         action = request.get("action")
+        if "streamBudget" in request:
+            filesystem_budget(0 if channel else -1, request, self.filesystem_profile_argv)
+            if channel.stream_budget != request["streamBudget"]:
+                raise Rejected("capability_unavailable")
+        if "sandboxMasks" in request:
+            mode = filesystem_sandbox_masks(0 if channel else -1, request, self.filesystem_profile_argv, self.filesystem_sandbox_masks)
+            if not channel or channel.sandbox_masks != mode:
+                raise Rejected("capability_unavailable")
         if action == "ready":
-            return {"ready": os.path.ismount(self.mountpoint)}
+            return {"ready": os.path.ismount(self.mountpoint),
+                    **({"filesystemProfileBudget": FILESYSTEM_PROFILE_BUDGET} if self.filesystem_profile_argv else {}),
+                    **({"filesystemSandboxMasks": SANDBOX_MASKS} if self.filesystem_sandbox_masks else {})}
         if action in ("claim", "claim_install"):
             resource = request["resource"]
             if action == "claim":
@@ -279,8 +299,11 @@ class Adapter:
             raise Rejected("profile_environment_invalid")
         if self.gvisor and channel:
             raise Rejected("command_invalid")  # Hosted native/SRT networking is not qualified for this backend.
-        with self.store.lock:
+        mask_paths = None
+        with self.store.lock, self.store.db:
             self.store.pin(operation["id"])
+            if channel and channel.sandbox_masks:
+                mask_paths = self.store.sandbox_masks.prepare(operation["id"], request.get("profileId"))
         uid = operation["uid"]
         private_mount = os.path.join(self.store.directory, "mounts", operation["id"])
         os.makedirs(private_mount, mode=0o700, exist_ok=True)
@@ -346,7 +369,8 @@ class Adapter:
                         thread = threading.Thread(target=channel.output, args=(name, pipe), daemon=True)
                         thread.start()
                         threads.append(thread)
-                    channel.send({"started": True, "homePath": HOME})
+                    channel.send({"started": True, "homePath": HOME, **({"streamBudget": channel.stream_budget} if channel.stream_budget else {}),
+                                  **({"sandboxMasks": SANDBOX_MASKS, "sandboxMaskPaths": mask_paths} if channel.sandbox_masks else {})})
                     threading.Thread(target=channel.input, args=(process.stdin,), daemon=True).start()
                 else:
                     reader = threading.Thread(target=drain, daemon=True)
@@ -414,6 +438,8 @@ class Adapter:
                 if os.path.ismount(private_mount):
                     subprocess.run(["fusermount", "-u", private_mount], check=True, capture_output=True)
                 mount_thread.join(timeout=10)
+                if channel and channel.sandbox_masks and (mount_thread.is_alive() or os.path.ismount(private_mount)):
+                    raise Rejected("sandbox_masks_unclean")
                 if os.path.isdir(private_mount) and not os.path.ismount(private_mount):
                     os.rmdir(private_mount)
                 if sandbox is not None:
@@ -421,6 +447,13 @@ class Adapter:
                         raise Rejected("command_failed")
                 if channel and (channel.failed or any(thread.is_alive() for thread in threads)):
                     raise Rejected("stream_failed")
+            # No source/native UID or FUSE writer remains. Cleanup precedes the
+            # existing publication/claim gate and must succeed as one transaction.
+            if channel and channel.sandbox_masks:
+                if time.monotonic() >= deadline:
+                    raise Rejected("command_timeout")
+                with self.store.lock, self.store.db:
+                    self.store.sandbox_masks.cleanup(operation["id"], request.get("profileId"))
             return {"exitCode": 0} if channel else {"exitCode": process.returncode, "output": output.decode(errors="replace")}
 
 
@@ -434,6 +467,9 @@ if __name__ == "__main__":
     parser.add_argument("--mount-tag", required=True)
     parser.add_argument("--seed")
     parser.add_argument("--project-file-uids", default="[]")
+    parser.add_argument("--filesystem-profile-argv")
+    parser.add_argument("--filesystem-sandbox-masks", choices=[SANDBOX_MASKS])
+    parser.add_argument("--source-file-removal", choices=[FILE_REMOVAL])
     parser.add_argument("--gvisor-rootfs")
     parser.add_argument("--gvisor-cgroup-root")
     parser.add_argument("--gvisor-memory-limit-bytes", type=int)
@@ -450,7 +486,7 @@ if __name__ == "__main__":
     with store.db:
         initialize_refs(store)
     store.identities.register(workers)
-    for interrupted in store.db.execute("SELECT uid,id FROM operations WHERE status='aborted' AND receipt LIKE '%operation_interrupted%'"):
+    for interrupted in store.db.execute("SELECT uid,id FROM operations WHERE uid IS NOT NULL AND status='aborted' AND receipt LIKE '%operation_interrupted%'"):
         subprocess.run(["pkill", "-KILL", "-u", str(interrupted["uid"])], capture_output=True)
         abandoned = os.path.join(arguments.state, "mounts", interrupted["id"])
         if os.path.ismount(abandoned):
@@ -458,7 +494,9 @@ if __name__ == "__main__":
         if os.path.isdir(abandoned):
             os.rmdir(abandoned)
     adapter = Adapter(store, workers, arguments.gateway, arguments.mount, arguments.mount_tag, arguments.gvisor_rootfs,
-                      arguments.gvisor_cgroup_root, arguments.gvisor_memory_limit_bytes, arguments.gvisor_concurrency, project_file_uids=json.loads(arguments.project_file_uids))
+                      arguments.gvisor_cgroup_root, arguments.gvisor_memory_limit_bytes, arguments.gvisor_concurrency, project_file_uids=json.loads(arguments.project_file_uids),
+                      filesystem_profile_argv=json.loads(arguments.filesystem_profile_argv) if arguments.filesystem_profile_argv else None,
+                      filesystem_sandbox_masks=arguments.filesystem_sandbox_masks, source_file_removal=arguments.source_file_removal)
 
     class Commands(socketserver.StreamRequestHandler):
         def handle(self):
@@ -473,14 +511,20 @@ if __name__ == "__main__":
                 request = json.loads(raw)
                 if not isinstance(request, dict):
                     raise Rejected("request_invalid")
-                owner = adapter.worker(peer, request)
-                request.pop("workerUid", None)
-                channel = None
-                if request.get("interactive"):
-                    if peer != 0 or request.get("action") != "run":
-                        raise Rejected("permission_denied")
-                    channel = ProcessChannel(self.connection, self.rfile)
-                result = adapter.execute(owner, request, channel)
+                if request.get('action') == REMOVAL_ACTION:
+                    result = remove_files(store, peer, request, adapter.source_file_removal)
+                    with store.changed: store.changed.notify_all()
+                else:
+                    owner = adapter.worker(peer, request)
+                    request.pop("workerUid", None)
+                    budget = filesystem_budget(peer, request, adapter.filesystem_profile_argv)
+                    mask_mode = filesystem_sandbox_masks(peer, request, adapter.filesystem_profile_argv, adapter.filesystem_sandbox_masks)
+                    channel = None
+                    if request.get("interactive"):
+                        if peer != 0 or request.get("action") != "run":
+                            raise Rejected("permission_denied")
+                        channel = ProcessChannel(self.connection, self.rfile, budget, mask_mode)
+                    result = adapter.execute(owner, request, channel)
                 response = {"result": result}
             except Rejected as error:
                 response = {"error": {"code": error.code, "resources": error.resources}}

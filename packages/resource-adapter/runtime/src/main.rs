@@ -29,6 +29,11 @@ struct Server {
 impl Server {
     fn bind_identity(&self, peer: u32, request: &mut Value) -> Result<(), &'static str> {
         let object = request.as_object_mut().ok_or("request_invalid")?;
+        if object.get("action").and_then(Value::as_str) == Some("source_file_removal") {
+            return if peer == self.supervisor && !["workerUid", "authority", "interactive", "argv"].iter().any(|key| object.contains_key(*key)) {
+                Ok(())
+            } else { Err("permission_denied") };
+        }
         let worker = if peer == self.supervisor {
             object
                 .get("workerUid")
@@ -155,7 +160,8 @@ async fn connection(server: Arc<Server>, client: UnixStream) -> io::Result<()> {
             (!matches!(
                 request["action"].as_str(),
                 Some(
-                    "ready"
+                    "source_file_removal"
+                        | "ready"
                         | "read"
                         | "changes"
                         | "receipt"
@@ -406,6 +412,17 @@ mod tests {
             supervisor: 0,
             events,
         };
+        let mut maintenance = json!({"action":"source_file_removal","phase":"inspect"});
+        assert!(server.bind_identity(0, &mut maintenance).is_ok());
+        assert!(maintenance.get("workerUid").is_none());
+        for peer in [1001, 9999] {
+            assert_eq!(server.bind_identity(peer, &mut maintenance), Err("permission_denied"));
+        }
+        for field in ["workerUid", "authority", "interactive", "argv"] {
+            let mut request = maintenance.clone();
+            request[field] = json!(null);
+            assert_eq!(server.bind_identity(0, &mut request), Err("permission_denied"));
+        }
         let authority = json!({"organizationId":"org","projectId":"project","branchId":"branch","participantId":"first","participantKind":"agent","syncGroups":[],"operations":[]});
         assert!(
             server

@@ -73,6 +73,8 @@ class Store:
               path TEXT NOT NULL,revision INTEGER NOT NULL,operation TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY,owner TEXT NOT NULL,operation TEXT);
             """)
+            from sandbox_masks import SandboxMasks
+            self.sandbox_masks = SandboxMasks(self)
             with self.db:
                 if "publication" not in {row["name"] for row in self.db.execute("PRAGMA table_info(operations)")}:
                     self.db.execute("ALTER TABLE operations ADD COLUMN publication TEXT")
@@ -239,13 +241,15 @@ class Store:
             raise Rejected("claim_lost", [resource])
         return held
 
-    def start(self, owner, request):
+    def start(self, owner, request, *, maintenance=False):
         operation = request.get("operationId")
         try:
             if str(uuid.UUID(operation)) != operation:
                 raise ValueError()
         except (ValueError, TypeError, AttributeError):
             raise Rejected("operation_id_invalid") from None
+        if maintenance and request.get('action') != 'source_file_removal': raise Rejected('permission_denied')
+        if self.meta('source_file_removal_fence') and not maintenance: raise Rejected('adapter_busy')
         intent = canonical(request)
         previous = self.db.execute("SELECT * FROM operations WHERE id=?", (operation,)).fetchone()
         if previous:
@@ -254,7 +258,7 @@ class Store:
             if previous["intent"] != intent:
                 raise Rejected("idempotency_conflict")
             return previous, False
-        uid = self.identities.allocate(self.meta("workspace"), owner)
+        uid = None if maintenance else self.identities.allocate(self.meta("workspace"), owner)
         self.db.execute("INSERT INTO operations(id,owner,uid,intent,status,receipt) VALUES (?,?,?,?,'running',NULL)", (operation, owner, uid, intent))
         reads = [(read, self.decode_evidence(owner, read["evidence"])) for read in request.get("reads", [])]
         for read, payload in reads:
@@ -322,11 +326,15 @@ class Store:
             for value in reads:
                 kind, path = value["resource"].split(":", 1)
                 value["evidence"] = self.evidence(owner, path, kind, value["revision"], operation)
+        if intent.get('action') == 'source_file_removal':
+            detail = {**detail, 'digest': intent['digest'], 'principal': intent['principal']}
         receipt = {"operationId": operation, "status": status, **detail, "reads": reads}
         self.db.execute("UPDATE operations SET status=?,receipt=? WHERE id=?", (status, canonical(receipt), operation))
         self.db.execute("DELETE FROM staging WHERE operation=?", (operation,))
         self.db.execute("DELETE FROM dependencies WHERE operation=?", (operation,))
         self.db.execute("UPDATE profiles SET operation=NULL WHERE operation=?", (operation,))
+        self.db.execute("DELETE FROM sandbox_mask_owners WHERE operation=?", (operation,))
+        self.db.execute("DELETE FROM sandbox_mask_lifecycles WHERE operation=?", (operation,))
         snapshot = self.snapshots.pop(operation, None)
         if snapshot is not None:
             snapshot.close()
@@ -342,7 +350,8 @@ class Store:
         return changes
 
     def freeze_publication(self, operation):
-        self.validate(operation)
+        _, request = self.validate(operation)
+        self.sandbox_masks.require_clean(operation, request)
         changes = self.changes(operation)
         values = [{"path": row["path"], "kind": row["kind"], "mode": row["mode"],
                    "sha256": hashlib.sha256(row["content"] or b"").hexdigest()} for row, _ in changes]
@@ -354,6 +363,7 @@ class Store:
 
     def publish(self, operation, detail, refs=None, publication=None):
         row, request = self.validate(operation)
+        self.sandbox_masks.require_clean(operation, request)
         changes = self.changes(operation)
         if publication is not None:
             current = self.freeze_publication(operation)

@@ -45,10 +45,10 @@ export default defineConfig({
   },
 
   theme: {
-    accent: "#782719",
+    accent: "#9a241c",
     radius: "sm",
     mode: "light",
-    background: { light: "#f4d783", dark: "#782719" },
+    background: { light: "#f4e18c", dark: "#9a241c" },
   },
 
   markdown: {
