@@ -41,6 +41,7 @@
     "source-map-js": "1.2.2",
     "@vitest/mocker": "4.1.12",
     "glob@>=9": "14.0.3",
-    "minimatch@>=9": "11.0.4"
+    "minimatch@>=9": "11.0.4",
+    "filelist": "2.0.2"
   }
 }
