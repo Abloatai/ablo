@@ -1,0 +1,20 @@
+name: Change evidence
+description: Verify review exceptions and actual check evidence against the current pull-request head.
+inputs:
+  pull-request:
+    description: Optional PR number for a manual refresh
+    required: false
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pull-request }}
+        EVIDENCE_SCRIPT: ${{ github.action_path }}/index.py
+      run: |
+        if [ -n "$PR_NUMBER" ]; then
+          python3 "$EVIDENCE_SCRIPT" --repository "$GITHUB_REPOSITORY" --pull-request "$PR_NUMBER" --publish
+        else
+          python3 "$EVIDENCE_SCRIPT" --repository "$GITHUB_REPOSITORY" --event "$GITHUB_EVENT_PATH" --publish
+        fi
