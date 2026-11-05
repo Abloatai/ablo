@@ -213,6 +213,13 @@ describe('normalizeAbloBaseUrl refuses unsafe credential destinations', () => {
     expect(() => normalizeAbloBaseUrl('https://sync.customer.example/#/x')).toThrow(
       /must not carry a query string or fragment/,
     );
+    // A bare `?` or `#` leaves `search` and `hash` empty but still swallows the path.
+    expect(() => normalizeAbloBaseUrl('https://sync.customer.example/?')).toThrow(
+      /must not carry a query string or fragment/,
+    );
+    expect(() => normalizeAbloBaseUrl('https://sync.customer.example/#')).toThrow(
+      /must not carry a query string or fragment/,
+    );
   });
 
   it('refuses a trailing-dot host, which evades every host check', () => {
