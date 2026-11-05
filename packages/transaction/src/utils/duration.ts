@@ -18,7 +18,9 @@ import { AbloValidationError } from '../errors.js';
 
 export type Duration = number | `${number}ms` | `${number}s` | `${number}m` | `${number}h`;
 
-const PATTERN = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/;
+// The lookahead requires a non-zero digit, so '0s' fails like the number 0
+// does against `z.number().positive()` below.
+const PATTERN = /^(?=[\d.]*[1-9])(\d+(?:\.\d+)?)(ms|s|m|h)$/;
 
 /**
  * The same grammar as a boundary schema, so a duration crossing the wire is
