@@ -12,6 +12,7 @@
  */
 
 import {
+  assertHeartbeatFitsLease,
   heartbeatCadenceMs,
   resolveHeartbeatPlan,
   startClaimHeartbeatLoop,
@@ -29,6 +30,26 @@ describe('heartbeatCadenceMs', () => {
 
   it('honors an explicit duration over the default', () => {
     expect(heartbeatCadenceMs(60_000, '2m')).toBe(120_000);
+  });
+});
+
+describe('assertHeartbeatFitsLease', () => {
+  it('accepts a cadence that beats inside the lease', () => {
+    expect(() => { assertHeartbeatFitsLease(30_000, { heartbeat: { every: '10s' } }); }).not.toThrow();
+    expect(() => { assertHeartbeatFitsLease(60_000, { heartbeat: true }); }).not.toThrow();
+    expect(() => { assertHeartbeatFitsLease(1_000, {}); }).not.toThrow();
+  });
+
+  it('refuses a cadence that cannot beat before the lease lapses', () => {
+    for (const heartbeat of ['2m', '60s', { every: '90s' }] as const) {
+      expect(() => { assertHeartbeatFitsLease(60_000, { heartbeat }); }).toThrow(
+        /cannot keep a 60000ms lease alive/,
+      );
+    }
+    // The default cadence is floored at 1s, which a 1s lease cannot outlast.
+    expect(() => { assertHeartbeatFitsLease(1_000, { heartbeat: true }); }).toThrow(
+      /A heartbeat every 1000ms cannot keep a 1000ms lease alive/,
+    );
   });
 });
 
