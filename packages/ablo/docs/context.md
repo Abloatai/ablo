@@ -100,6 +100,11 @@ If a row in `ctx.reads` moves before a model write or atomic commit, the server
 rejects the operation as stale. Plain values remain in `ctx.data`, but only
 exact Ablo reads appear in `ctx.reads` and gain that guarantee.
 
+HTTP list rows with server-provided per-row watermarks also become context
+premises. This guards the returned rows, not collection membership or absence.
+Reactive local lists and older HTTP servers without that evidence remain
+observational.
+
 ## Stop work when context changes
 
 `onChange` lets long-running work stop early without changing the write rule:

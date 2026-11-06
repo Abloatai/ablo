@@ -1,0 +1,79 @@
+{
+  "name": "@ablo/error-reporting",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Sanitized PostHog error reporting, support correlation and structured logging for Ablo applications.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./src/index.ts"
+    },
+    "./reporter": {
+      "source": "./src/reporter.ts",
+      "types": "./dist/reporter.d.ts",
+      "import": "./dist/reporter.js",
+      "default": "./src/reporter.ts"
+    },
+    "./observation": {
+      "source": "./src/observation.ts",
+      "types": "./dist/observation.d.ts",
+      "import": "./dist/observation.js",
+      "default": "./src/observation.ts"
+    },
+    "./next-framework": {
+      "source": "./src/nextFramework.ts",
+      "types": "./dist/nextFramework.d.ts",
+      "import": "./dist/nextFramework.js",
+      "default": "./src/nextFramework.ts"
+    },
+    "./sanitization": {
+      "source": "./src/sanitization.ts",
+      "types": "./dist/sanitization.d.ts",
+      "import": "./dist/sanitization.js",
+      "default": "./src/sanitization.ts"
+    },
+    "./logger": {
+      "source": "./src/logger.ts",
+      "types": "./dist/logger.d.ts",
+      "import": "./dist/logger.js",
+      "default": "./src/logger.ts"
+    },
+    "./posthog": {
+      "source": "./src/posthog.ts",
+      "types": "./dist/posthog.d.ts",
+      "import": "./dist/posthog.js",
+      "default": "./src/posthog.ts"
+    },
+    "./server": {
+      "source": "./src/server.ts",
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "default": "./src/server.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@abloatai/transaction": "*",
+    "posthog-js": "1.438.5",
+    "posthog-node": "5.55.0"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@ablo/tsconfig": "*",
+    "@types/react": "^19.0.0",
+    "react": "^19.2.8",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^4.1.4"
+  }
+}

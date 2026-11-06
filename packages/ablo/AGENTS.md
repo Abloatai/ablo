@@ -47,7 +47,7 @@ The schema is the integration contract — it drives typed model clients, React 
 
 Every model verb takes ONE options object. The common loop:
 
-1. **Get or read** the row — `get({ id })` observes; `read({ id })` declares that a later mutation depends on this exact version. `list({ where })` is observational. In React render, use `local.get(id)`.
+1. **Get or read** the row — `get({ id })` observes; `read({ id })` captures this version for a later mutation. HTTP `list({ where })` rows also retain their individual server watermarks for `reads` on the same client. Reactive lists remain observational. In React render, use `local.get(id)`.
 2. **See who's active** (optional) — `ablo.<model>.claim.state({ id })` (synchronous; never blocks).
 3. **Claim** the row before changing it — `await using claim = await ablo.<model>.claim({ id, description?, ttl? })`. If someone else holds it, this waits for them, then gives you the fresh row on `claim.data`. The claim auto-releases when it goes out of scope (`await using`).
 4. **Write** — pass `reads: [row]` when the decision used a row returned by `read`, or pass `claim` when writing through a held claim. If the declared read moved or the claim was lost, the mutation does not land.

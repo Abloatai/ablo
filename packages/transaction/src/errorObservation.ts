@@ -91,6 +91,8 @@ const SECRET_PATTERNS = [
 ];
 
 export function redactObservationString(value: string): string {
+  // Preserve the public deterministic root-branch coordinate for tenant correlation.
+  if (/^br_root_[a-fA-F0-9]{32}$/.test(value)) return value;
   return SECRET_PATTERNS.reduce((current, pattern) => current.replace(pattern, MASK), value);
 }
 

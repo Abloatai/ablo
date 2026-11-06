@@ -135,6 +135,7 @@ export interface ErrorCodeSpec {
 
 export interface ErrorObservabilityPolicy {
   readonly severity: 'info' | 'warning' | 'error' | 'fatal';
+  /** Historical wire field for capture routing; consumers now send these observations to PostHog. */
   readonly sentry: 'log' | 'issue';
   readonly pagingEligible: boolean;
   readonly expectedVolume: 'low' | 'normal' | 'high';

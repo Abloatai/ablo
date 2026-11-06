@@ -65,7 +65,7 @@ Each schema model becomes a typed model on the client:
 - `ablo.weatherReports.read({ id })` fetches one guardable decision input.
 - `ablo.documents.text({ id, field: 'body' })` opens a [versioned text buffer](/text-fields) for a `field.text()` field on Ablo-owned storage.
 - `counter({ id, field, state?, persist? })` opens an optimistic safe integer buffer; see [Operation fields](/operation-fields).
-- `ablo.weatherReports.list({ where })` fetches an observational collection.
+- `ablo.weatherReports.list({ where })` fetches a collection. HTTP rows retain individual watermarks for `reads`; reactive local lists remain observational.
 - `ablo.weatherReports.listAll({ where })` explicitly reads every matching page.
 - `ablo.weatherReports.local.get(id)` reads one row synchronously from the local graph.
 - `ablo.weatherReports.create({ data })` creates a row.
@@ -90,6 +90,11 @@ fallback removed — nothing to await, so they return a value.
 | `listAll({ where, maxPages?, signal? })` | `Promise<T[]>` | You deliberately need every matching row. |
 | `local.get(id)` | `T \| undefined` | You want a synchronous snapshot of one local row. |
 | `local.list(options?)` | `T[]` | You want a synchronous snapshot of a local collection. |
+
+On HTTP clients, `list` returns `ModelList<CapturedRow<T>>` and `listAll` returns
+`CapturedRow<T>[]`. Their exact returned rows can guard writes on the same client.
+This does not guard collection membership or absence. Servers without per-row
+evidence require an individual `read` before a guarded write.
 | `local.count(options?)` | `number` | You want a synchronous count of local rows. |
 | `create({ data, ...options })` | `Promise<T>` | You want to create through the schema model. |
 | `update({ id, data, ...options })` | `Promise<T>` | You want to update through the schema model. |

@@ -13,6 +13,8 @@ ALLOW_DIRTY=1 bash "$SCRIPT_DIR/build-workspace-mirror.sh" "$TMP/workspace"
 (
   cd "$TMP/workspace"
   npm install --package-lock-only --ignore-scripts
+  # npm install may retain older transitive nodes after an override changes.
+  npm update --package-lock-only --ignore-scripts glob minimatch
 )
 
 mkdir -p "$MONOREPO_ROOT/.public-ablo"

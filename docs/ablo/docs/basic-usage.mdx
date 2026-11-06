@@ -22,6 +22,11 @@ const open = await ablo.tasks.list({ where: { status: 'open' } });
 `get` observes one current row. Use `read` instead only when a later Ablo write
 must be rejected if that exact premise changes.
 
+HTTP `list` and `listAll` rows also carry their own server watermarks. Pass the
+exact returned objects in `reads` on the same client to guard a batch without
+reading each row again. This guards those rows, not collection membership or
+absence. Servers without per-row list evidence still require `read({ id })`.
+
 ## Write rows
 
 ```ts

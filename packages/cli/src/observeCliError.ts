@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import * as Sentry from '@sentry/node';
+import { createObservability } from '@ablo/error-reporting/server';
 import { errorCodeSpec } from '@abloatai/transaction/errorCodes';
 import {
   errorObservationSchema,
@@ -11,11 +11,10 @@ import { toAbloError } from '@abloatai/transaction/errors';
 // `ABLO_CLI_EMBEDDED_*` is replaced with literals by tsup for published
 // packages. The ordinary runtime override remains useful for staging and
 // local verification, but normal users no longer need to configure telemetry.
-const dsn =
-  process.env.ABLO_CLI_SENTRY_DSN ?? process.env.ABLO_CLI_EMBEDDED_SENTRY_DSN ?? '';
-const release =
-  process.env.ABLO_CLI_RELEASE ?? process.env.ABLO_CLI_EMBEDDED_RELEASE;
-let initialized = false;
+const projectToken = process.env.ABLO_CLI_POSTHOG_PROJECT_TOKEN ?? process.env.ABLO_CLI_EMBEDDED_POSTHOG_PROJECT_TOKEN;
+const host = process.env.ABLO_CLI_POSTHOG_HOST ?? process.env.ABLO_CLI_EMBEDDED_POSTHOG_HOST;
+const release = process.env.ABLO_CLI_RELEASE ?? process.env.ABLO_CLI_EMBEDDED_RELEASE;
+let reporter: ReturnType<typeof createObservability> | undefined;
 const nativeProcessExit = process.exit.bind(process);
 let exitBoundaryInstalled = false;
 
@@ -53,39 +52,10 @@ export function restoreCliExitObservationBoundary(): void {
 }
 
 function init(): boolean {
-  if (!dsn) return false;
-  if (!initialized) {
-    Sentry.init({
-      dsn,
-      environment: process.env.ABLO_STAGE ?? 'local',
-      release,
-      sendDefaultPii: false,
-      enableLogs: true,
-      beforeSend: sanitizeCliEvent,
-      beforeBreadcrumb(breadcrumb) {
-        return sanitizeObservationValue(breadcrumb) as typeof breadcrumb;
-      },
-    });
-    initialized = true;
-  }
+  if (!projectToken || !host) return false;
+  reporter ??= createObservability('ablo-cli', { projectToken, host,
+    environment: process.env.ABLO_STAGE ?? 'local', release });
   return true;
-}
-
-/** Keep Sentry's typed protocol fields outside the diagnostic depth budget. */
-export function sanitizeCliEvent(event: Sentry.ErrorEvent): Sentry.ErrorEvent {
-  const sanitized = sanitizeObservationValue({
-    ...event,
-    // Older builds and runtime overrides used a scoped package name. Its slash
-    // is invalid in a Sentry release; its version also resembles an email.
-    release: event.release?.replace(/^@abloatai\/cli@/, 'ablo-cli-'),
-  }) as Sentry.ErrorEvent;
-  if (event.exception?.values) {
-    sanitized.exception = {
-      ...sanitized.exception,
-      values: event.exception.values.map((value) => sanitizeObservationValue(value) as typeof value),
-    };
-  }
-  return sanitized;
 }
 
 function commandOperation(): string {
@@ -112,7 +82,7 @@ export function observeCliError(err: unknown): string | undefined {
   const normalized = toAbloError(err);
   // A server-generated event is already captured at its origin; retain its id
   // and add only a CLI structured log when enabled.
-  const eventId = normalized.eventId ?? (dsn ? randomUUID().replaceAll('-', '') : undefined);
+  const eventId = normalized.eventId ?? (projectToken && host ? randomUUID().replaceAll('-', '') : undefined);
   if (!eventId || !init()) return normalized.eventId;
 
   try {
@@ -161,22 +131,13 @@ export function observeCliError(err: unknown): string | undefined {
     const observation: ErrorObservation = errorObservationSchema.parse(candidate);
 
     if (normalized.eventId || policy.sentry === 'log') {
-      Sentry.logger.warn(observation.publicMessage, { ...observation });
+      reporter?.log(observation.publicMessage, { ...observation });
     } else {
-      Sentry.captureException(err, {
-        event_id: observation.eventId,
-        captureContext: {
-          level: observation.severity,
-          fingerprint: [observation.service, observation.operation, observation.errorCode],
-          tags: {
-            service: observation.service,
-            channel: observation.channel,
-            scope: observation.scope,
-            error_code: observation.errorCode,
-          },
-          contexts: { ablo: { ...observation } },
-        },
-      });
+      const safe = new Error(observation.internalMessage ?? observation.publicMessage);
+      safe.name = observation.errorType;
+      if (observation.stack) safe.stack = observation.stack;
+      reporter?.capture(safe, { ...observation },
+        [observation.service, observation.operation, observation.errorCode].join(':'));
     }
     return eventId;
   } catch {
@@ -185,6 +146,6 @@ export function observeCliError(err: unknown): string | undefined {
 }
 
 export async function flushCliErrors(timeoutMs = 2_000): Promise<boolean> {
-  if (!initialized) return true;
-  return Sentry.flush(timeoutMs);
+  if (!reporter) return true;
+  return reporter?.flush(timeoutMs) ?? true;
 }

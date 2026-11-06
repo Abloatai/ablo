@@ -721,7 +721,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     expect(createBody).not.toHaveProperty('reads');
   });
 
-  it('keeps list rows observational until they are deliberately read', async () => {
+  it('guards listed rows with their own server watermark without pre-write point reads', async () => {
     let mutationBody: Record<string, unknown> | undefined;
     let listReads = 0;
     let pointReads = 0;
@@ -755,6 +755,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           })));
         }
         if (method === 'PATCH' && path === '/api/v1/models/items/item-1') {
+          expect(pointReads).toBe(0);
           mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
           const key = new Headers(init?.headers).get('Idempotency-Key');
           return Promise.resolve(jsonResponse({
@@ -770,16 +771,15 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     const [item] = await c.items.list({ where: { status: 'todo' } });
     expect(item).toEqual({ id: 'item-1', title: 'Listed', status: 'todo' });
     if (!item) throw new Error('expected listed item');
-    await expect(c.items.update({
+    await c.items.update({
       id: item.id,
       data: { status: 'done' },
-      // Compile-time types reject this too; the cast proves the runtime boundary.
-      reads: [item] as never,
+      reads: [item],
       idempotencyKey: 'list-update:item-1',
-    })).rejects.toMatchObject({ code: 'write_options_invalid' });
+    });
 
-    expect({ listReads, pointReads }).toEqual({ listReads: 1, pointReads: 0 });
-    expect(mutationBody).toBeUndefined();
+    expect({ listReads, pointReads }).toEqual({ listReads: 1, pointReads: 1 });
+    expect(mutationBody).toMatchObject({reads: [{model: 'items', id: 'item-1', readAt: 80}]});
   });
 
   it('does not turn an incidental read into a write dependency', async () => {
@@ -1697,6 +1697,68 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
  * statuses out of five hundred rows and receive twenty unfiltered ones with
  * nothing in the result saying so.
  */
+describe('collection row evidence', () => {
+  const listed = (evidence: unknown = [{id: 'item-1', stamp: 80}]) => ({
+    ...modelListResponse({model: 'items', data: [{id: 'item-1', title: 'Listed', status: 'todo'}]}),
+    evidence,
+  });
+  const from = (response: unknown) => Ablo({schema, apiKey: 'sk_list_evidence',
+    baseURL: 'https://api.example.test', transport: 'http',
+    fetch: async () => jsonResponse(response),
+  });
+
+  it.each([
+    {evidence: []}, {evidence: [{id: 'other', stamp: 80}]},
+    {evidence: [{id: 'item-1', stamp: 80}, {id: 'item-1', stamp: 81}]},
+    {evidence: [{id: 'item-1', stamp: Number.MAX_SAFE_INTEGER + 1}]},
+  ])('refuses mismatched per-row evidence $evidence', async ({evidence}) => {
+    await expect(from(listed(evidence)).items.list()).rejects.toMatchObject({code: 'malformed_response'});
+  });
+
+  it('does not invent evidence for an older server', async () => {
+    const {evidence: _evidence, ...response} = listed();
+    const older = from(response);
+    const [row] = await older.items.list();
+    await expect(older.commits.create({operations: [], reads: [row!]}))
+      .rejects.toMatchObject({code: 'write_options_invalid'});
+  });
+
+  it('rejects copied and foreign-client list rows', async () => {
+    const client = from(listed());
+    const [row] = await client.items.list();
+    await expect(client.commits.create({operations: [], reads: [{...row!}]}))
+      .rejects.toMatchObject({code: 'write_options_invalid'});
+    await expect(from(listed()).commits.create({operations: [], reads: [row!]}))
+      .rejects.toMatchObject({code: 'read_evidence_client_mismatch'});
+  });
+
+  it('uses each pagination page and row watermark without point reads', async () => {
+    const paths: string[] = [];
+    let body: unknown;
+    const client = Ablo({schema, apiKey: 'sk_list_pages', baseURL: 'https://api.example.test',
+      transport: 'http', fetch: async (input, init) => {
+        const url = new URL(String(input));
+        paths.push(url.pathname);
+        if (init?.method === 'POST') {
+          body = JSON.parse(String(init.body));
+          return jsonResponse({...confirmedCommitReceiptResponse({clientTxId: 'listed-pages'}), authority: TEST_AUTHORITY});
+        }
+        const second = url.searchParams.has('cursor');
+        return jsonResponse(modelListResponse({model: 'items',
+          data: [{id: second ? 'item-2' : 'item-1', title: 'Listed', status: 'todo'}],
+          stamp: 9999, evidence: [{id: second ? 'item-2' : 'item-1', stamp: second ? 81 : 80}],
+          hasMore: !second, nextCursor: second ? null : 'next-page'}));
+      }});
+    const rows = await client.items.listAll();
+    await client.commits.create({idempotencyKey: 'listed-pages', reads: rows,
+      operations: rows.map(row => ({action: 'update', model: 'items', id: row.id, data: {status: 'done'}}))});
+    expect(body).toMatchObject({reads: [
+      {model: 'items', id: 'item-1', readAt: 80}, {model: 'items', id: 'item-2', readAt: 81},
+    ]});
+    expect(paths).toEqual(['/api/v1/models/items', '/api/v1/models/items', '/api/v1/commits']);
+  });
+});
+
 describe('collection reads carry the whole filter and say where the page ends', () => {
   const listUrlFor = async (
     options: Parameters<ReturnType<typeof Ablo<typeof schema>>['items']['list']>[0],

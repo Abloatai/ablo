@@ -6,7 +6,7 @@ on:
   issue_comment:
     types: [created, edited, deleted]
   workflow_run:
-    workflows: [CI, verify, Verify]
+    workflows: [CI]
     types: [completed]
   workflow_dispatch:
     inputs:

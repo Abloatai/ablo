@@ -1,6 +1,7 @@
 import { defineConfig } from 'tsup';
 
-const embeddedDsn = process.env.ABLO_CLI_SENTRY_DSN ?? '';
+const embeddedToken = process.env.ABLO_CLI_POSTHOG_PROJECT_TOKEN ?? '';
+const embeddedHost = process.env.ABLO_CLI_POSTHOG_HOST ?? 'https://us.i.posthog.com';
 const embeddedRelease =
   process.env.ABLO_CLI_RELEASE ?? `ablo-cli-${process.env.npm_package_version ?? 'development'}`;
 const embeddedVersion = process.env.npm_package_version ?? 'development';
@@ -51,6 +52,10 @@ export default defineConfig({
   // dir at runtime — unrelocatable by design — so `ablo dev`/`push` crashed
   // with MODULE_NOT_FOUND on every fresh project. jiti is a declared runtime
   // dependency instead, the way every jiti consumer (Nuxt, Tailwind) ships it.
+  noExternal: [/^@ablo\/error-reporting(\/.*)?$/],
+  esbuildOptions(options) {
+    options.conditions = ['source', ...(options.conditions ?? [])];
+  },
   external: [
     /^@ablo\/transaction(\/.*)?$/,
     /^@abloatai\/ablo(\/.*)?$/,
@@ -69,11 +74,10 @@ export default defineConfig({
   // crashes with `createRequire(undefined)` — `ablo dev`/`push` die on every
   // fresh project. `shims: true` injects a `__filename`-based shim.
   shims: true,
-  // Sentry DSNs are ingestion coordinates, not credentials. Embedding the
-  // public DSN is how browser and desktop SDKs ship enabled telemetry. The
-  // prepublishOnly gate refuses to publish when the release job omitted it.
+  // Public PostHog ingestion coordinates are embedded; administrative keys never enter the bundle.
   define: {
-    'process.env.ABLO_CLI_EMBEDDED_SENTRY_DSN': JSON.stringify(embeddedDsn),
+    'process.env.ABLO_CLI_EMBEDDED_POSTHOG_PROJECT_TOKEN': JSON.stringify(embeddedToken),
+    'process.env.ABLO_CLI_EMBEDDED_POSTHOG_HOST': JSON.stringify(embeddedHost),
     'process.env.ABLO_CLI_EMBEDDED_RELEASE': JSON.stringify(embeddedRelease),
     'process.env.ABLO_CLI_EMBEDDED_VERSION': JSON.stringify(embeddedVersion),
   },

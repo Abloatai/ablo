@@ -40,6 +40,13 @@ npx publint --strict packages/ablo
 npx publint --strict packages/cli
 
 echo ">>> verify 8/8: release authentication"
+for control in .github/workflows/change-evidence.yml scripts/compliance/github-changes/{action.yml,index.py,test_index.py}; do
+  if [[ ! -s "$control" ]]; then
+    echo "error: public mirror is missing its change-evidence control: $control" >&2
+    exit 1
+  fi
+done
+python3 -m unittest discover -s scripts/compliance/github-changes
 RELEASE_WORKFLOW=".github/workflows/release.yml"
 grep -q 'id-token: write' "$RELEASE_WORKFLOW"
 if grep -Eq 'NPM_TOKEN|NODE_AUTH_TOKEN' "$RELEASE_WORKFLOW"; then
