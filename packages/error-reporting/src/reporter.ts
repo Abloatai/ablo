@@ -118,6 +118,10 @@ export const useErrorReporter = () => {
  * Returns a user-friendly message if it's a technical error, or null if it should be shown as-is.
  */
 export function getAIUserFriendlyError(errorMessage: string): string | null {
+  // Bound text before regex matching, and keep stack traces out of user messages.
+  if (errorMessage.length > 200 || errorMessage.includes('\n') || errorMessage.includes('at ')) {
+    return "Something went wrong. I'll try a different approach.";
+  }
   // Technical errors from the sandbox/executor
   const technicalPatterns = [
     /^Invalid \w+ params:/i,
@@ -137,11 +141,6 @@ export function getAIUserFriendlyError(errorMessage: string): string | null {
     if (pattern.test(errorMessage)) {
       return "Something went wrong. I'll try a different approach.";
     }
-  }
-
-  // If the error message is very long or looks like a stack trace, hide it
-  if (errorMessage.length > 200 || errorMessage.includes('\n') || errorMessage.includes('at ')) {
-    return "Something went wrong. I'll try a different approach.";
   }
 
   return null; // Show the original error
