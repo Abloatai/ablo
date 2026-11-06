@@ -1,5 +1,18 @@
 # @abloatai/cli
 
+## 0.67.3
+
+### Patch Changes
+
+- ### CLI error reporting moves to PostHog
+
+  The CLI reports unexpected failures to PostHog using its existing support identifiers and redaction policy. Public ingestion coordinates are embedded during release builds; administrative credentials remain outside the package. Deterministic root-branch identifiers remain available for tenant correlation, while credential fields continue to be redacted.
+
+- Updated dependencies
+- Updated dependencies
+  - @abloatai/transaction@0.67.3
+  - @abloatai/humans@0.67.3
+
 ## 0.67.2
 
 ## 0.67.1

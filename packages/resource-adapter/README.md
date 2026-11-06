@@ -669,3 +669,21 @@ original claims and checks write authorization immediately before deletion head
 publication; lost/expired/replaced claims cannot publish the deletion. Restart
 converts a prepared running operation to an interrupted rejection without replay. Neither this feature nor mask ownership classifies historical files
 as safe to delete. Exact entry selection and recovery execution stay operator-owned.
+
+### Operation mount isolation
+
+Each native operation creates a private mount namespace in its supervising request
+thread before mounting its FUSE view. Native command namespaces therefore inherit
+only their own operation mount, never a peer's. Propagation is made recursively
+private before mounting. FUSE callbacks/handles and zero attribute/entry caches
+remain per operation. The request thread restores its original namespace on exit;
+restoration is not teardown evidence. UID drain, profile fsync, normal FUSE unmount
+and thread join, mask creation-record cleanup and publication fencing still run
+in their existing order. Namespace setup/restoration failure aborts the request;
+there is no shared-namespace fallback, lazy-unmount completion or timer increase.
+
+The Python syscall checks cover failure/restore paths. The linked Lobby Linux
+`tests/linux/remote-profile/mount-isolation.py` fixture runs this adapter with real
+FUSE, two command namespaces, ProcessChannel, Store and durable receipts in both
+completion orders. Its claim authority and commands are synthetic; it does not
+qualify Native providers, SRT, staging deployment or a live stale-read trial.

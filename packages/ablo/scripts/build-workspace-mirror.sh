@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONOREPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUTPUT_DIR="${1:-$(mktemp -d)/ablo-public-workspace}"
-PACKAGES=(transaction humans ablo cli tsconfig product-analytics resource-adapter)
+PACKAGES=(transaction humans ablo cli tsconfig product-analytics resource-adapter error-reporting)
 
 if [[ "$OUTPUT_DIR" == "/" || "$OUTPUT_DIR" == "$HOME" || -z "$OUTPUT_DIR" ]]; then
   echo "Refusing to clean suspicious output dir: $OUTPUT_DIR" >&2
@@ -29,7 +29,8 @@ fi
 
 DIRTY="$(git -C "$MONOREPO_ROOT" status --porcelain -- \
   packages/ablo packages/transaction packages/humans packages/cli \
-  packages/product-analytics packages/resource-adapter docs/ablo examples/account-multiplayer | grep -v '^??' || true)"
+  packages/product-analytics packages/error-reporting packages/resource-adapter docs/ablo examples/account-multiplayer \
+  scripts/compliance/github-changes .github/workflows/change-evidence.yml | grep -v '^??' || true)"
 if [[ -n "$DIRTY" && "${ALLOW_DIRTY:-}" != "1" ]]; then
   echo "error: refusing to build a public snapshot from a dirty tree" >&2
   echo "$DIRTY" | sed 's/^/  /' >&2
@@ -71,6 +72,9 @@ cp "$MONOREPO_ROOT/docs/ops/gvisor-resource-commands.md" \
   "$MONOREPO_ROOT/docs/ops/gvisor-command-memory.md" \
   "$MONOREPO_ROOT/docs/ops/project-file-publication.md" "$OUTPUT_DIR/docs/ops/"
 copy_tree "examples/account-multiplayer" "examples/account-multiplayer"
+copy_tree "scripts/compliance/github-changes" "scripts/compliance/github-changes"
+mkdir -p "$OUTPUT_DIR/.github/workflows"
+cp "$MONOREPO_ROOT/.github/workflows/change-evidence.yml" "$OUTPUT_DIR/.github/workflows/change-evidence.yml"
 
 # Repository-level branding belongs at the public workspace root as well as in
 # the npm package. This is a monorepo landing page, not a flattened source tree.
@@ -91,10 +95,18 @@ cat > "$OUTPUT_DIR/package.json" <<'EOF'
   "license": "Apache-2.0",
   "workspaces": ["packages/*"],
   "overrides": {
-    "esbuild@^0.27.0": "0.28.1"
+    "esbuild@^0.27.0": "0.28.1",
+    "fast-uri": "3.1.9",
+    "ip-address": "10.7.4",
+    "@vitest/mocker": "4.1.12",
+    "vitest": "4.1.12",
+    "hono": "4.13.16",
+    "@hono/node-server": "2.1.3",
+    "glob@>=9": "14.0.3",
+    "minimatch@>=9": "11.0.4"
   },
   "scripts": {
-    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo && npm run build --workspace=@ablo/resource-adapter",
+    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@ablo/error-reporting && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo && npm run build --workspace=@ablo/resource-adapter",
     "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo && npm run typecheck --workspace=@ablo/resource-adapter",
     "test": "npm test --workspaces --if-present"
   }
@@ -134,9 +146,10 @@ jobs:
   verify-and-publish:
     runs-on: ubuntu-latest
     env:
-      # Public ingestion DSN, distinct from npm provenance credentials. The CLI
+      # Public ingestion token, distinct from npm provenance credentials. The CLI
       # build embeds it and prepublishOnly refuses an empty value.
-      ABLO_CLI_SENTRY_DSN: ${{ vars.ABLO_CLI_SENTRY_DSN }}
+      ABLO_CLI_POSTHOG_PROJECT_TOKEN: ${{ vars.ABLO_CLI_POSTHOG_PROJECT_TOKEN }}
+      ABLO_CLI_POSTHOG_HOST: ${{ vars.ABLO_CLI_POSTHOG_HOST }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

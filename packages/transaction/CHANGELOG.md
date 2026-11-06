@@ -1,5 +1,17 @@
 # @abloatai/transaction
 
+## 0.67.3
+
+### Patch Changes
+
+- ### Listed rows retain their read evidence
+
+  HTTP lists now preserve each row's server watermark for guarded writes on the same client. Batch updates can use those exact rows without a separate request for every item. Copied rows and rows from another client remain invalid, and collection membership and absence are not guarded. Older servers without per-row evidence still require individual reads.
+
+- ### CLI error reporting moves to PostHog
+
+  The CLI reports unexpected failures to PostHog using its existing support identifiers and redaction policy. Public ingestion coordinates are embedded during release builds; administrative credentials remain outside the package. Deterministic root-branch identifiers remain available for tenant correlation, while credential fields continue to be redacted.
+
 ## 0.67.2
 
 ### Accepted writes use smaller confirmation requests

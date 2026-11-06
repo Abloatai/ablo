@@ -20,7 +20,7 @@ from gvisor import Gvisor
 from git import initialize_refs, validate_git_publication
 from store import Rejected, Store, canonical, path_name
 from publication import publish_project
-from process import ProcessChannel, Profile, HOME, await_domain_exit, FILESYSTEM_PROFILE_BUDGET, filesystem_budget, validate_filesystem_argv, filesystem_sandbox_masks
+from process import ProcessChannel, Profile, HOME, await_domain_exit, operation_mount_namespace, FILESYSTEM_PROFILE_BUDGET, filesystem_budget, validate_filesystem_argv, filesystem_sandbox_masks
 from sandbox_masks import SANDBOX_MASKS
 from file_removal import execute as remove_files, CAPABILITY as FILE_REMOVAL, ACTION as REMOVAL_ACTION
 
@@ -284,6 +284,12 @@ class Adapter:
             raise
 
     def run(self, operation, request, channel=None):
+        # Isolate before creating FUSE, not only when launching the native command:
+        # a later peer must never inherit a reference to this operation's mount.
+        with operation_mount_namespace():
+            return self.run_isolated(operation, request, channel)
+
+    def run_isolated(self, operation, request, channel=None):
         if not os.path.ismount(self.mountpoint):
             raise Rejected("adapter_unavailable")
         argv, timeout = request.get("argv"), request.get("timeoutMs", 30000)

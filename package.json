@@ -4,22 +4,20 @@
   "private": true,
   "description": "Public source for the Ablo SDK, live client, and CLI.",
   "license": "Apache-2.0",
-  "workspaces": [
-    "packages/*"
-  ],
+  "workspaces": ["packages/*"],
   "overrides": {
     "esbuild@^0.27.0": "0.28.1",
     "fast-uri": "3.1.9",
     "ip-address": "10.7.4",
     "@vitest/mocker": "4.1.12",
+    "vitest": "4.1.12",
     "hono": "4.13.16",
     "@hono/node-server": "2.1.3",
     "glob@>=9": "14.0.3",
-    "minimatch@>=9": "11.0.4",
-    "vitest": "4.1.12"
+    "minimatch@>=9": "11.0.4"
   },
   "scripts": {
-    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo && npm run build --workspace=@ablo/resource-adapter",
+    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@ablo/error-reporting && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo && npm run build --workspace=@ablo/resource-adapter",
     "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo && npm run typecheck --workspace=@ablo/resource-adapter",
     "test": "npm test --workspaces --if-present"
   }

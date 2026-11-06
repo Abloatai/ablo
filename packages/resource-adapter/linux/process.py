@@ -1,9 +1,12 @@
 """Root-controlled native-turn streams and exclusive, owner-bound CLI profiles."""
 import base64
+from contextlib import contextmanager
+import ctypes
 import json
 import os
 import shutil
 import stat
+import subprocess
 import threading
 import time
 import uuid
@@ -15,6 +18,35 @@ HOME = "/tmp/ablo-native-profile"
 LIMIT = 16 * 1024 * 1024
 FILESYSTEM_PROFILE_BUDGET = "filesystem-profile-64m-v2"
 FILESYSTEM_PROFILE_LIMIT = 64 * 1024 * 1024
+
+
+@contextmanager
+def operation_mount_namespace():
+    """Keep this operation's FUSE mounts out of every peer's launch namespace."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.unshare.argtypes = [ctypes.c_int]
+    libc.setns.argtypes = [ctypes.c_int, ctypes.c_int]
+    clone_fs, clone_newns = 0x00000200, 0x00020000
+    # /proc/self/ns/mnt refers to the process leader, not this request thread.
+    original = os.open("/proc/thread-self/ns/mnt", os.O_RDONLY | os.O_CLOEXEC)
+    entered = False
+    try:
+        if libc.unshare(clone_fs | clone_newns):
+            raise OSError(ctypes.get_errno(), "Cannot isolate operation mounts")
+        entered = True
+        # Stop propagation before the first mount; unshare alone copies shared mounts.
+        subprocess.run(["mount", "--make-rprivate", "/"], check=True, capture_output=True)
+        yield
+    finally:
+        try:
+            if entered:
+                # FUSE/stream threads may still share fs_struct on an error path.
+                # Detach only the caller's fs_struct before restoring its namespace;
+                # this is not an unmount or evidence that teardown succeeded.
+                if libc.unshare(clone_fs) or libc.setns(original, clone_newns):
+                    raise OSError(ctypes.get_errno(), "Cannot restore operation mount namespace")
+        finally:
+            os.close(original)
 
 
 def filesystem_budget(peer, request, configured_argv):

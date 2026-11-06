@@ -356,7 +356,7 @@ describe('context()', () => {
     stop();
   });
 
-  it('treats list results as observational until rows are deliberately read', async () => {
+  it('retains authoritative list rows as context premises', async () => {
     const rows = [
       { id: 'context-1', title: 'One' },
       { id: 'context-2', title: 'Two' },
@@ -377,7 +377,8 @@ describe('context()', () => {
       data: { briefs: ablo.context.list() },
     });
 
-    expect(assembled.reads).toEqual([]);
+    expect(assembled.reads).toEqual(rows);
+    expect(assembled.reads[0]).toBe(assembled.data.briefs[0]);
   });
 
   it('does not accept cloned or cross-client rows as authoritative evidence', async () => {

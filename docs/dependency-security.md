@@ -101,3 +101,25 @@ boundary error: `SiteFooter.astro` imports the unmirrored
 `packages/marketing/src/ablo-footer/index`. The same import exists on main;
 this dependency change does not establish a successful current docs build or
 production docs deployment. Correct the source mirror before releasing docs.
+
+## November 3 remediation
+
+Current source pins compatible modern glob/minimatch, Vitest/mocker, URI parsing,
+HTTP adapters and the docs generator graph. The public mirror generator carries
+its own security overrides; refresh and inspect `.public-ablo/package-lock.json`
+when changing them. The docs `filelist` override uses 2.0.2, whose named minimatch
+API supports the patched modern version. Full monorepo and Knowledge docs builds
+and a focused FileList include/array check pass on Node 24. Public-mirror docs
+retain the separate missing-footer build limitation above.
+
+Legacy minimatch 3 consumers in ESLint/coverage tooling still use its function
+API; forcing minimatch 11 into them breaks that contract. The latest checked
+`sandbox-runtime` 0.0.81 and Inngest 4.26.2 still require Zod 3. Inngest also
+imports `zod/v3`, so substituting the Zod 4 package does not remove that code.
+Deepmerge's latest published release remains 4.3.1 without a fixed version.
+Keep these findings open pending compatible upstream changes or an evidenced
+replacement; do not report a scanner dismissal as a dependency repair.
+
+Source dependency checks and Vanta refreshes are separate. The current-head PR
+evidence gate and the post-merge Vanta justification receipt are both required;
+see [change evidence](../scripts/compliance/github-changes/README.md).

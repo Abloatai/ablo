@@ -88,19 +88,25 @@ fi
 # @abloatai/cli's prepublishOnly refuses to ship without this. It is a public
 # ingestion DSN that the build embeds, not a credential, which is why it lives
 # in a repository variable and can be read back here.
-if [ -z "${ABLO_CLI_SENTRY_DSN:-}" ]; then
+if [ -z "${ABLO_CLI_POSTHOG_PROJECT_TOKEN:-}" ]; then
   if command -v gh >/dev/null 2>&1; then
-    echo ">>> resolving ABLO_CLI_SENTRY_DSN from $MIRROR_REPO"
-    ABLO_CLI_SENTRY_DSN="$(gh variable list -R "$MIRROR_REPO" \
-      --json name,value -q '.[] | select(.name=="ABLO_CLI_SENTRY_DSN") | .value' 2>/dev/null || true)"
-    export ABLO_CLI_SENTRY_DSN
+    echo ">>> resolving ABLO_CLI_POSTHOG_PROJECT_TOKEN from $MIRROR_REPO"
+    ABLO_CLI_POSTHOG_PROJECT_TOKEN="$(gh variable list -R "$MIRROR_REPO" \
+      --json name,value -q '.[] | select(.name=="ABLO_CLI_POSTHOG_PROJECT_TOKEN") | .value' 2>/dev/null || true)"
+    export ABLO_CLI_POSTHOG_PROJECT_TOKEN
   fi
 fi
-if [ -z "${ABLO_CLI_SENTRY_DSN:-}" ]; then
-  echo "error: ABLO_CLI_SENTRY_DSN is unset and could not be resolved" >&2
+if [ -z "${ABLO_CLI_POSTHOG_PROJECT_TOKEN:-}" ]; then
+  echo "error: ABLO_CLI_POSTHOG_PROJECT_TOKEN is unset and could not be resolved" >&2
   echo "       read it with: gh variable list -R $MIRROR_REPO" >&2
   echo "       @abloatai/cli refuses to publish without it." >&2
   exit 1
+fi
+
+# The regional ingestion host is public and shared with the compiled CLI token.
+if [ -z "${ABLO_CLI_POSTHOG_HOST:-}" ]; then
+  ABLO_CLI_POSTHOG_HOST="$(gh variable list -R "$MIRROR_REPO" --json name,value -q '.[] | select(.name=="ABLO_CLI_POSTHOG_HOST") | .value')"
+  export ABLO_CLI_POSTHOG_HOST
 fi
 
 # Provenance needs an OIDC token from a supported CI provider. Locally npm fails

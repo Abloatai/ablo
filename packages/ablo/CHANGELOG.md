@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.67.3
+
+### Listed rows retain their read evidence
+
+HTTP lists now preserve each row's server watermark for guarded writes on the same client. Batch updates can use those exact rows without a separate request for every item. Copied rows and rows from another client remain invalid. This guards the returned rows, not collection membership or absence; older servers without per-row evidence still require individual reads.
+
+### CLI failures use existing support identifiers
+
+Unexpected CLI failures now reach PostHog through the existing redaction policy. Public ingestion coordinates are embedded during release builds; administrative credentials remain outside the package.
+
 ## 0.67.2
 
 ### Accepted writes use smaller confirmation requests

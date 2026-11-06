@@ -464,15 +464,16 @@ function subscribeInModelScope(
  * graph makes possible, so this type states the relationship instead of
  * restating the members, and a verb added to the base arrives here on its own.
  *
- * `claim` is the one member the base cannot supply directly: the two forms
- * differ by an awaitedness transform, so it is replaced rather than inherited.
- * See {@link ReactiveModelSurface}.
+ * Claims and editors use the reactive surface. Local collection loads have no
+ * authoritative per-row watermarks, so their rows remain observational.
  */
 export type ModelOperations<T, CreateInput, UpdateInput = CreateInput> = Omit<
   HttpModelClient<T, CreateInput, UpdateInput>,
-  'claim' | 'text' | 'counter'
+  'claim' | 'text' | 'counter' | 'list' | 'listAll'
 > &
   ReactiveModelSurface<T, CreateInput> & {
+    list(options?: ServerReadOptions<T>): Promise<ModelList<T>>;
+    listAll(options?: ListAllOptions<T>): Promise<T[]>;
     text(params: { id: string; field: Extract<keyof CreateInput, string> }): Promise<ModelFieldEditor<string, TextOperation>>;
     counter(params: { id: string; field: Extract<keyof CreateInput, string> }): Promise<ModelCounterEditor>;
   };

@@ -107,7 +107,7 @@ export interface AbloHttpClientOptions<S extends SchemaRecord>
 declare const capturedRowBrand: unique symbol;
 
 /**
- * Client-bound evidence: the exact point-read row and watermark belong to the
+ * Client-bound evidence: the exact returned row and watermark belong to the
  * Ablo client instance that returned it. Use only with that instance's `reads`
  * or `ifUnchanged`. Copies and serialized rows lose their evidence.
  *
@@ -171,18 +171,14 @@ export interface HttpModelClient<T, C = T, U = C> {
    */
   read(params: ModelReadParams & ModelReadOptions): Promise<CapturedRow<T> | undefined>;
   /**
-   * Observes the rows matching a filter, deduplicating concurrent identical
-   * calls. List rows are plain values; deliberately `read({ id })` any row a
-   * later mutation depends on.
+   * Lists matching rows. Each exact row carries its own server watermark for
+   * `reads` on this client; this does not guard collection membership or absence.
+   * Older servers without per-row evidence require a separate `read({ id })`.
+   * `hasMore` and `nextCursor` describe pagination; async iteration follows it.
    */
-  /**
-   * The rows are an array as before; `hasMore` and `nextCursor` on the result
-   * say whether the collection continues past this page. Pass `nextCursor`
-   * back as `cursor`, with the same `where` and `orderBy`, to walk it.
-   */
-  list(options?: ServerReadOptions<T>): Promise<ModelList<T>>;
+  list(options?: ServerReadOptions<T>): Promise<ModelList<CapturedRow<T>>>;
   /** Reads every matching row, following cursors with a bounded traversal. */
-  listAll(options?: ListAllOptions<T>): Promise<T[]>;
+  listAll(options?: ListAllOptions<T>): Promise<CapturedRow<T>[]>;
   /**
    * Creates a row and returns it, including any framework-applied defaults.
    * Passing an id that already exists is idempotent: the existing row is
@@ -517,10 +513,25 @@ function createHttpModelClient<T, C = T, U = C>(
 
   const list = async (
     options?: ServerReadOptions<T>,
-  ): Promise<ModelList<T>> => {
+  ): Promise<ModelList<CapturedRow<T>>> => {
     const snapshot = await protocol.list(options);
-    return modelList<T>(
-      snapshot.data,
+    if (snapshot.evidence) {
+      const stamps = new Map(snapshot.evidence.map(entry => [entry.id, entry.stamp]));
+      const ids = snapshot.data.map(row =>
+        typeof row === 'object' && row !== null && 'id' in row ? row.id : undefined);
+      if (stamps.size !== snapshot.evidence.length || stamps.size !== ids.length
+        || new Set(ids).size !== ids.length
+        || snapshot.evidence.some(entry => !Number.isSafeInteger(entry.stamp))
+        || ids.some(id => typeof id !== 'string' || !stamps.has(id))) {
+        throw new AbloConnectionError('The list returned mismatched row evidence.', {code: 'malformed_response'});
+      }
+      snapshot.data.forEach((row, index) => {
+        const id = ids[index] as string;
+        capturePointRead(readSetContext, clientIdentity, modelName, id, row, stamps.get(id)!);
+      });
+    }
+    return modelList<CapturedRow<T>>(
+      snapshot.data as CapturedRow<T>[],
       snapshot,
       (cursor) => list({ ...options, cursor }),
     );
@@ -528,7 +539,7 @@ function createHttpModelClient<T, C = T, U = C>(
 
   const listAll = async (
     options: ListAllOptions<T> = {},
-  ): Promise<T[]> => {
+  ): Promise<CapturedRow<T>[]> => {
     const { maxPages, signal, ...readOptions } = options;
     signal?.throwIfAborted();
     const first = await list(readOptions);

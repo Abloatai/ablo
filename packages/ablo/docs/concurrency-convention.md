@@ -11,9 +11,12 @@ that exact evidence into the write, and handle the documented failure code.
 Ablo does not put a configurable stale mode between your code and a
 commit. The public choice is visible at the call site:
 
-- `get` and `list` observe state. They do not create a write premise.
+- `get` observes state. It does not create a write premise.
 - `read` returns a row that can guard its own update or delete with
   `ifUnchanged`, or another mutation through `reads`.
+- HTTP `list` and `listAll` rows retain the same per-row evidence. Pass exact
+  returned objects in `reads`; collection membership and absence are not guarded.
+  Reactive local lists remain observational.
 - a mutation with `ifUnchanged` or `reads` rejects with
   `AbloStaleContextError` if any declared premise changed;
 - a mutation without either option is an unconditional, last-write-wins

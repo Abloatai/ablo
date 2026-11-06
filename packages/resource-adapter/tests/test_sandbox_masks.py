@@ -195,7 +195,8 @@ class Masks(unittest.TestCase):
         operation=self.store.db.execute('SELECT * FROM operations WHERE id=?',(self.operation,)).fetchone()
         cleanup=self.store.sandbox_masks.cleanup
         def clean(*args): trace.append('cleanup'); return cleanup(*args)
-        with patch.object(module.os.path,'ismount',side_effect=lambda p: p=='/fixture/mount' or mounted[0]), \
+        with patch.object(module,'operation_mount_namespace',__import__('contextlib').nullcontext), \
+             patch.object(module.os.path,'ismount',side_effect=lambda p: p=='/fixture/mount' or mounted[0]), \
              patch.object(module.os,'chown'), patch.object(module.os,'makedirs'), patch.object(module.os,'rmdir'), \
              patch.object(module.threading,'Thread',Thread), patch.object(module,'Profile',return_value=profile), \
              patch.object(module,'await_domain_exit',side_effect=domain), patch.object(module.subprocess,'run',side_effect=run), \

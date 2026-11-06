@@ -49,7 +49,6 @@ async function capturedRowsGuideReads(): Promise<void> {
     await client.items.update({
       id: 'item-2',
       data: { status: 'done' },
-      // @ts-expect-error — list observes; use read({ id }) for decision evidence.
       reads: [listed],
     });
   }
@@ -63,3 +62,11 @@ async function capturedRowsGuideReads(): Promise<void> {
 }
 
 void capturedRowsGuideReads;
+
+async function httpCollectionRowsGuideReads(): Promise<void> {
+  const http = Ablo({schema, apiKey: 'sk_type_only', baseURL: 'https://api.example.test', transport: 'http'});
+  const rows = await http.items.listAll();
+  await http.commits.create({reads: rows, operations: []});
+}
+
+void httpCollectionRowsGuideReads;

@@ -43,6 +43,7 @@ export const FULL_GROUPS = [
   'Read the docs',
   "See what's happening",
   'Workspace',
+  'Deployments',
 ] as const;
 export type FullGroup = (typeof FULL_GROUPS)[number];
 
