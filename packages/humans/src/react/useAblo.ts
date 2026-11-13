@@ -96,7 +96,9 @@ export function useAblo<
     if (!engine) return () => undefined;
     return engine.claims.onChange(notify);
   }, [engine]);
-  const value = useReactive<T | useAblo.Result<T> | undefined>(() => {
+  // Stable while its inputs are, so re-renders keep the existing subscription and
+  // cached snapshot. An inline selector still starts a new observation per render.
+  const compute = useCallback((): T | useAblo.Result<T> | undefined => {
     if (isSelectorOnly && typeof modelOrSelect === 'function') {
       return engine ? modelOrSelect(reactiveReads<R>(engine)) as T : undefined;
     }
@@ -104,13 +106,15 @@ export function useAblo<
       return readModelResult(engine, modelClient, id, seed.received ? undefined : initial);
     }
     return undefined;
-  }, {
+  }, [isSelectorOnly, modelOrSelect, engine, modelClient, id, seed, initial]);
+  // The same seed produces the server HTML and the first hydration render,
+  // even if the browser already has a newer row or claim in its local cache.
+  const serverSnapshot = useMemo(() => (id !== undefined && initial !== undefined
+    ? () => ({ data: initial, claims: EMPTY_CLAIMS, claimed: false })
+    : undefined), [id, initial]);
+  const value = useReactive<T | useAblo.Result<T> | undefined>(compute, {
     subscribe,
-    // The same seed produces the server HTML and the first hydration render,
-    // even if the browser already has a newer row or claim in its local cache.
-    ...(id !== undefined && initial !== undefined ? {
-      serverSnapshot: () => ({ data: initial, claims: EMPTY_CLAIMS, claimed: false }),
-    } : {}),
+    ...(serverSnapshot ? { serverSnapshot } : {}),
   });
   useEffect(() => {
     if (id !== undefined && modelClient?.local.get(id) !== undefined) seed.received = true;
