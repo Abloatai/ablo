@@ -69,6 +69,7 @@ import {
 } from '../../wire/modelResponses.js';
 import { toMs } from '../../utils/duration.js';
 import {
+  assertHeartbeatFitsLease,
   heartbeatCadenceMs,
   resolveHeartbeatOptions,
   resolveHeartbeatPlan,
@@ -1787,6 +1788,14 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       const params: ClaimParams<Fields> = rowFree
         ? { ...(opts ?? {}), id: idOrParams }
         : idOrParams;
+      // A stateless lease ends at its ttl unless a beat renews it. A claim
+      // dispatched over a socket is left to that transport's own renewal.
+      if (!options.dispatchClaim) {
+        assertHeartbeatFitsLease(
+          params.ttl !== undefined ? toMs(params.ttl) : DEFAULT_CLAIM_TTL_MS,
+          params,
+        );
+      }
       let acquired: {
         id: string;
         fenceToken?: number;

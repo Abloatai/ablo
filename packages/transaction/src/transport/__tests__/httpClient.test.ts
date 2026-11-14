@@ -19,6 +19,7 @@ import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, selectModels, z } from '../../schema/index.js';
 import { AbloError, AbloNotFoundError, CapabilityError } from '../../errors.js';
 import { CLAIM_CONTINUATION_HEADER } from '../../claims/httpContinuation.js';
+import { claimRequestSchema } from '../../claims/contract.js';
 import {
   claimAcquiredResponse,
   claimHeartbeatReply,
@@ -1464,6 +1465,32 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       fenceToken: 7,
       expiresAt: 1234,
     });
+  });
+
+  it('refuses lease timings that cannot hold a lease before requesting the claim', async () => {
+    const calls: string[] = [];
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_leasetiming',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input) => {
+        calls.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+        return Promise.reject(new Error('no request expected'));
+      },
+    });
+
+    // A beat every 2s cannot keep a 1s lease: it would always arrive too late.
+    await expect(
+      c.items.claim('item-1', { ttl: '1s', heartbeat: { every: '2s' } }),
+    ).rejects.toMatchObject({ code: 'invalid_options', param: 'heartbeat' });
+    // A zero-length lease is refused as a string, the same as the number 0.
+    await expect(c.items.claim('item-1', { ttl: '0s' })).rejects.toMatchObject({
+      code: 'duration_invalid',
+    });
+    expect(claimRequestSchema.safeParse({ ttl: '0s' }).success).toBe(false);
+    expect(claimRequestSchema.safeParse({ ttl: 0 }).success).toBe(false);
+    expect(calls).toEqual([]);
   });
 
   it('claims.heartbeatAll beats every held lease in one round trip', async () => {
