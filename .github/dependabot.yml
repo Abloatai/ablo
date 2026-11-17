@@ -1,0 +1,95 @@
+# Dependabot: grouped security updates, grouped monthly version updates for
+# everything this repo ships.
+#
+# - Security updates open as soon as an alert appears, whatever the schedule.
+#   They are grouped per ecosystem and directory so one advisory wave is one
+#   PR. The repository setting "Dependabot security updates" turns them on;
+#   this file only shapes them.
+# - Version updates run monthly for what ships: the root npm workspace (the
+#   published @abloatai/* packages and the resource adapter), the adapter's
+#   locked Rust coordinator (shipped as source in the release archive), the
+#   workflows and the Nix flake inputs. Minor and patch updates collapse into
+#   one PR per ecosystem; majors stay individual.
+# - `cooldown` waits a week after a release before proposing it, so a
+#   compromised or yanked version has time to be caught upstream. Security
+#   updates ignore it.
+# - The docs site, the example and the CLI eval fixtures get security updates
+#   only: `open-pull-requests-limit: 0` disables version updates without
+#   affecting security updates, which have their own fixed limit of ten.
+# - Not covered: the resource adapter's test Dockerfile and the humans test
+#   compose file. Dependabot has no security updates for docker or
+#   docker-compose, so a security-only entry would do nothing.
+#
+# Reference:
+# https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      npm-minor-and-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /packages/resource-adapter/runtime
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      actions-minor-and-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: nix
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      nix-flake-inputs:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # Security updates only.
+  - package-ecosystem: npm
+    directories:
+      - /docs/ablo
+      - /examples/account-multiplayer
+      - /packages/cli/evals/fixtures/*
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0
+    groups:
+      npm-security-other:
+        applies-to: security-updates
+        patterns: ["*"]
