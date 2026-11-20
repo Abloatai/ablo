@@ -114,7 +114,9 @@ export function normalizeAbloBaseUrl(rawUrl: string): string {
     );
   }
 
-  if (url.search || url.hash) {
+  // Tested on the serialized URL: a bare `?` or `#` leaves `search` and `hash`
+  // empty but still swallows the appended path.
+  if (/[?#]/.test(url.href)) {
     reject(
       '`baseURL` must not carry a query string or fragment. Ablo appends its ' +
         'own path to this value, so anything after it would be discarded or ' +
