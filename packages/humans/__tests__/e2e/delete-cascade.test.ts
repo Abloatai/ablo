@@ -49,7 +49,6 @@ function connectAndCollect(): Promise<{ ws: WebSocket; deltas: Record<string, un
       ws.on('message', (data: Buffer) => {
         try {
           const msg = JSON.parse(data.toString());
-          // Handle single delta
           if (msg.type === 'delta' && msg.payload) {
             // Single delta or batch inside delta envelope
             if (Array.isArray(msg.payload.deltas)) {
@@ -60,7 +59,6 @@ function connectAndCollect(): Promise<{ ws: WebSocket; deltas: Record<string, un
               deltas.push(msg.payload);
             }
           }
-          // Handle sync_response with deltas array
           if (msg.type === 'sync_response' && Array.isArray(msg.payload?.deltas)) {
             for (const d of msg.payload.deltas) deltas.push(d);
           }
@@ -83,7 +81,6 @@ describeE2E('E2E: Delete Operations', () => {
   it('should produce a D (delete) delta after deleting a item', async () => {
     const { ws, deltas } = await connectAndCollect();
 
-    // Create a item
     const itemId = uuid();
     await batchAck([{
       type: 'CREATE', model: 'item', id: itemId,
@@ -92,12 +89,10 @@ describeE2E('E2E: Delete Operations', () => {
 
     await new Promise((r) => setTimeout(r, 1000));
 
-    // Delete it
     await batchAck([{ type: 'DELETE', model: 'item', id: itemId }]);
 
     await new Promise((r) => setTimeout(r, 2000));
 
-    // Should have received both I and D deltas
     const insertDelta = deltas.find((d) => d.modelId === itemId && d.actionType === 'I');
     const deleteDelta = deltas.find((d) => d.modelId === itemId && d.actionType === 'D');
 
@@ -108,7 +103,6 @@ describeE2E('E2E: Delete Operations', () => {
   }, 15000);
 
   it('should handle update on deleted entity gracefully', async () => {
-    // Create then delete
     const itemId = uuid();
     await batchAck([{
       type: 'CREATE', model: 'item', id: itemId,
@@ -133,7 +127,6 @@ describeE2E('E2E: Delete Operations', () => {
     // Connect WS first to catch all deltas
     const { ws, deltas } = await connectAndCollect();
 
-    // Create 3 items
     const ids = [uuid(), uuid(), uuid()];
     for (const id of ids) {
       await batchAck([{
@@ -145,7 +138,6 @@ describeE2E('E2E: Delete Operations', () => {
     // Wait for creates to be persisted
     await new Promise((r) => setTimeout(r, 1500));
 
-    // Delete all 3 in a single batchAck
     const result = await batchAck(ids.map((id) => ({ type: 'DELETE', model: 'item', id })));
     expect(result.lastSyncId).toBeGreaterThan(0);
 

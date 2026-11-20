@@ -42,7 +42,6 @@ type ResolveApiKeyValueFn = (
  */
 export { classifyCredentialKind, type CredentialKind };
 
-// ─────────────────────────────────────────────────────────────────────
 
 /**
  * The set of authentication primitives that {@link resolveCredential} delegates

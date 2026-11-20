@@ -109,7 +109,6 @@ describeE2E('Property-Based E2E: Random Operations', () => {
       } catch { /* ignore */ }
     });
 
-    // Create several items
     const createdIds: string[] = [];
     for (let i = 0; i < 3; i++) {
       const id = uuid();
@@ -134,7 +133,6 @@ describeE2E('Property-Based E2E: Random Operations', () => {
   }, 15000);
 
   it('server handles rapid-fire batch operations without errors', async () => {
-    // Send 10 operations concurrently
     const promises = Array.from({ length: 10 }, () =>
       callBatchAck([{
         type: 'CREATE',
@@ -150,7 +148,6 @@ describeE2E('Property-Based E2E: Random Operations', () => {
       expect(syncId).toBeGreaterThan(0);
     }
 
-    // All sync IDs should be unique
     const unique = new Set(results);
     expect(unique.size).toBe(10);
   }, 15000);

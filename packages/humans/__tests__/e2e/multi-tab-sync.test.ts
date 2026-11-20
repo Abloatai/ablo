@@ -97,7 +97,6 @@ describeE2E('E2E: Multi-Tab Sync', () => {
     const itemA = uuid();
     const itemB = uuid();
 
-    // Tab A creates
     await batchAck(USER_ID, ORG_ID, [{
       type: 'CREATE', model: 'item', id: itemA,
       input: { title: 'From A', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
@@ -140,11 +139,9 @@ describeE2E('E2E: Multi-Tab Sync', () => {
 
     const syncIds = await Promise.all(promises);
 
-    // All 10 syncIds should be unique
     const unique = new Set(syncIds);
     expect(unique.size).toBe(10);
 
-    // All should be positive
     for (const id of syncIds) {
       expect(id).toBeGreaterThan(0);
     }

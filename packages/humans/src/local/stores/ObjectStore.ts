@@ -70,9 +70,6 @@ export class ObjectStore implements ObjectStoreContract {
     this.isClosing = true;
   }
 
-  /**
-   * Check if database is available for operations
-   */
   private checkDatabaseAvailable(): boolean {
     if (this.isClosing) {
       return false;
@@ -121,9 +118,6 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
-  /**
-   * Get a model by ID
-   */
   async get(id: string): Promise<Record<string, unknown> | undefined> {
     if (!this.checkDatabaseAvailable()) {
       return Promise.resolve(undefined);
@@ -185,9 +179,6 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
-  /**
-   * Get all models
-   */
   async getAll(): Promise<Record<string, unknown>[]> {
     if (!this.checkDatabaseAvailable()) {
       return Promise.resolve([]);
@@ -207,9 +198,6 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
-  /**
-   * Delete a model by ID
-   */
   async delete(id: string): Promise<void> {
     if (!this.checkDatabaseAvailable()) {
       return Promise.reject(new Error('IndexedDB not available (closing or invalid)'));
@@ -246,9 +234,6 @@ export class ObjectStore implements ObjectStoreContract {
     }
   }
 
-  /**
-   * Clear all data in store
-   */
   async clear(): Promise<void> {
     if (!this.checkDatabaseAvailable()) {
       return Promise.reject(new Error('IndexedDB not available (closing or invalid)'));
@@ -273,9 +258,6 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
-  /**
-   * Get count of models in store
-   */
   async count(): Promise<number> {
     if (!this.checkDatabaseAvailable()) {
       return Promise.resolve(0);
@@ -295,9 +277,6 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
-  /**
-   * Get models by indexed property
-   */
   async getAllFromIndex(
     indexName: string,
     value: IDBValidKey,
@@ -332,7 +311,6 @@ export class ObjectStore implements ObjectStoreContract {
       return Promise.resolve([]);
     }
 
-    // For simple index
     if (!indexedKey.includes('.')) {
       return this.getAllFromIndex(indexedKey, keyValue);
     }
@@ -346,7 +324,6 @@ export class ObjectStore implements ObjectStoreContract {
 
         request.onsuccess = () => {
           const allRecords = request.result;
-          // Filter in memory for compound keys
           const keyParts = indexedKey.split('.');
           const filtered = allRecords.filter((record) => {
             let value = record;
@@ -366,9 +343,6 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
-  /**
-   * Get first model matching index
-   */
   async getFromIndex(
     indexName: string,
     value: IDBValidKey,
@@ -392,9 +366,6 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
-  /**
-   * Get count from index
-   */
   async countFromIndex(indexName: string, value: IDBValidKey): Promise<number> {
     if (!this.checkDatabaseAvailable()) {
       return Promise.resolve(0);
@@ -415,17 +386,11 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
-  /**
-   * Check if any models exist for index value
-   */
   async hasModelsForIndex(indexName: string, value: IDBValidKey): Promise<boolean> {
     const count = await this.countFromIndex(indexName, value);
     return count > 0;
   }
 
-  /**
-   * Get store statistics
-   */
   async getStats(): Promise<{
     count: number;
     ready: boolean;
@@ -443,9 +408,6 @@ export class ObjectStore implements ObjectStoreContract {
     };
   }
 
-  /**
-   * Perform maintenance (override in subclasses for specific needs)
-   */
   async performMaintenance(): Promise<void> {
     // Default: no maintenance needed
     // Subclasses can override for compaction, cleanup, etc.

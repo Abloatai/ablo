@@ -100,7 +100,7 @@ describe('BaseSyncedStore.hydrateGroups (P4b)', () => {
     await shell.hydrateGroups(['collection:a']); // fails — must not throw
     expect(shell.hydratedGroups.has('collection:a')).toBe(false);
 
-    await shell.hydrateGroups(['collection:a']); // retries
+    await shell.hydrateGroups(['collection:a']);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(shell.hydratedGroups.has('collection:a')).toBe(true);
   });

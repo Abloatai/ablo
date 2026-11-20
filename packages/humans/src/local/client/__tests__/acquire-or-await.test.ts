@@ -174,7 +174,6 @@ describe('ModelOperations.claim', () => {
     );
     // Contended → re-read after the grant; the prior holder may have committed.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    // No client-side wait dance — the queue does the serializing.
     expect(collab.waitFor).not.toHaveBeenCalled();
 
     // Ordering: acquired before re-reading.

@@ -57,7 +57,6 @@ export async function handleFailure(
   ) return;
   transaction.attempts++;
 
-  // Check whether this is a permanent error that should not be retried.
   if (ctx.isPermanentError(error)) {
     reportPermanentMutationFailure(
       {
@@ -70,7 +69,6 @@ export async function handleFailure(
       error,
     );
 
-    // Mark as failed immediately and rollback
     ctx.store.updateStatus(transaction.id, 'failed');
 
     if (ctx.config.enableOptimistic) {
@@ -110,7 +108,6 @@ export async function handleFailure(
       ctx.enqueue(transaction);
     }, delay);
   } else {
-    // Mark as failed and rollback
     ctx.store.updateStatus(transaction.id, 'failed');
 
     if (ctx.config.enableOptimistic) {

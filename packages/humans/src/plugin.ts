@@ -251,7 +251,6 @@ export interface AbloPlugin<Surface = unknown> {
    */
   readonly stages?: { readonly [K in PipelineStage]?: StageHandler<K> };
 
-  /** Build the plugin's contribution to the client surface. */
   init(context: PluginContext): Surface;
 }
 

@@ -38,9 +38,6 @@ export class StoreManager {
     this.modelRegistry = modelRegistry;
   }
 
-  /**
-   * Initialize all stores for registered models
-   */
   async initializeStores(db: IDBDatabase): Promise<void> {
     this.db = db;
 
@@ -53,7 +50,6 @@ export class StoreManager {
     this.runtime.logger.info('Initializing ObjectStore instances for all models');
     const startTime = performance.now();
 
-    // Get all registered models
     const allModels = this.modelRegistry.getRegisteredModelNames();
 
     for (const modelName of allModels) {
@@ -73,7 +69,6 @@ export class StoreManager {
       'strict',
     );
 
-    // Initialize SyncactionStore
     this.syncactionStore = new SyncActionStore(this.db, this.runtime);
     await this.syncactionStore.initialize();
 
@@ -87,9 +82,6 @@ export class StoreManager {
 
   }
 
-  /**
-   * Create ObjectStore for a specific model
-   */
   private async createStoreForModel(modelName: string): Promise<void> {
     const metadata = this.modelRegistry.getMetadata(modelName);
     if (!metadata) {
@@ -101,32 +93,25 @@ export class StoreManager {
     // Use model name directly as store name
     const storeName = modelName;
 
-    // Create the ObjectStore. One store type currently serves every load strategy.
     const store = new ObjectStore(this.db!, modelName, storeName, metadata);
 
     this.stores.set(modelName, store);
   }
 
-  /**
-   * Create stores (tables) in IndexedDB
-   */
   async createStores(db: IDBDatabase): Promise<void> {
     this.runtime.logger.info('Creating tables for all registered models');
 
     for (const modelName of this.modelRegistry.getRegisteredModelNames()) {
       const storeName = modelName;
 
-      // Skip if store already exists
       if (db.objectStoreNames.contains(storeName)) {
         continue;
       }
 
       this.runtime.logger.debug('Creating table', { storeName, modelName });
 
-      // Create object store with id as keyPath
       const store = db.createObjectStore(storeName, { keyPath: 'id' });
 
-      // Create indexes for indexed properties
       const indexedProperties = this.modelRegistry.getIndexedProperties(modelName);
       for (const propName of indexedProperties) {
         try {
@@ -140,35 +125,27 @@ export class StoreManager {
       }
     }
 
-    // Create special tables
     this.createSpecialTables(db);
   }
 
-  /**
-   * Create special tables (sync_action_table, model_table, model_table_partial, __meta, __transactions)
-   */
   private createSpecialTables(db: IDBDatabase): void {
-    // Create sync_action_table for sync actions (delta packets)
     if (!db.objectStoreNames.contains('sync_action_table')) {
       const syncActionStore = db.createObjectStore('sync_action_table', { keyPath: 'id' });
       syncActionStore.createIndex('syncId', 'id');
       this.runtime.logger.debug('Created sync_action_table');
     }
 
-    // Create __meta table for model persistence state and database metadata
     if (!db.objectStoreNames.contains('__meta')) {
       db.createObjectStore('__meta');
       this.runtime.logger.debug('Created __meta table');
     }
 
-    // Create __transactions table for unsent transactions
     if (!db.objectStoreNames.contains('__transactions')) {
       const transactionStore = db.createObjectStore('__transactions', {
         keyPath: 'id',
         autoIncrement: false,
       });
 
-      // Create indexes for transaction queries
       transactionStore.createIndex('timestamp', 'timestamp');
       transactionStore.createIndex('status', 'status');
 
@@ -176,9 +153,6 @@ export class StoreManager {
     }
   }
 
-  /**
-   * Get ObjectStore for a model
-   */
   getStore(modelName: string): ObjectStore | undefined {
     if (modelName === '__transactions') {
       return this.transactionStore ?? undefined;
@@ -186,23 +160,14 @@ export class StoreManager {
     return this.stores.get(modelName);
   }
 
-  /**
-   * Get SyncactionStore instance
-   */
   getSyncactionStore(): SyncActionStore | null {
     return this.syncactionStore;
   }
 
-  /**
-   * Get all stores
-   */
   getAllStores(): Map<string, ObjectStore> {
     return new Map(this.stores);
   }
 
-  /**
-   * Check readiness of all stores
-   */
   async checkReadinessOfStores(): Promise<{
     ready: boolean;
     readyStores: string[];
@@ -264,9 +229,6 @@ export class StoreManager {
     return false;
   }
 
-  /**
-   * Get stores by load strategy
-   */
   getStoresByStrategy(strategy: LoadStrategy): ObjectStore[] {
     const stores: ObjectStore[] = [];
 
@@ -280,9 +242,6 @@ export class StoreManager {
     return stores;
   }
 
-  /**
-   * Perform maintenance on all stores
-   */
   async performMaintenance(): Promise<void> {
     this.runtime.logger.info('Performing maintenance on all stores');
 
@@ -293,9 +252,6 @@ export class StoreManager {
     this.runtime.logger.info('Store maintenance completed');
   }
 
-  /**
-   * Clear all stores
-   */
   async clearAllStores(): Promise<void> {
     // Lifecycle chatter (logout / identity switch / reset), not a warning.
     // Logged at `debug` so it stays silent under the default `warn` threshold.
@@ -329,9 +285,6 @@ export class StoreManager {
     this.runtime.logger.debug('All stores marked as closing');
   }
 
-  /**
-   * Get comprehensive statistics
-   */
   async getComprehensiveStats(): Promise<{
     totalStores: number;
     readiness: { ready: number; notReady: number };

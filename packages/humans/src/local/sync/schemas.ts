@@ -12,7 +12,6 @@ import type { RuntimeContext } from "../RuntimeContext.js";
 import { AbloValidationError } from "@abloatai/transaction/errors";
 import { syncDeltaWireCoreSchema } from '@abloatai/transaction/observation';
 
-// ─── Server Delta Schema ─────────────────────────────────────────────────────
 
 /**
  * A delta as it arrives in a bootstrap payload.
@@ -58,7 +57,6 @@ const ModelValueSchema = z
     return val;
   });
 
-// ─── Bootstrap Response Schema ───────────────────────────────────────────────
 
 export const BootstrapResponseSchema = z
   .object({
@@ -82,7 +80,6 @@ export const BootstrapResponseSchema = z
 
 export type ValidatedBootstrapResponse = z.infer<typeof BootstrapResponseSchema>;
 
-// ─── Parse Helpers ───────────────────────────────────────────────────────────
 
 /**
  * Validates a raw bootstrap response from the server and returns the typed

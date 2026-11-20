@@ -63,9 +63,9 @@ describe('SyncClient scoped bootstrap apply (hydrate-on-enter)', () => {
 
     expect(stats.added).toBe(1);
     expect(stats.removed).toBe(0); // no ghost sweep
-    expect(titleOf('keep-1')).toBe('collection-A'); // survived
-    expect(titleOf('keep-2')).toBe('collection-B'); // survived
-    expect(titleOf('new-1')).toBe('collection-C'); // hydrated
+    expect(titleOf('keep-1')).toBe('collection-A');
+    expect(titleOf('keep-2')).toBe('collection-B');
+    expect(titleOf('new-1')).toBe('collection-C');
   });
 
   it('FULL apply (scoped unset) DOES ghost-remove — confirms the contrast', () => {
@@ -100,7 +100,7 @@ describe('SyncClient scoped bootstrap apply (hydrate-on-enter)', () => {
 
     expect(stats.updated).toBe(0);
     expect(stats.skipped).toBe(1);
-    expect(titleOf('x')).toBe('live-edit'); // survived
+    expect(titleOf('x')).toBe('live-edit');
   });
 
   it('scoped apply DOES apply a snapshot taken at or beyond the row\'s known position', () => {

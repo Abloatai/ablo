@@ -53,7 +53,6 @@ export {
   RECOVERY_CLASSES,
 } from './errorCodes.js';
 
-// ── AbloError hierarchy — the typed error surface ────────────────────
 
 /**
  * The base class for every error this SDK throws. It carries the fields common
@@ -240,7 +239,6 @@ export class AbloValidationError extends AbloError {
  */
 export class AbloNotFoundError extends AbloError {
   override readonly type = 'AbloNotFoundError' as const;
-  /** The id(s) that matched no row. */
   readonly missingIds: readonly string[];
   constructor(message: string, missingIds: readonly string[], options?: { requestId?: string }) {
     super(message, {
@@ -557,7 +555,6 @@ export function claimedError(
   );
 }
 
-// ── Domain-specific subclasses ───────────────────────────────────────
 
 /**
  * A structured description of the capability that would be needed to satisfy a
@@ -631,7 +628,6 @@ export class CapabilityError extends AbloPermissionError {
   }
 }
 
-// ── Legacy session error (now part of the typed hierarchy) ───────────
 
 /**
  * Thrown when the login session itself is invalid or expired, signaling that the
@@ -723,7 +719,6 @@ export function isAccessCredentialExpiryCloseReason(reason: string): boolean {
   return reason === 'credential_expired' || classifyRecovery(reason) === 'access_credential_expiry';
 }
 
-// ── HTTP → class mapping ──────────────────────────────────────────────
 
 const OptionalWireStringSchema = z.preprocess(
   (value) => (typeof value === 'string' ? value : undefined),
@@ -925,7 +920,6 @@ export function errorFromWire(
     return new AbloConnectionError(message, baseOpts);
   }
 
-  // ── Status-driven dispatch (HTTP parity) ─────────────────────────────
   if (httpStatus === 401) return new AbloAuthenticationError(message, baseOpts);
   if (httpStatus === 403) return new AbloPermissionError(message, baseOpts);
   if (httpStatus === 409) return new AbloIdempotencyError(message, baseOpts);

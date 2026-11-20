@@ -1,8 +1,4 @@
-/**
- * `invalidateCache(modelType)` drops one model type's cached results by name.
- * It used to take a regex pattern, which the store built from a model name, so
- * a name with regex characters reached `new RegExp` unescaped.
- */
+/** `invalidateCache(modelType)` drops one model type's cached results by name. */
 
 import { QueryProcessor } from '../../src/local/query/QueryProcessor';
 

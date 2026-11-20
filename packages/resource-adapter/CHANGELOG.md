@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.9
+
+The adapter uses transaction 0.67.4 for the updated client validation and read-evidence behavior.
+
 ## 0.1.8
 
 ### Patch Changes

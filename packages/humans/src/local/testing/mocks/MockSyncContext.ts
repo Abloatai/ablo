@@ -36,9 +36,7 @@ import { MockNetworkMonitor } from './MockNetworkMonitor.js';
 export interface TestContextOptions {
   /** Replaces the default no-op logger. */
   logger?: Logger;
-  /** Replaces the default no-op observability provider. */
   observability?: ObservabilityProvider;
-  /** Replaces the detector that decides whether an error means the session has expired. */
   sessionErrorDetector?: SessionErrorDetector;
   /** Options forwarded to the {@link MockMutationExecutor} that the context creates. */
   mutationExecutorOptions?: ConstructorParameters<typeof MockMutationExecutor>[0];
@@ -82,7 +80,6 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
   const config: RuntimeConfig = {
     ...emptyConfig,
     ...options.config,
-    // Merge maps/sets properly if overrides provided
     modelCreatePriority:
       options.config?.modelCreatePriority ?? emptyConfig.modelCreatePriority,
   };

@@ -81,11 +81,9 @@ export type InboundFrameContract =
  * an unrecognised type does.
  */
 export const WS_INBOUND_FRAMES = {
-  // ── Keepalive ──────────────────────────────────────────────────────────
   ping: { validation: 'handler', where: 'dispatchWsFrame — ignored, no payload' },
   pong: { validation: 'handler', where: 'dispatchWsFrame — ignored, no payload' },
 
-  // ── Materialisation ────────────────────────────────────────────────────
   delta: {
     validation: 'handler',
     // Not parsed at dispatch because a delta frame carries a batch: each entry
@@ -121,14 +119,12 @@ export const WS_INBOUND_FRAMES = {
     where: 'the reactive engine validates the bootstrap payload as it applies it',
   },
 
-  // ── Commit ─────────────────────────────────────────────────────────────
   mutation_result: {
     validation: 'handler',
     where: 'handleMutationResult — it validates missingIds alongside the payload before this can parse',
     checkedBy: commitReceiptSchema,
   },
 
-  // ── Requests we made ───────────────────────────────────────────────────
   subscription_ack: {
     validation: 'handler',
     // Not parsed at dispatch because the handler must first claim the oldest
@@ -138,7 +134,6 @@ export const WS_INBOUND_FRAMES = {
     checkedBy: subscriptionAckPayloadSchema,
   },
 
-  // ── Coordination ───────────────────────────────────────────────────────
   presence_snapshot: { validation: 'schema', payload: presenceSnapshotSchema },
   presence_patch: { validation: 'schema', payload: presencePatchSchema },
   presence_session: { validation: 'schema', payload: presenceSessionEstablishedSchema },

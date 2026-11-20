@@ -60,7 +60,6 @@ import {
  * JSON shape itself — not to a user's schema. */
 const SCHEMA_JSON_VERSION = 3 as const;
 
-// ── Wire types ──────────────────────────────────────────────────────────────
 
 /** A relation in JSON form. Mirrors the serializable members of {@link RelationDef}. */
 export interface RelationJSON {
@@ -107,7 +106,6 @@ export interface SchemaJSON {
   readonly sessionSettings?: SessionSettings;
 }
 
-// ── Serialize ────────────────────────────────────────────────────────────────
 
 function relationToJSON(rel: RelationDef): RelationJSON {
   const options = rel.options as Record<string, boolean> | undefined;
@@ -182,7 +180,6 @@ export function serializeSchema(schema: Schema): string {
   return JSON.stringify(toSchemaJSON(schema));
 }
 
-// ── Parse ──────────────────────────────────────────────────────────────────
 
 /** Rebuild a Zod validator for a field from its metadata. Permissive by
  * design — the server does no field-shape validation; this exists so a
@@ -326,7 +323,6 @@ export function parseSchema(json: string): Schema {
   return fromSchemaJSON(parsed);
 }
 
-// ── Hash ─────────────────────────────────────────────────────────────────────
 
 /**
  * Stable content hash of a `Schema`'s JSON form. FNV-1a over a canonical

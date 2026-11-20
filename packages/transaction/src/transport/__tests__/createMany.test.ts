@@ -13,7 +13,6 @@
  */
 import { Ablo } from '../../client/ablo.js';
 import { defineSchema, model, z } from '../../schema/index.js';
-import { modelReadBatchRequestSchema } from '../../wire/modelResponses.js';
 import {
   confirmedCommitReceiptResponse,
   modelReadResponse,
@@ -47,6 +46,7 @@ function clientEchoingRows(
     apiKey: 'sk_test_create_many',
     baseURL: 'https://api.example.test',
     transport: 'http',
+    ...(opts?.unreadable ? { timeoutMs: 50 } : {}),
     fetch: (input, init) => {
       const url =
         typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -88,14 +88,6 @@ function clientEchoingRows(
             }),
           ),
         );
-      }
-      if (method === 'POST' && path.endsWith('/v1/reads')) {
-        const { reads } = modelReadBatchRequestSchema.parse(body);
-        return Promise.resolve(jsonResponse({ results: reads.map(read => {
-          if (read.kind !== 'read') throw new Error('Replay requires point reads');
-          return { result: modelReadResponse({ model: read.model, id: read.id,
-            data: opts?.unreadable ? null : stored.get(read.id) ?? null, stamp: 10 }) };
-        }) }));
       }
       if (method === 'GET' && path.includes('/v1/models/items/')) {
         const id = decodeURIComponent(path.slice(path.lastIndexOf('/') + 1));
@@ -189,9 +181,9 @@ describe('create with a list of rows', () => {
     });
 
     expect(rows.map((row) => row.title)).toEqual(['first', 'second']);
-    const recoveryReads = calls.filter((call) => call.path.endsWith('/v1/reads'));
-    expect(recoveryReads).toHaveLength(1);
-    expect(modelReadBatchRequestSchema.parse(recoveryReads[0]?.body).reads).toHaveLength(2);
+    const recoveryReads = calls.filter((call) => call.method === 'GET' && call.path.includes('/v1/models/items/'));
+    expect(recoveryReads).toHaveLength(2);
+    expect(new Set(recoveryReads.map(call => call.path)).size).toBe(2);
   });
 
   it('refuses a confirmation that cannot account for every row', async () => {
@@ -210,6 +202,6 @@ describe('create with a list of rows', () => {
         data: [{ title: 'first' }, { title: 'second' }],
         idempotencyKey: 'seed-unreadable',
       }),
-    ).rejects.toMatchObject({ code: 'commit_no_result' });
+    ).rejects.toMatchObject({ code: 'replication_lag_timeout' });
   });
 });

@@ -158,7 +158,7 @@ export async function inspectDoctor(options: InspectDoctorOptions = {}): Promise
       label: 'key',
       state: 'fail',
       detail: 'no API key resolved',
-      fix: 'run `ablo login`, or set ABLO_API_KEY',
+      fix: 'run `ablo dev`, or set ABLO_API_KEY',
     });
   }
 
@@ -400,7 +400,6 @@ export async function inspectDoctor(options: InspectDoctorOptions = {}): Promise
   };
 }
 
-/** Render a previously collected report. Kept separate for setup and CI consumers. */
 export function renderDoctorReport(report: DoctorReport): void {
   console.log(`\n  ${brand('ablo')} ${pc.dim('doctor')}\n`);
   for (const check of report.checks) render(check);

@@ -78,7 +78,6 @@ import type { QueuedMutation } from './transactions/mutations/MutationQueue.js';
 import type { MutationOrigin } from './transactions/mutations/commitPayload.js';
 import type { CommitLatencySample } from './transactions/mutations/commitLatency.js';
 
-// ── Exported types ──────────────────────────────────────────────────────────
 
 /** Constructor type for Model subclasses (accepts abstract classes) */
 export type ModelConstructor<T extends Model> = abstract new (...args: never[]) => T;
@@ -91,7 +90,6 @@ export type ConcreteModelConstructor<T extends Model> = new (data?: any) => T;
 // BaseSyncedStore and SyncClient, and is re-exported here.
 export type { ModelData } from '@abloatai/transaction/types/modelData';
 
-/** Query result interface */
 export interface QueryResult<T extends Model> {
   data: T[];
   total: number;
@@ -120,20 +118,14 @@ export interface SyncedStoreConfig {
   collaborationEvents?: readonly string[];
 
   /**
-   * Declarative enrichment plan consumed by `enrichRelations`. Replaces
-   * the subclass override of `enrichRelations` for per-model parent
-   * attachment. Merged with schema-derived entries (relations marked
-   * `{ enrich: true }` on `belongsTo`).
+   * Declarative enrichment plan consumed by `enrichRelations`. Merged with
+   * schema-derived entries (relations marked `{ enrich: true }` on `belongsTo`).
    */
   enrichmentPlan?: readonly EnrichmentPlanEntry[];
 
   /**
-   * Foreign-key indexes to register on the InstanceCache at construction
-   * time. Replaces the subclass override of `registerForeignKeys` for
-   * per-model FK registration. Merged with schema-derived entries
-   * (relations marked `{ index: true }` on `belongsTo`). Both sets
-   * are registered before the legacy `registerForeignKeys()` hook
-   * fires, so subclasses can still add more on top.
+   * Foreign-key indexes registered at construction, merged with schema-derived
+   * entries (`{ index: true }` on `belongsTo`) before `registerForeignKeys()` runs.
    */
   foreignKeyIndexes?: readonly ForeignKeyIndexSpec[];
 }
@@ -141,7 +133,6 @@ export interface SyncedStoreConfig {
 // SyncStoreContract which embeds it, and is re-exported here.
 export type { SyncStatus } from './storeContract.js';
 
-/** User context for initialization */
 export interface UserContext {
   userId: string;
   organizationId: string;
@@ -186,7 +177,6 @@ export interface UserContext {
   bootstrapMode?: 'full' | 'none';
 }
 
-/** Smart sync options */
 export interface SmartSyncOptions {
   maxDeltasBeforeBootstrap?: number;
   maxBootstrapSize?: number;
@@ -246,7 +236,6 @@ export type {
 // re-exported here.
 export { deriveSyncPlanFromSchema } from './sync/syncPlan.js';
 
-// ── Base class ──────────────────────────────────────────────────────────────
 
 /**
  * The abstract base class that application-specific sync stores extend. It
@@ -475,7 +464,6 @@ export class BaseSyncedStore<
     ).then(() => undefined);
   }
 
-  // ── Internal helpers ──
   protected readonly queryProcessor: QueryProcessor;
   /**
    * Runtime behavior flags only — the schema/config arrays
@@ -497,13 +485,6 @@ export class BaseSyncedStore<
   protected userContext: UserContext | null = null;
 
   // ── Smart sync ──
-  /**
-   * Declarative enrichment plan: "for model X, when a delta arrives,
-   * read data[foreignKey] and attach the matching parent from the pool
-   * as data[relationKey]." Merged from schema-derived + config at
-   * construction time. Replaces the `enrichRelations` subclass override
-   * pattern.
-   */
   protected enrichmentPlan: readonly EnrichmentPlanEntry[] = [];
   protected smartSyncOptions: Required<SmartSyncOptions>;
   protected pendingDeltas: SyncDelta[] = [];
@@ -519,16 +500,13 @@ export class BaseSyncedStore<
     return this.syncClient.position.applied;
   }
 
-  // ── Delta queuing during bootstrap ──
   protected bootstrapDeltaQueue: SyncDelta[] | null = null;
   protected activeBootstrapCount = 0;
   /** The live deadline for the bootstrap attempt in flight, if any. */
   private bootstrapDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // ── Delete tracking ──
   protected pendingDeletes = new Set<string>();
 
-  // ── Model type hydration ──
   protected modelTypesHydrated = new Set<string>();
   protected modelTypeHydrationInFlight = new Map<string, Promise<void>>();
 
@@ -619,7 +597,6 @@ export class BaseSyncedStore<
       }),
     );
 
-    // Set this store as the global Model store
     Model.setStore(this as Parameters<typeof Model.setStore>[0]);
 
     // ── Schema-derived sync plan ───────────────────────────────────────
@@ -653,17 +630,14 @@ export class BaseSyncedStore<
       ...(config.enrichmentPlan ?? []),
     ];
 
-    // Set dependencies for LazyReferenceCollection
     LazyReferenceCollection.setDependencies(this.database, this.objectPool);
 
-    // Apply config defaults
     this.config = {
       enableOffline: config.enableOffline ?? true,
       enableCache: config.enableCache ?? true,
       enableTelemetry: config.enableTelemetry ?? false,
     };
 
-    // Smart sync options
     this.smartSyncOptions = {
       maxDeltasBeforeBootstrap: 1000,
       maxBootstrapSize: 10 * 1024 * 1024,
@@ -689,13 +663,10 @@ export class BaseSyncedStore<
       applySliceDeltas: benchApplySliceOverride() ?? 600,
     };
 
-    // Create internal helpers
     this.queryProcessor = new QueryProcessor({
       enableCache: this.config.enableCache,
     });
 
-    // Auto-invalidate query cache when SyncClient modifies the pool.
-    // Replaces all manual queryProcessor.invalidateCache() calls.
     this.syncClient.on('models:changed', (modelNames: Set<string>) => {
       for (const name of modelNames) {
         this.queryProcessor.invalidateCache(name);
@@ -721,7 +692,6 @@ export class BaseSyncedStore<
     });
   }
 
-  // ── Protected extension points ────────────────────────────────────────────
 
   /**
    * Register foreign-key indexes for constant-time lookups.
@@ -761,17 +731,14 @@ export class BaseSyncedStore<
     return data;
   }
 
-  /** Check if a model name represents a custom/dynamic entity type. */
   protected isCustomEntity(modelName: string): boolean {
     return !this.objectPool.registry.getModelByName(modelName);
   }
 
-  /** Create a custom entity instance from delta data. Override for domain-specific custom entities. */
   protected createCustomEntity(_modelName: string, _modelId: string, _data: Record<string, unknown>): Model | null {
     return null;
   }
 
-  /** Called before save for domain-specific validation/self-healing. */
   protected beforeSave(_model: Model): void {}
 
   /** Connection lifecycle event callback — set by subclass to wire connection state machine. */
@@ -900,7 +867,6 @@ export class BaseSyncedStore<
     });
   }
 
-  // ── Bootstrap + Retry ────────────────────────────────────────────────────
 
   /**
    * Execute a bootstrap function with timeout protection and automatic retry.
@@ -1047,7 +1013,6 @@ export class BaseSyncedStore<
     }
   }
 
-  /** Reset bootstrap-related state for a clean retry */
   protected resetBootstrapState(): void {
     try {
       this.objectPool.clear({ preserveObserved: true });
@@ -1065,9 +1030,7 @@ export class BaseSyncedStore<
     }
   }
 
-  // ── Reconnection ─────────────────────────────────────────────────────────
 
-  /** Perform reconnect: bootstrap + WS reconnect. Returns outcome for state machine. */
   async performReconnect(): Promise<'success' | 'session_error' | 'network_error'> {
     const thisStore = this;
     return runReconnect({
@@ -1221,7 +1184,6 @@ export class BaseSyncedStore<
     return groupChange.resolveSyncGroups(context);
   }
 
-  /** Check if sync groups shrank since last session — force full bootstrap if so */
   protected async checkSyncGroupShrinkage(): Promise<void> {
     return groupChange.checkSyncGroupShrinkage(this.groupChangeContext());
   }
@@ -1261,7 +1223,6 @@ export class BaseSyncedStore<
     return bootstrapApply.applyBootstrapToPool(this.poolContext(), bootstrapResult, protectedIds);
   }
 
-  // ── Initialize + Lifecycle ───────────────────────────────────────────────
 
   /**
    * Initialize the sync engine with user context.
@@ -1410,12 +1371,7 @@ export class BaseSyncedStore<
     await this.database.purgePersistence();
   }
 
-  // ── WebSocket Setup ───────────────────────────────────────────────────────
 
-  /**
-   * Create WebSocket connection and wire all event handlers.
-   * Handles: deltas, batches, presence, bootstrap_required, errors, reconnection.
-   */
   /**
    * Block until the WebSocket reports a `connected` event, or until
    * `timeoutMs` elapses (returns false on timeout, true on connect).
@@ -1613,7 +1569,6 @@ export class BaseSyncedStore<
     return deltaPipeline.deduplicateDeltas(deltas);
   }
 
-  /** Process incoming delta with smart batching */
   protected processDeltaWithBatching(delta: SyncDelta): void {
     if (!this.enqueueDelta(delta)) return;
     this.scheduleDeltaFlush();
@@ -1718,7 +1673,6 @@ export class BaseSyncedStore<
     return false;
   }
 
-  /** Validate model against schema before save */
   protected validateModel(model: Model): void {
     validateModelWrite(model, this.modelRegistry);
   }
@@ -1766,7 +1720,6 @@ export class BaseSyncedStore<
     return this.syncClient.inverseModelOperation(kind, target, editId);
   }
 
-  /** Save with an atomic server mutation (e.g., createSectionWithBlocks) */
   async saveWithAtomicMutation(
     model: Model,
     mutation: (gql: unknown) => Promise<unknown>
@@ -1775,7 +1728,6 @@ export class BaseSyncedStore<
     await mutation(this.syncClient.gql);
   }
 
-  /** Delete a model. Accepts schema-inferred entity shapes (see `save`). */
   async delete<T extends { id: string }>(entity: T, origin?: MutationOrigin): Promise<void> {
     const model = rowAsModel(entity);
     this.pendingDeletes.add(model.id);
@@ -1808,7 +1760,6 @@ export class BaseSyncedStore<
     return this.objectPool.get(id);
   }
 
-  /** Find any entity by ID regardless of type */
   findAnyById(id: string): Model | undefined {
     return this.objectPool.get(id);
   }
@@ -1887,7 +1838,6 @@ export class BaseSyncedStore<
     return this.objectPool.getByType(modelClass, scope ?? ModelScope.live);
   }
 
-  /** Error handler for fire-and-forget flushPendingDeltas calls */
   protected handleFlushError = (error: unknown): void => {
     this.runtime.observability.captureMutationFailure({
       context: 'flush-pending-deltas',
@@ -1900,7 +1850,6 @@ export class BaseSyncedStore<
     });
   };
 
-  /** Process a single delta (used for immediate DELETE processing). Override for domain-specific handling. */
   protected async processDelta(delta: SyncDelta): Promise<void> {
     const dbResult = await this.database.processDelta({
       syncId: delta.id,
@@ -1910,7 +1859,6 @@ export class BaseSyncedStore<
       data: typeof delta.data === 'string' ? JSON.parse(delta.data) : delta.data,
     });
 
-    // Track pending deletes for query filtering
     if (dbResult.action === 'remove') {
       this.pendingDeletes.add(dbResult.modelId);
     }
@@ -1926,17 +1874,14 @@ export class BaseSyncedStore<
     this.syncClient.position.advancePersisted(delta.id);
   }
 
-  /** Handle bootstrap_required event */
   protected handleBootstrapRequired(_hint: BootstrapHint): void {
     // Subclass implements — triggers background bootstrap
   }
 
-  /** Handle bootstrap_data event. Override in subclass. */
   protected handleBootstrapData(_data: BootstrapDataEvent): void {
     this.updateSyncStatus({ state: 'syncing' });
   }
 
-  // ── Pending changes tracking ─────────────────────────────────────────────
 
   protected incrementPendingChanges(): void {
     runInAction(() => { this.syncStatus.pendingChanges++; });
@@ -1948,7 +1893,6 @@ export class BaseSyncedStore<
     });
   }
 
-  // ── Status helpers ───────────────────────────────────────────────────────
 
   protected updateSyncStatus(updates: Partial<SyncStatus>): void {
     runInAction(() => {
@@ -1956,7 +1900,6 @@ export class BaseSyncedStore<
     });
   }
 
-  // ── Accessors ─────────────────────────────────────────────────────────────
 
   get pool(): InstanceCache {
     return this.objectPool;
@@ -1966,8 +1909,6 @@ export class BaseSyncedStore<
     return this.lastAckedId;
   }
 
-  // ── Status convenience getters ──────────────────────────────────────────
-  // Thin wrappers over `syncStatus` for consumer ergonomics.
 
   get isReady(): boolean {
     // Ready if: fully synced (idle + 100%) OR local data loaded (dataReady + syncing in background)
@@ -2020,7 +1961,6 @@ export class BaseSyncedStore<
     return countModels(this.objectPool, modelClass, this.pendingDeletes, predicate);
   }
 
-  /** Get entities by foreign key (used by Model subclasses via Model.store) */
   getByForeignKey(modelName: string, foreignKey: string, id: string): Model[] {
     return this.objectPool.getByForeignKey(modelName, foreignKey, id);
   }

@@ -61,7 +61,7 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('collection:a'); // call #1
+    await m.enter('collection:a');
     await m.leave('collection:a'); // still in effective set (warm) → no new call
 
     expect(transport.calls).toHaveLength(1);
@@ -73,7 +73,7 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('collection:a'); // call #1
+    await m.enter('collection:a');
     await m.leave('collection:a'); // warm until t=2_000
 
     clock.t = 2_001; // past the warm TTL
@@ -91,8 +91,8 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('collection:a'); // call #1
-    await m.leave('collection:a'); // warm
+    await m.enter('collection:a');
+    await m.leave('collection:a');
     clock.t = 1_500; // still inside the window
     await m.enter('collection:a'); // back in view — effective set unchanged
 
@@ -110,7 +110,7 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('collection:a'); // call #1
+    await m.enter('collection:a');
     await m.pin('collection:a'); // prominence (active claim) — no change to set
     await m.leave('collection:a'); // pinned → not warmed, stays subscribed
 
@@ -201,8 +201,8 @@ describe('SubscriptionManager', () => {
     await m.enter('collection:b');
     await m.enter('collection:c');
 
-    await m.leave('collection:a'); // warm {a}
-    await m.leave('collection:b'); // warm {a,b}
+    await m.leave('collection:a');
+    await m.leave('collection:b');
     await m.leave('collection:c'); // warm {a,b,c} → over cap → evict a
 
     // collection:a was dropped immediately (not waiting for its TTL); b and c stay.
@@ -224,7 +224,7 @@ describe('SubscriptionManager', () => {
 
     await m.enter('collection:a');
     await m.enter('collection:b');
-    await m.leave('collection:a'); // warm {a}
+    await m.leave('collection:a');
     await m.leave('collection:b'); // warm {a,b}
 
     // Touch a: re-enter then re-leave → a becomes most-recently-warmed.

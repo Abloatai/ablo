@@ -14,6 +14,8 @@
  * TIER 2 (opt-in, networked): ABLO_QUICKSTART_LIVE=1 with ABLO_API_KEY (or a
  *   stored login) additionally runs the real `push` push and
  *   asserts `.env.local` + `.gitignore` wiring.
+ * TIER 3 (opt-in, local only): ABLO_QUICKSTART_WRITE=1 also proves the
+ *   packed public SDK creates, reads and updates against the loopback fixture.
  *
  * Run: npm run test:quickstart        (tier 1)
  *      ABLO_QUICKSTART_LIVE=1 npm run test:quickstart
@@ -30,6 +32,11 @@ const monorepoRoot = dirname(dirname(pkgRoot));
 const sdkRoot = join(monorepoRoot, 'packages', 'ablo');
 const transactionRoot = join(monorepoRoot, 'packages', 'transaction');
 const humansRoot = join(monorepoRoot, 'packages', 'humans');
+if (process.env.ABLO_QUICKSTART_WRITE === '1' && (
+  process.env.ABLO_QUICKSTART_LIVE !== '1' ||
+  !['127.0.0.1', 'localhost', '[::1]'].includes(new URL(process.env.ABLO_API_URL ?? 'https://api.abloatai.com').hostname)
+)) throw new Error('ABLO_QUICKSTART_WRITE requires ABLO_QUICKSTART_LIVE=1 and an explicit loopback ABLO_API_URL.');
+
 const failures = [];
 let step = '';
 
@@ -50,7 +57,6 @@ function expect(cond, message) {
   if (!cond) throw new Error(message);
 }
 
-// ── Arrange: pack the real artifact into a fresh project ────────────────────
 const work = mkdtempSync(join(tmpdir(), 'ablo-quickstart-'));
 const proj = join(work, 'app');
 const emptyConfigDir = join(work, 'ablo-config'); // isolate from ~/.config/ablo
@@ -121,7 +127,6 @@ const keylessEnv = {
 };
 delete keylessEnv.ABLO_API_KEY;
 
-// ── Tier 1: the CLI must WORK in a project that has nothing else ────────────
 check('`ablo` boots in a bare project (no drizzle/prisma/key installed)', () => {
   const out = run('node', [cli], { cwd: proj, env: keylessEnv });
   expect(/init|dev|login/.test(out), `help output unrecognizable:\n${out.slice(0, 400)}`);
@@ -168,7 +173,6 @@ check('`ablo status` runs keyless without crashing', () => {
   expect(/Not logged in|mode/.test(out), `status output unrecognizable:\n${out.slice(0, 300)}`);
 });
 
-// ── Tier 2 (opt-in): the real push against the hosted sandbox ───────────────
 if (process.env.ABLO_QUICKSTART_LIVE === '1') {
   const liveEnv = { ...process.env }; // real config dir / ABLO_API_KEY
   check('LIVE: `ablo push` pushes the schema', () => {
@@ -182,6 +186,27 @@ if (process.env.ABLO_QUICKSTART_LIVE === '1') {
       `push did not succeed:\n${out.slice(-600)}`,
     );
   });
+  if (process.env.ABLO_QUICKSTART_WRITE === '1') {
+    check('LIVE: packed public SDK creates, reads and updates the generated model', () => {
+      const output = run('node', ['--input-type=module', '-e', `
+        import Ablo from '@abloatai/ablo';
+        import { schema } from './ablo/schema.ts';
+        const client = Ablo({ schema, apiKey: process.env.ABLO_API_KEY,
+          baseURL: process.env.ABLO_API_URL, transport: 'http' });
+        try {
+          await client.ready();
+          const created = await client.records.create({ data: { title: 'Public quickstart canary', status: 'todo', priority: 0 } });
+          const read = await client.records.read({ id: created.id });
+          if (read?.title !== 'Public quickstart canary') throw new Error('Create was not independently readable');
+          await client.records.update({ id: created.id, reads: [read], data: { status: 'done' } });
+          const updated = await client.records.read({ id: created.id });
+          if (updated?.status !== 'done') throw new Error('Update was not independently readable');
+          console.log('public-sdk-write-readback: passed');
+        } finally { await client.dispose(); }
+      `], { cwd: proj, env: liveEnv });
+      expect(output.includes('public-sdk-write-readback: passed'), 'Public SDK write/readback did not finish');
+    });
+  } else console.log('  ○ packed SDK write/readback not checked — local fixture opt-in required');
   check('LIVE: ABLO_API_KEY landed in .env.local and is gitignored', () => {
     if (process.env.ABLO_API_KEY) return; // env key → dev intentionally skips the file
     const env = readFileSync(join(proj, '.env.local'), 'utf8');
@@ -193,10 +218,9 @@ if (process.env.ABLO_QUICKSTART_LIVE === '1') {
   console.log('  ○ tier 2 (live push) skipped — set ABLO_QUICKSTART_LIVE=1 to run it');
 }
 
-// ── Report ───────────────────────────────────────────────────────────────────
 rmSync(work, { recursive: true, force: true });
 if (failures.length > 0) {
   console.error(`\n${failures.length} quickstart check(s) FAILED.`);
   process.exit(1);
 }
-console.log('\nquickstart loop is green.');
+console.log('\nSelected quickstart checks passed; skipped layers are not acceptance evidence.');

@@ -548,7 +548,6 @@ describe('dataSource', () => {
   });
 
   it('omitting resolveScopes leaves all operations allowed', async () => {
-    // No resolveScopes set: both list and commit succeed without 403.
     const handler = dataSource({
       schema,
       apiKey: TEST_API_KEY,

@@ -58,9 +58,6 @@ describe('MutationQueue', () => {
     cleanup();
   });
 
-  // ─────────────────────────────────────────────
-  // Transaction creation
-  // ─────────────────────────────────────────────
 
   describe('create()', () => {
     it('should create a transaction and emit transaction:created', async () => {
@@ -213,16 +210,12 @@ describe('MutationQueue', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // Microtask batching (LINEAR pattern)
-  // ─────────────────────────────────────────────
 
   describe('microtask batching', () => {
     it('should batch transactions created in same event loop tick', async () => {
       const t1 = createItemFixture();
       const t2 = createWorkspaceFixture();
 
-      // Create both synchronously — they should share a batchId
       const tx1Promise = queue.create(t1, TEST_USER_CONTEXT);
       const tx2Promise = queue.create(t2, TEST_USER_CONTEXT);
 
@@ -252,9 +245,6 @@ describe('MutationQueue', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // FK-ordered execution within batch
-  // ─────────────────────────────────────────────
 
   describe('FK-ordered execution', () => {
     it('should sort execution queue by priority score (parents before children)', async () => {
@@ -274,7 +264,6 @@ describe('MutationQueue', () => {
       const entry = createEntryFixture({ collectionId: collection.id });
       const layer = createEntryLayerFixture({ entryId: entry.id });
 
-      // Create in reverse order — FK ordering should fix this
       await localQueue.create(layer, TEST_USER_CONTEXT);
       await localQueue.create(entry, TEST_USER_CONTEXT);
       await localQueue.create(collection, TEST_USER_CONTEXT);
@@ -363,9 +352,6 @@ describe('MutationQueue', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // Delta confirmation (LINEAR pattern)
-  // ─────────────────────────────────────────────
 
   describe('onDeltaReceived()', () => {
     it('should track lastSeenSyncId', () => {
@@ -384,7 +370,6 @@ describe('MutationQueue', () => {
       const item = createItemFixture();
       await queue.create(item, TEST_USER_CONTEXT);
 
-      // Wait for processing
       await flushMicrotasks();
       await new Promise((r) => setTimeout(r, 50));
 
@@ -397,16 +382,12 @@ describe('MutationQueue', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // waitForConfirmation
-  // ─────────────────────────────────────────────
 
   describe('waitForConfirmation()', () => {
     it('should resolve immediately if transaction already completed', async () => {
       const item = createItemFixture();
       const tx = await queue.create(item, TEST_USER_CONTEXT);
 
-      // Process the batch
       await flushMicrotasks();
       await new Promise((r) => setTimeout(r, 50));
 
@@ -418,9 +399,6 @@ describe('MutationQueue', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // hasClientMutationId
-  // ─────────────────────────────────────────────
 
   describe('hasClientMutationId()', () => {
     it('should return true for existing transaction ID', async () => {

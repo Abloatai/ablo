@@ -116,7 +116,6 @@ export interface ResolveTargetOptions {
   readOnlyConfig?: boolean;
 }
 
-/** Slug used to describe "the organization-default project" everywhere. */
 const DEFAULT_PROJECT_SLUG = 'default';
 
 /**

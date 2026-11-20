@@ -117,7 +117,6 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
   };
 }
 
-/** Import the generated endpoint and return its ordinary Fetch handler. */
 export async function loadLocalSourceHandler(
   sourcePath: string,
 ): Promise<(request: Request) => Promise<Response>> {

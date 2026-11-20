@@ -26,9 +26,6 @@ const ok = (label: string): void => {
   console.log(`  ✓ ${label}`);
 };
 
-// One schema. Fields diverge from columns three ways: default rule
-// (operatorId→operator_id), explicit override (legacyName→display_label),
-// base tenancy column (organizationId→organization_id).
 const schema = defineSchema({
   station: model({
     title: field.string(),

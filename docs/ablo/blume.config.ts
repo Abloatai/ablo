@@ -45,15 +45,15 @@ export default defineConfig({
   },
 
   theme: {
-    accent: "#9a241c",
+    accent: { light: "oklch(0.708 0 0)", dark: "oklch(0.556 0 0)" },
     radius: "sm",
     mode: "light",
-    background: { light: "#f4e18c", dark: "#9a241c" },
+    background: { light: "oklch(1 0 0)", dark: "oklch(0.145 0 0)" },
   },
 
   markdown: {
     codeBlocks: {
-      theme: { light: "github-light", dark: "github-dark" },
+      theme: { light: "github-dark", dark: "github-dark" },
     },
   },
 

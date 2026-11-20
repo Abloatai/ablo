@@ -4,8 +4,10 @@ The required `Change evidence` status belongs to the exact PR head. The small
 workflow reads GitHub metadata using trusted default-branch code; it does not
 execute PR code or start full CI. Full CI remains manually dispatched.
 
-A merge needs independent approval and passing checks, or one complete exception
-comment from a current repository writer. For a sole-reviewer merge, record the
+A merge needs independent approval on the current head with no failing checks,
+or one complete exception comment from a current repository writer. Because full
+CI is manually dispatched, an approved head with no hosted checks passes and the
+status says that none ran; a failed check always needs the check exception. For a sole-reviewer merge, record the
 actual reason, check results and a permanent evidence link before merging:
 
 ```text
@@ -22,8 +24,9 @@ production release. A new push invalidates the old comment. Production retains
 its existing release checks and approval requirements. A generic standing
 exception is insufficient. Do not put credentials or private logs in comments.
 
-Comment edits and deletions, PR pushes, and manual CI completion re-evaluate the
-status. After an independent review, manually refresh the workflow if needed.
+PR pushes, PR description edits and manual CI completion re-evaluate the
+status. After adding or changing the exception comment, or after an independent
+review, refresh it by dispatching the workflow for that pull request.
 API errors leave the status pending. Inspect without writing a status:
 
 ```sh

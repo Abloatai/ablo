@@ -143,7 +143,6 @@ describe('createPushQueue', () => {
     const abort = new AbortController();
     await runUntilQuiescent(queue, abort, 30);
 
-    // Only one attempt — 400 is not retried.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const dlq = await storage.listDlq();
     expect(dlq).toHaveLength(1);

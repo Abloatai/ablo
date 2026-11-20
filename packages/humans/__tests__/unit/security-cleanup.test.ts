@@ -106,7 +106,6 @@ describe('Security: Data cleanup on access revocation', () => {
       const dbName = 'test-security-cleanup';
       const storeName = 'models';
 
-      // Create a database with data
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open(dbName, 1);
         request.onupgradeneeded = () => {
@@ -116,7 +115,6 @@ describe('Security: Data cleanup on access revocation', () => {
         request.onerror = () => { reject(request.error); };
       });
 
-      // Add sensitive data
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(storeName, 'readwrite');
         const store = tx.objectStore(storeName);
@@ -135,7 +133,6 @@ describe('Security: Data cleanup on access revocation', () => {
       });
       expect(countBefore).toBe(2);
 
-      // Clear all data (simulating session expiry cleanup)
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(storeName, 'readwrite');
         tx.objectStore(storeName).clear();
@@ -159,7 +156,6 @@ describe('Security: Data cleanup on access revocation', () => {
       // Verify the nuclear cleanup option works
       const dbName = 'test-security-delete';
 
-      // Create database
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open(dbName, 1);
         request.onupgradeneeded = () => {
@@ -169,7 +165,6 @@ describe('Security: Data cleanup on access revocation', () => {
         request.onerror = () => { reject(request.error); };
       });
 
-      // Add data
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction('data', 'readwrite');
         tx.objectStore('data').put({ id: 'secret', content: 'classified' });
@@ -179,7 +174,6 @@ describe('Security: Data cleanup on access revocation', () => {
 
       db.close();
 
-      // Delete the entire database
       await new Promise<void>((resolve, reject) => {
         const request = indexedDB.deleteDatabase(dbName);
         request.onsuccess = () => { resolve(); };

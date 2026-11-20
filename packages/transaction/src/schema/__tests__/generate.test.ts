@@ -6,7 +6,6 @@
 import { generateTypes } from '../generate.js';
 import { defineSchema, model, field, serializeSchema, type SchemaJSON } from '../index.js';
 
-/** Build a real SchemaJSON via the DSL (exercises the same path as a push). */
 function jsonOf(schema: ReturnType<typeof defineSchema>): SchemaJSON {
   return JSON.parse(serializeSchema(schema)) as SchemaJSON;
 }

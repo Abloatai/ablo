@@ -97,7 +97,6 @@ interface RegistryConfig {
  */
 let _activeRegistry: ModelRegistry | null = null;
 
-/** Set the active ModelRegistry instance (called by createSyncEngine) */
 export function setActiveRegistry(registry: ModelRegistry): void {
   _activeRegistry = registry;
 }
@@ -171,7 +170,6 @@ export class ModelRegistry {
       );
     }
 
-    // Check for required methods
     const required = ['updateFromData', 'toJSON', 'getModelName'];
     for (const method of required) {
       if (typeof (prototype as Record<string, unknown>)[method] !== 'function') {
@@ -185,9 +183,7 @@ export class ModelRegistry {
     // Only check core compatibility, not all metadata fields
     return (
       existing.type === incoming.type &&
-      // For indexed, treat undefined as false for comparison
       (existing.indexed ?? false) === (incoming.indexed ?? false) &&
-      // For optional, treat undefined as false for comparison
       (existing.optional ?? false) === (incoming.optional ?? false)
     );
   }
@@ -197,7 +193,6 @@ export class ModelRegistry {
     propertyName: string,
     metadata: ExtendedReferenceMetadata
   ): void {
-    // Get target model name
     let targetName: string;
     try {
       targetName = metadata.referencedModel()?.name || 'Unknown';
@@ -246,7 +241,6 @@ export class ModelRegistry {
     propertyName: string,
     metadata: ExtendedReferenceMetadata
   ): void {
-    // Store reference
     let refs = this.references.get(modelName);
     if (!refs) {
       refs = new Map();
@@ -264,7 +258,6 @@ export class ModelRegistry {
       });
     }
 
-    // Register model property
     this.registerProperty(modelName, propertyName, {
       type: PropertyType.referenceModel,
       optional: metadata.nullable || false,
@@ -273,20 +266,15 @@ export class ModelRegistry {
     this.schemaHash = undefined;
   }
 
-  /**
-   * Register a model with validation
-   */
   registerModel(
     name: string,
     constructor: ModelClassInput,
     metadata: ModelMetadata = { loadStrategy: LoadStrategy.instant }
   ): void {
-    // Validate
     if (this.config.validateOnRegister) {
       this.validateModelConstructor(name, constructor);
     }
 
-    // Check for duplicate
     if (this.models.has(name)) {
       this.runtime.logger.debug('Model already registered, skipping', name);
       return;
@@ -305,7 +293,6 @@ export class ModelRegistry {
     // Record the reverse mapping from constructor to model name
     this.constructorToModelName.set(constructor, name);
 
-    // Initialize property maps
     if (!this.properties.has(name)) {
       this.properties.set(name, new Map());
     }
@@ -313,10 +300,8 @@ export class ModelRegistry {
       this.references.set(name, new Map());
     }
 
-    // Mark as registered
     this.registeredModels.add(name);
 
-    // Resolve pending references to this model
     this.resolvePendingReferences(name);
 
     // Invalidate schema hash
@@ -325,11 +310,7 @@ export class ModelRegistry {
     this.runtime.logger.debug('Model registered', name, metadata);
   }
 
-  /**
-   * Register property with validation
-   */
   registerProperty(modelName: string, propertyName: string, metadata: PropertyMetadata): void {
-    // Validate model exists
     if (!this.models.has(modelName) && this.config.validateOnRegister) {
       throw new AbloValidationError(
         `Cannot register property for unknown model: ${modelName}`,
@@ -337,14 +318,12 @@ export class ModelRegistry {
       );
     }
 
-    // Get or create property map
     let props = this.properties.get(modelName);
     if (!props) {
       props = new Map();
       this.properties.set(modelName, props);
     }
 
-    // Check for conflicts
     const existing = props.get(propertyName);
     if (existing) {
       if (this.arePropertiesCompatible(existing, metadata)) {
@@ -391,7 +370,6 @@ export class ModelRegistry {
       );
     }
 
-    // Validate target exists or defer
     if (!this.models.has(targetModelName)) {
       if (this.config.allowLateReferences) {
         this.addPendingReference(modelName, propertyName, metadata);
@@ -403,7 +381,6 @@ export class ModelRegistry {
       );
     }
 
-    // Complete registration
     this.completeReferenceRegistration(modelName, propertyName, metadata);
   }
 
@@ -414,11 +391,8 @@ export class ModelRegistry {
    * transactions for every child model that declares a back-reference to that
    * parent.
    *
-   * @param childModelName - The model that holds a foreign key to the parent (e.g., 'Section')
-   * @param metadata - The back-reference configuration
    */
   registerBackReference(childModelName: string, metadata: BackReferenceMetadata): void {
-    // Add to instance map
     let refs = this.backReferences.get(childModelName);
     if (!refs) {
       refs = [];
@@ -441,7 +415,6 @@ export class ModelRegistry {
     });
   }
 
-  /** Get all models with specific load strategy. */
   getModelsByLoadStrategy(strategy: LoadStrategy): string[] {
     const models: string[] = [];
     for (const [modelName, metadata] of this.modelMetadata) {
@@ -457,44 +430,34 @@ export class ModelRegistry {
     return this.constructorToModelName.get(constructor);
   }
 
-  /** Get properties for a model. */
   getPropertiesForModel(modelName: string): Map<string, PropertyMetadata> {
     return this.properties.get(modelName) || new Map();
   }
 
-  /**
-   * Get all registered model names for this instance
-   */
   getRegisteredModelNames(): string[] {
     return Array.from(this.models.keys());
   }
 
-  /** Get model constructor by name */
   getModelByName(name: string): RegisteredModelClass | undefined {
     return this.models.get(name);
   }
 
-  /** Check if model is registered */
   hasModel(name: string): boolean {
     return this.models.has(name);
   }
 
-  /** Get model metadata by name */
   getMetadata(name: string): ModelMetadata | undefined {
     return this.modelMetadata.get(name);
   }
 
-  /** Get properties for a model */
   getProperties(name: string): Map<string, PropertyMetadata> {
     return this.properties.get(name) || new Map();
   }
 
-  /** Get references for a model */
   getReferences(name: string): Map<string, ExtendedReferenceMetadata> {
     return this.references.get(name) || new Map();
   }
 
-  /** Get indexed properties for a model */
   getIndexedProperties(modelName: string): string[] {
     const properties = this.getProperties(modelName);
     const indexed: string[] = [];
@@ -504,12 +467,10 @@ export class ModelRegistry {
     return indexed;
   }
 
-  /** Get back-references for a child model */
   getBackReferences(childModelName: string): BackReferenceMetadata[] {
     return this.backReferences.get(childModelName) || [];
   }
 
-  /** Get child models for a parent */
   getChildModels(parentModelName: string): { childModel: string; foreignKey: string }[] {
     // Derive from backReferences
     const children: { childModel: string; foreignKey: string }[] = [];
@@ -536,7 +497,6 @@ export class ModelRegistry {
       Record<string, { type: PropertyType; indexed: boolean; optional: boolean }>
     > = {};
 
-    // Build schema object
     for (const [modelName, props] of this.properties) {
       schema[modelName] = {};
       for (const [propName, meta] of props) {
@@ -548,10 +508,8 @@ export class ModelRegistry {
       }
     }
 
-    // Sort and stringify
     const sorted = JSON.stringify(schema, Object.keys(schema).sort());
 
-    // Create hash - browser-compatible simple hash
     this.schemaHash = this.simpleHash(sorted);
 
     this.runtime.logger.debug('Schema hash updated', this.schemaHash);
@@ -559,37 +517,26 @@ export class ModelRegistry {
     return this.schemaHash;
   }
 
-  /**
-   * Browser-compatible hash function
-   */
   private simpleHash(str: string): string {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
       hash = (hash << 5) - hash + char;
-      hash = hash & hash; // Convert to 32bit integer
+      hash = hash & hash;
     }
     return Math.abs(hash).toString(16).padStart(8, '0');
   }
 
-  /**
-   * Static wrapper for backward compatibility
-   */
 
-  /**
-   * Validate all references
-   */
   validateReferences(): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
 
-    // Check pending references
     for (const [target, pending] of this.pendingReferences) {
       for (const ref of pending) {
         errors.push(`Unresolved reference: ${ref.modelName}.${ref.propertyName} -> ${target}`);
       }
     }
 
-    // Check resolved references
     for (const [modelName, refs] of this.references) {
       for (const [propName, meta] of refs) {
         try {
@@ -616,20 +563,11 @@ export class ModelRegistry {
     };
   }
 
-  /**
-   * Static wrapper for backward compatibility
-   */
 
-  /**
-   * Start batch registration mode to optimize performance
-   */
   startBatch(): void {
     this.pendingHashUpdate = false;
   }
 
-  /**
-   * Static wrapper for backward compatibility
-   */
 
   /**
    * End batch registration mode and update schema hash if needed
@@ -641,13 +579,7 @@ export class ModelRegistry {
     }
   }
 
-  /**
-   * Static wrapper for backward compatibility
-   */
 
-  /**
-   * Clear registry
-   */
   clear(): void {
     this.models.clear();
     this.modelMetadata.clear();
@@ -663,13 +595,7 @@ export class ModelRegistry {
     this.runtime.logger.info('ModelRegistry cleared');
   }
 
-  /**
-   * Static wrapper for backward compatibility
-   */
 
-  /**
-   * Export for debugging
-   */
   export() {
     return {
       models: Array.from(this.models.keys()),
@@ -696,9 +622,6 @@ export class ModelRegistry {
     };
   }
 
-  /**
-   * Export registry data for debugging (backward compatibility)
-   */
   exportRegistryData(): {
     models: Record<string, string>;
     properties: Record<string, Record<string, PropertyMetadata>>;
@@ -711,12 +634,10 @@ export class ModelRegistry {
     const references: Record<string, Record<string, SerializedReferenceMetadata>> = {};
     const metadata: Record<string, ModelMetadata> = {};
 
-    // Export models
     for (const [name, constructor] of this.models) {
       models[name] = constructor.name;
     }
 
-    // Export properties
     for (const [modelName, propertyMap] of this.properties) {
       properties[modelName] = {};
       for (const [propName, propMetadata] of propertyMap) {
@@ -724,7 +645,6 @@ export class ModelRegistry {
       }
     }
 
-    // Export references
     for (const [modelName, referenceMap] of this.references) {
       references[modelName] = {};
       for (const [refName, refMetadata] of referenceMap) {
@@ -742,7 +662,6 @@ export class ModelRegistry {
       }
     }
 
-    // Export metadata
     for (const [modelName, modelMetadata] of this.modelMetadata) {
       metadata[modelName] = modelMetadata;
     }
@@ -756,7 +675,4 @@ export class ModelRegistry {
     };
   }
 
-  /**
-   * Static wrapper for backward compatibility
-   */
 }

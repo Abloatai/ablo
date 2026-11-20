@@ -20,7 +20,6 @@ import {
 import { commitAckSchema } from '@abloatai/transaction/commit';
 import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 
-// ── Default mutation executor (wire: `commit` frame over WebSocket) ──────
 
 /**
  * Creates the default mutation executor, which sends each change as a `commit`

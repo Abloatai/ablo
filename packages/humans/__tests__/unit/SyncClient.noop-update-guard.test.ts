@@ -63,7 +63,7 @@ describe('SyncClient no-op UPDATE guard', () => {
 
   it('skips a changeless update — nothing is enqueued', () => {
     const layer = createEntryLayerFixture({ id: 'layer-noop-1', entryId: 'entry-1' });
-    layer.clearChanges(); // empty dirty-set: hasChanges === false
+    layer.clearChanges();
     expect(layer.hasChanges).toBe(false);
 
     void client.update(layer);

@@ -443,11 +443,8 @@ Identities are admitted sequentially; this is not a connection-burst benchmark.
 Authentication, SQL, and fence minting use fixtures; Rust/FUSE and native agents
 are not part of this test. Cross-host network partitions remain unverified.
 
-Run the fixture against disposable Redis on loopback with
-`node --import tsx apps/sync-server/scripts/claim-delivery-acceptance.ts`.
-`CLAIM_TEST_REDIS_URL` defaults to `redis://127.0.0.1:6379/15`; the fixture uses
-unique keys and never flushes the database. `CLAIM_TEST_WAITERS=0` selects only
-the normal and lost-publication checks (the default is 1,000).
+That fixture exercised the Node coordinator's claim authority and was removed
+with it; the recorded evidence names it as of 13 October 2026.
 
 The authority cancels an admitted claim atomically across its queued and held
 states, so promotion cannot slip between a status read and cleanup. WebSocket

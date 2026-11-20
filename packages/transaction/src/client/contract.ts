@@ -46,7 +46,6 @@ export type CommitReceipt = ClientCommitReceipt & {
 export interface ListQuery {
   /** Equality filter on field values. */
   where?: ModelData;
-  /** Sort order, field → direction. */
   orderBy?: Record<string, 'asc' | 'desc'>;
   limit?: number;
   offset?: number;

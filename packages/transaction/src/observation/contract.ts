@@ -50,7 +50,6 @@ export const confirmationStateSchema = z.enum([
 ]);
 export type ConfirmationState = z.infer<typeof confirmationStateSchema>;
 
-// ── The delta wire shapes ─────────────────────────────────────────────────────
 
 /**
  * The full set of action codes a wire delta can carry — a broader vocabulary than

@@ -158,7 +158,6 @@ describeE2E('E2E: WebSocket Sync (real server)', () => {
           }
         });
 
-        // Create a item — delta should arrive on WS
         await fetch(GRAPHQL_URL, {
           method: 'POST',
           headers: {

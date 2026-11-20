@@ -36,7 +36,6 @@ export interface ObjectStoreContract {
     value: IDBValidKey,
   ): Promise<Record<string, unknown>[]>;
 
-  /** Remove every record. */
   clear(): Promise<void>;
 
   /**

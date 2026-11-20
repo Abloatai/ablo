@@ -41,7 +41,6 @@ const SCALAR_MAP: Record<string, { kind: IRField['kind']; note?: string }> = {
   Bytes: { kind: 'json', note: 'Bytes has no engine type — review' },
 };
 
-// ── Block scanning ──────────────────────────────────────────────────────────
 
 interface PrismaBlock {
   type: 'model' | 'enum' | 'other';
@@ -107,7 +106,6 @@ function parseEnumMembers(body: string): string[] {
   return members;
 }
 
-// ── Field parsing ───────────────────────────────────────────────────────────
 
 interface RawField {
   name: string;
@@ -155,7 +153,6 @@ function relationFkFields(attrs: string): string[] | null {
     .filter(Boolean);
 }
 
-// ── Lowering ────────────────────────────────────────────────────────────────
 
 /** Parses a Prisma schema source into the shared intermediate representation,
  *  {@link IRSchema}. Does no I/O. */
@@ -268,7 +265,6 @@ export function buildSchemaSourceFromPrisma(opts: { src: string; importPath: str
   };
 }
 
-// ── CLI ─────────────────────────────────────────────────────────────────────
 
 interface PrismaPullArgs {
   schema: string;

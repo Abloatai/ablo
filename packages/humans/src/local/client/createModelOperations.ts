@@ -203,7 +203,6 @@ export interface ModelCollaboration {
   openCounter(model: string, params: { id: string; field: string }): Promise<ModelCounterEditor>;
   /** Session projections already held by this client's one presence store. */
   presence(model: string, recordId?: string, options?: PresenceQueryOptions): readonly PresenceSession[];
-  /** Subscribe once to the connection-owned presence projection. */
   onPresenceChange(listener: () => void): () => void;
   /** Start one session-owned read activity and return its cleanup. */
   startReadPresence(target: EntityHalf): () => void;
@@ -289,10 +288,6 @@ export interface ModelCollaboration {
     target: EntityHalf,
     options?: ClaimWaitOptions,
   ): Promise<void>;
-  /**
-   * The local participant's id. Used to distinguish "I already hold this"
-   * from "someone else holds it" in `claimOrWait`.
-   */
   readonly selfParticipantId: string;
   /**
    * The local participant's kind (`'user' | 'agent' | 'system'`). Used to stamp
@@ -405,7 +400,6 @@ interface ReactiveModelSurface<T, Fields = T> {
    */
   claim: ClaimApi<T, Fields>;
 
-  /** Subscribe to changes; the callback runs on every change. */
   onChange(
     callback: (entities: T[]) => void,
     options?: LocalReadOptions<T>,
@@ -502,7 +496,7 @@ export function createModelOperations<T, C, U = C>(
    * to supply the one method that is actually read.
    */
   hydration: Pick<OnDemandLoader, 'fetch'> &
-    Partial<Pick<OnDemandLoader, 'getReadEvidence'>>,
+    Partial<Pick<OnDemandLoader, 'getReadEvidence' | 'getReadSnapshot'>>,
   collaboration?: ModelCollaboration,
   readSetContext?: ReadSetContext,
 ): ModelOperations<T, C, U> {
@@ -1037,9 +1031,7 @@ export function createModelOperations<T, C, U = C>(
       throw normalized;
     }
 
-    // A row-free claim still captures the engine's current read floor. It gives
-    // a later write under this lease a real `readAt` without constructing the
-    // legacy row snapshot object (there is no row to put in one).
+    // A row-free claim still needs a real read floor for a later write under it.
     const readAt = lease.readAt ?? collaboration.currentReadAt();
     const description = claimDescription(options);
     const selfTarget: ClaimTarget = {
@@ -1302,23 +1294,22 @@ export function createModelOperations<T, C, U = C>(
       // Read-interest enrolment: authoritative point reads enter the same
       // entity scope as the claim stream, while remaining settled reads.
       void collaboration?.enterScope?.({ [schemaKey]: params.id });
-      const rows = await load({
-        ...params,
-        where: [['id', params.id]],
-        limit: 1,
-      });
-      if (collaboration) {
-        const result = await collaboration.readPoint(schemaKey, params.id);
+      const retained = (): { data: unknown; stamp: number } | undefined => {
+        if (params.type === 'complete' || params.expand?.length) return undefined;
+        const row = objectPool.getOfType(params.id, registeredModelName);
+        return row && hydration.getReadSnapshot?.(row);
+      };
+      let result = collaboration ? retained() : undefined;
+      let rows: T[] = [];
+      if (!result) {
+        rows = await load({ ...params, where: [['id', params.id]], limit: 1 });
+        if (collaboration) result = retained() ?? await collaboration.readPoint(schemaKey, params.id);
+      }
+      if (result) {
         const data = (result.data ?? undefined) as T | undefined;
-        if (!capture) return data;
-        capturePointRead(
-          readSetContext,
-          readSetClientIdentity,
-          wireModel,
-          params.id,
-          data,
-          result.stamp,
-        );
+        if (capture) {
+          capturePointRead(readSetContext, readSetClientIdentity, wireModel, params.id, data, result.stamp);
+        }
         return data;
       }
       return rows[0];

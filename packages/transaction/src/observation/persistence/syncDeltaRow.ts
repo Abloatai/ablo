@@ -44,7 +44,6 @@ export type BackfillProvenance = z.infer<typeof backfillProvenanceSchema>;
 /** A delta payload: the full post-mutation row (or null for deletes). */
 const deltaDataSchema = z.record(z.string(), z.unknown()).nullable();
 
-// ── Core — the sync-protocol slice ────────────────────────────────────────────
 
 /**
  * Everything a client needs to materialize the change, plus the tenant key. This
@@ -80,7 +79,6 @@ export const syncDeltaCoreSchema = z.object({
 });
 export type SyncDeltaCore = z.infer<typeof syncDeltaCoreSchema>;
 
-// ── Attribution — who made the change, and on whose authority ─────────────────
 
 export const deltaAttributionSchema = z.object({
   /** The acting participant, recorded as a single column for compatibility; the structured pair below is the richer form. */
@@ -96,7 +94,6 @@ export const deltaAttributionSchema = z.object({
 });
 export type DeltaAttribution = z.infer<typeof deltaAttributionSchema>;
 
-// ── Full stored row, classification, and physical storage ─────────────────────
 
 /** The complete `sync_deltas` row: core and attribution combined. */
 export const syncDeltaRowSchema = syncDeltaCoreSchema.extend(deltaAttributionSchema.shape);

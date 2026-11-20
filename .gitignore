@@ -5,4 +5,3 @@ __pycache__/
 *.log
 .DS_Store
 .npmrc
-.direnv/

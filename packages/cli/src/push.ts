@@ -739,9 +739,6 @@ export async function push(argv: readonly string[]): Promise<void> {
     const code = (body.code ?? body.reason) as string | undefined;
     const serverMsg = (body.message ?? body.reason) as string | undefined;
     console.error(pc.red(`  Forbidden${code ? ` [${code}]` : ''}: ${serverMsg ?? 'permission denied'}`));
-    // Name which key the push used and where it came from, since the common
-    // confusion is a legacy stored runtime key being used instead of the intended
-    // key placed in `.env.local`.
     console.error(pc.dim(`  Push used ${pc.bold(maskKey(args.apiKey))} from ${describeKeySource(keySource)}.`));
     const storageHint = schemaPushStorageHint(code);
     if (storageHint) {

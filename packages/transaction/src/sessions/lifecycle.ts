@@ -54,20 +54,27 @@ export const MIN_PREROLL_DELAY_MS = 30 * 1000;
 
 /**
  * Computes how long to wait before pre-rolling a credential that expires at
- * `expiresAtMs`: about two-thirds of the remaining lifetime (a 15-minute
- * credential yields 10 minutes), clamped to
+ * `expiresAtMs`: between one-half and two-thirds of the remaining lifetime (a
+ * 15-minute credential yields 7.5 to 10 minutes), clamped to
  * [{@link MIN_PREROLL_DELAY_MS}, {@link DEFAULT_PREROLL_INTERVAL_MS}]. An
- * unknown expiry (`null`) falls back to the 10-minute interval. Exported for
- * unit tests.
+ * unknown expiry (`null`) falls back to the 10-minute interval.
+ *
+ * The spread is what keeps clients apart. Tabs and clients minted in the same
+ * instant with the same lifetime would otherwise renew in the same instant on
+ * every cycle, and each renewal is a request to the integrator's mint endpoint.
  */
-export function computePrerollDelayMs(expiresAtMs: number | null, nowMs: number): number {
+export function computePrerollDelayMs(
+  expiresAtMs: number | null,
+  nowMs: number,
+  random: () => number = Math.random,
+): number {
   if (expiresAtMs === null || !Number.isFinite(expiresAtMs)) {
     return DEFAULT_PREROLL_INTERVAL_MS;
   }
   const remaining = expiresAtMs - nowMs;
   if (remaining <= 0) return MIN_PREROLL_DELAY_MS;
-  const twoThirds = Math.floor((remaining * 2) / 3);
-  return Math.min(Math.max(twoThirds, MIN_PREROLL_DELAY_MS), DEFAULT_PREROLL_INTERVAL_MS);
+  const delay = Math.floor(remaining * (2 / 3 - random() / 6));
+  return Math.min(Math.max(delay, MIN_PREROLL_DELAY_MS), DEFAULT_PREROLL_INTERVAL_MS);
 }
 
 /** Narrow a refresher-supplied `expiresAt` to epoch ms, or `null` when
@@ -334,7 +341,7 @@ export class CredentialLifecycle {
       // pre-roll — it keeps the key warm ahead of expiry even while the socket
       // sits healthy and connected, a state the connection never probes. The
       // delay comes from the minted credential's real `expiresAt` when the
-      // refresher reports one (about two-thirds of the remaining lifetime), with
+      // refresher reports one (one-half to two-thirds of the remaining lifetime), with
       // the 10-minute value as both ceiling and fallback, so a deployment that
       // mints shorter-lived keys still pre-rolls in time rather than dropping to
       // reactive-only recovery.

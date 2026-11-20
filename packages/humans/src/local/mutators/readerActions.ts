@@ -15,13 +15,11 @@ export interface ReaderFindOptions<T> {
   where?: Partial<T>;
   /** A predicate applied after the `where` filter. */
   filter?: (entity: T) => boolean;
-  /** Sort field. */
   orderBy?: keyof T & string;
   /** Sort direction. Default: 'asc'. */
   order?: 'asc' | 'desc';
   /** Max results. */
   limit?: number;
-  /** Skip N results. */
   offset?: number;
 }
 

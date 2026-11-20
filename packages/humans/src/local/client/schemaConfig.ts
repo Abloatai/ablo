@@ -12,7 +12,6 @@ import type { RelationDef } from '@abloatai/transaction/schema/relation';
 import type { RuntimeConfig } from '../interfaces/index.js';
 import { schemaHash, modelHash, toSchemaJSON } from '../schema/serialize.js';
 
-// ── Config derivation from schema ─────────────────────────────────────────
 
 /**
  * Computes a create-priority map that gives the engine a safe order for

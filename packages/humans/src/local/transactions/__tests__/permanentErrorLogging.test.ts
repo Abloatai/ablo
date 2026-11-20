@@ -41,7 +41,6 @@ function spyLogger(): Logger & {
   };
 }
 
-/** Find the recorded log call whose first arg starts with `prefix`. */
 function callMatching(mock: jest.Mock, prefix: string): unknown[] | undefined {
   return mock.mock.calls.find(
     (args) => typeof args[0] === 'string' && (args[0]).startsWith(prefix),

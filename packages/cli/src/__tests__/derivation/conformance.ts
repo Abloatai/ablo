@@ -42,10 +42,6 @@ export interface ConformanceContext {
 
 export type ConformanceSuite = (ctx: ConformanceContext) => void;
 
-/**
- * Register a source's conformance run: lower the fixture once, then let each
- * listed suite assert against it.
- */
 export function runConformance(opts: {
   source: string;
   lower: () => IRSchema | Promise<IRSchema>;
@@ -78,7 +74,6 @@ export function runConformance(opts: {
   });
 }
 
-// ── Suites ──────────────────────────────────────────────────────────────────
 
 /** Which tables become models, and why the rest do not. */
 export const adoptSuite: ConformanceSuite = (ctx) => {

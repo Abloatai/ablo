@@ -40,9 +40,6 @@ describe('ObjectPool', () => {
     cleanup();
   });
 
-  // ─────────────────────────────────────────────
-  // Basic CRUD
-  // ─────────────────────────────────────────────
 
   describe('add() and get()', () => {
     it('should add a model and retrieve by id', () => {
@@ -100,9 +97,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // Scope management
-  // ─────────────────────────────────────────────
 
   describe('scope updates', () => {
     it('should update scope without creating duplicate when add() called with existing id', () => {
@@ -112,7 +106,6 @@ describe('ObjectPool', () => {
       // Re-add same model with different scope
       pool.add(item, ModelScope.archived);
 
-      // Should still be just one entry
       const allItems = pool.getByType(TestItem, ModelScope.all);
       expect(allItems).toHaveLength(1);
 
@@ -122,9 +115,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // Disposed model safety
-  // ─────────────────────────────────────────────
 
   describe('disposed models', () => {
     it('should return undefined for disposed models on get()', () => {
@@ -145,9 +135,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // Batch operations
-  // ─────────────────────────────────────────────
 
   describe('addBatch()', () => {
     it('should add multiple models in a single action', () => {
@@ -167,7 +154,7 @@ describe('ObjectPool', () => {
       pool.add(item);
 
       const addedCount = pool.addBatch([item, createItemFixture()]);
-      expect(addedCount).toBe(1); // Only the new one
+      expect(addedCount).toBe(1);
       expect(pool.size).toBe(2);
     });
 
@@ -215,9 +202,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // remove() and clear()
-  // ─────────────────────────────────────────────
 
   describe('remove()', () => {
     it('should remove a model by id and dispose it', () => {
@@ -253,9 +237,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // getByType with different model types
-  // ─────────────────────────────────────────────
 
   describe('getByType()', () => {
     it('should return only models of the specified type', () => {
@@ -278,16 +259,12 @@ describe('ObjectPool', () => {
       const entries = pool.getByType(TestEntry);
       expect(entries).toEqual([]);
 
-      // Now add a entry and verify it shows up
       const entry = createEntryFixture();
       pool.add(entry);
       expect(pool.getByType(TestEntry)).toHaveLength(1);
     });
   });
 
-  // ─────────────────────────────────────────────
-  // getByTypeName (string-based lookup)
-  // ─────────────────────────────────────────────
 
   describe('getByTypeName()', () => {
     it('should return models by type name string', () => {
@@ -304,9 +281,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // Metrics
-  // ─────────────────────────────────────────────
 
   describe('metrics', () => {
     it('should track hits on successful get()', () => {
@@ -345,9 +319,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // Size
-  // ─────────────────────────────────────────────
 
   describe('size', () => {
     it('should report correct size', () => {
@@ -361,9 +332,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // MobX Reactivity
-  // ─────────────────────────────────────────────
 
   describe('reactivity', () => {
     it('should trigger autorun when model is added', () => {
@@ -416,9 +384,6 @@ describe('ObjectPool', () => {
     });
   });
 
-  // ─────────────────────────────────────────────
-  // getIdsByModelType
-  // ─────────────────────────────────────────────
 
   describe('getIdsByModelType()', () => {
     it('should return set of IDs for a model type', () => {

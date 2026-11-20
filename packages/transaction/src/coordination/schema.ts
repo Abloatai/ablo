@@ -27,9 +27,6 @@ import type { AssertExact } from '../types/assertExact.js';
  * against them at runtime.
  */
 
-// ─────────────────────────────────────────────────────────────────────────
-//  Shared primitives
-// ─────────────────────────────────────────────────────────────────────────
 
 /**
  * An app-defined claimable part name — a cell (`'B2'`), a section id, a

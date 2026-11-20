@@ -184,6 +184,22 @@ describe('4001 credential_expired close', () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
+  it('keeps an authority outage retryable without latching terminal session loss', async () => {
+    const { ws, socket } = openSyncWebSocket();
+    active = ws;
+    const sessionErrors: Error[] = [];
+    ws.subscribe('session_error', error => sessionErrors.push(error));
+    socket.readyState = FakeWebSocket.CLOSED;
+    fireClose(socket, {code:1013, reason:'authority_unavailable', wasClean:true});
+    expect(sessionErrors).toEqual([]);
+    expect(ws.getConnectionDiagnostics().sessionErrorDetected).toBe(false);
+    const rejection = await ws.sendCommit([], 'queued-during-authority-outage').catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(AbloConnectionError);
+    expect(rejection).not.toBeInstanceOf(AbloSessionError);
+    ws.connect();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
   it('clearSessionError() un-latches so a post-re-mint reconnect works', () => {
     const { ws, socket } = openSyncWebSocket();
     active = ws;

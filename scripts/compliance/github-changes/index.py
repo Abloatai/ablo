@@ -52,10 +52,14 @@ def evaluate(pr, reviews, records, checks):
     check_exception = bool(record and len(field(record, "Check exception")) >= 40)
     if not approved and not record:
         return "failure", "Missing independent review or a specific owner exception for this head"
-    if (not checks or failed) and not check_exception:
+    # Full CI is manually dispatched, so an approved head with no checks is the normal case;
+    # only a failed check, or absent checks on an unreviewed head, needs the check exception.
+    if (failed or not (checks or approved)) and not check_exception:
         return "failure", "Missing passing checks or an explicit check exception with evidence"
-    if not approved or not checks or failed:
+    if not approved or failed:
         return "success", f"Owner exception recorded; {len(checks) - len(failed)} checks passed, {len(failed)} not passing"
+    if not checks:
+        return "success", "Independent approval verified; no hosted checks ran on this head"
     return "success", "Independent approval and passing checks verified on this head"
 
 

@@ -13,8 +13,8 @@ confirms it by tailing your write-ahead log (WAL). Your rows live in your databa
 which stays the system of record. Ablo writes rows but **runs no DDL and owns no
 schema** — your migration tool stays in charge of the shape of your database.
 
-> **Which database?** A branch needs one connected before a schema will push, so
-> start on a throwaway rather than your production Postgres. `ablo dev` gives
+> **Which database?** An ordinary development branch needs a connected database
+> before its schema can push, so start on a throwaway rather than production. `ablo dev` gives
 > each Git branch its own isolated plane: point a development branch at a local
 > or separate database, and connect your production one when you're ready for it
 > to be the system of record.
@@ -48,10 +48,13 @@ Do not pass that value to application code. Every runtime call needs a
 branch-bound API key. `ablo dev` exchanges the
 stored management credential for
 an expiring `sk_*` key bound to the current development branch.
-Production runtimes use `sk_*`. In production a key points at the database
-*you* own; on a development branch you can skip the database entirely and let
-Ablo host the rows (apiKey only). There is no keyless mode — a key is always
-required. (The public `/sandbox` page is a separate hosted demo, not your app.)
+Production runtimes use `sk_*`. Ordinary development branches also need their own
+reviewed database connection; `ablo dev` isolates credentials and schema, but does
+not automatically provision storage. Explicit hosted storage is available only
+for disposable `kind: test` branches expiring within 24 hours, as described in
+[Branch-first development](/branch-development#ci-and-preview-deployments).
+There is no keyless mode. The public `/sandbox` page is a separate hosted demo,
+not your application or a database provisioned by `ablo dev`.
 
 You do not create a separate named variable per development environment.
 Application code always reads `ABLO_API_KEY`; `ablo dev` wires the value for the

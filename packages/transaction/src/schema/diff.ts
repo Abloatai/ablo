@@ -125,7 +125,6 @@ const CAST: Readonly<Record<string, CastSafety>> = {
   // → number (DOUBLE PRECISION)
   'string->number': 'risky', 'enum->number': 'risky', 'boolean->number': 'notCastable',
   'date->number': 'notCastable', 'json->number': 'notCastable',
-  // → boolean
   'string->boolean': 'risky', 'enum->boolean': 'risky', 'number->boolean': 'risky',
   'date->boolean': 'notCastable', 'json->boolean': 'notCastable',
   // → date (TIMESTAMPTZ)
@@ -144,7 +143,6 @@ export function classifyCast(from: FieldType, to: FieldType): CastSafety {
   return CAST[`${from}->${to}`] ?? 'notCastable';
 }
 
-// ── Diff ──────────────────────────────────────────────────────────────────────
 
 function diffEnumValues(
   from: readonly string[] | undefined,
@@ -318,7 +316,6 @@ export function diffSchema(
   return [...creates, ...renames, ...fieldSteps, ...drops];
 }
 
-// ── Destructive-change classification ───────────────────────────────────────────
 
 /**
  * Why a migration step is flagged as a warning — a change that runs but may lose or
@@ -450,7 +447,6 @@ export function isAutoApplicable(classification: MigrationClassification): boole
   return classification.unexecutable.length === 0;
 }
 
-// ── Backfill ────────────────────────────────────────────────────────────────
 
 /**
  * A constant value to write into existing rows so an otherwise-unexecutable step can

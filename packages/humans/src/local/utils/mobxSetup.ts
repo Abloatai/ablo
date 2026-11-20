@@ -52,7 +52,6 @@ export function M1<T extends M1Target>(
   // statically derivable from `keyof T`.
   const annotations: Record<string, AnnotationMapEntry> = {};
 
-  // Helper to check if property has a getter
   const hasGetter = (propName: string): boolean => {
     let obj = target;
     while (obj) {
@@ -64,7 +63,6 @@ export function M1<T extends M1Target>(
     return false;
   };
 
-  // Helper to check if property has a setter
   const hasSetter = (propName: string): boolean => {
     let obj = target;
     while (obj) {
@@ -76,19 +74,15 @@ export function M1<T extends M1Target>(
     return false;
   };
 
-  // Skip if target has its own observability setup
-  // This allows models like Item to handle their own MobX setup
   if (target.setupObservability || target._hasCustomObservability) {
     getContext().modelDebugLogger?.logDebug(`${target.constructor.name} has custom observability, skipping M1`);
     return;
   }
 
-  // Process each property based on its type
   for (const [propName, metadata] of propertyMetadata) {
     const hasCustomGetter = hasGetter(propName);
     const hasCustomSetter = hasSetter(propName);
 
-    // If property has custom getter/setter, respect it
     if (hasCustomGetter && hasCustomSetter) {
       // Property is fully managed, skip it
       continue;
@@ -201,21 +195,17 @@ export function M1<T extends M1Target>(
     }
   }
 
-  // Log setup for debugging
   const modelName = target.constructor.name;
   const observableProps = Object.keys(annotations).filter((k) => annotations[k] === observable);
   const computedProps = Object.keys(annotations).filter((k) => annotations[k] === computed);
 
   getContext().modelDebugLogger?.logObservableSetup(modelName, observableProps, computedProps);
 
-  // Merge any extra annotations declared by the model (e.g., computed for query getters)
   if (target._extraMobxAnnotations && typeof target._extraMobxAnnotations === 'object') {
     Object.assign(annotations, target._extraMobxAnnotations);
   }
 
-  // Apply MobX decorators
   try {
-    // Only apply if we have annotations to apply
     if (Object.keys(annotations).length > 0) {
       makeObservable(target, annotations);
 
@@ -326,12 +316,10 @@ export function makeModelObservable(
   propertyMetadata: Map<string, PropertyMetadata>,
   referenceMetadata?: Map<string, any>
 ): any {
-  // Check if class already handles observability
   if (modelClass.prototype.setupObservability || modelClass.prototype._hasCustomObservability) {
     return modelClass;
   }
 
-  // Create wrapper class
   const WrappedClass = class extends modelClass {
     constructor(...args: any[]) {
       super(...args);

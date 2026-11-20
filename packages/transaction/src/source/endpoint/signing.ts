@@ -38,7 +38,6 @@ export interface SourceSignatureVerificationOptions {
   };
   /** The request body, which must match what was signed. */
   readonly body: string;
-  /** The API key to verify against. */
   readonly apiKey: string;
   /**
    * How far the request's timestamp may differ from the current clock, in

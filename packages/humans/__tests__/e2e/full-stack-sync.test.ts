@@ -171,7 +171,6 @@ describeE2E('Full-Stack E2E: SDK → Go Server → Delta Confirmation', () => {
     const { close } = await connectWS(queue);
 
     try {
-      // Create first
       const itemId = uuid();
       const item = new TestItem({ id: itemId, title: 'Update me', organizationId: TEST_ORG });
 
@@ -185,7 +184,6 @@ describeE2E('Full-Stack E2E: SDK → Go Server → Delta Confirmation', () => {
       await flushMicrotasks();
       await createDone;
 
-      // Now update
       item.markAsPersisted();
       item.propertyChanged('title', 'Update me', 'Updated via E2E');
 
@@ -224,7 +222,6 @@ describeE2E('Full-Stack E2E: SDK → Go Server → Delta Confirmation', () => {
         });
       });
 
-      // Create both in same tick → batched
       await queue.create(item1, { userId: TEST_USER, organizationId: TEST_ORG });
       await queue.create(item2, { userId: TEST_USER, organizationId: TEST_ORG });
       await flushMicrotasks();

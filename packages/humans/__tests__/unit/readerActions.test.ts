@@ -16,7 +16,6 @@ import { createReaderActions } from '../../src/local/mutators/readerActions';
 import { ViewRegistry } from '../../src/local/views/ViewRegistry';
 import { createTestContext } from '../../src/local/testing';
 
-// ── Test schema ────────────────────────────────────────────────────────
 
 const testSchema = defineSchema({
   items: model(
@@ -31,7 +30,6 @@ const testSchema = defineSchema({
     { typename: 'Item' }),
 });
 
-// ── Test model class ──────────────────────────────────────────────────
 
 class TestItem extends Model {
   title!: string;
@@ -52,7 +50,6 @@ class TestItem extends Model {
   }
 }
 
-// ── Minimal store wrapper ─────────────────────────────────────────────
 
 function createStore(pool: ObjectPool): SyncStoreContract {
   return {
@@ -89,7 +86,6 @@ function createStore(pool: ObjectPool): SyncStoreContract {
   };
 }
 
-// ── Setup ──────────────────────────────────────────────────────────────
 
 let pool: ObjectPool;
 let registry: ModelRegistry;
@@ -128,7 +124,6 @@ afterEach(() => {
   cleanupCtx();
 });
 
-// ── Tests ──────────────────────────────────────────────────────────────
 
 describe('useReader.retrieve', () => {
   it('returns the entity by ID', () => {

@@ -168,7 +168,6 @@ describe('SyncWebSocket', () => {
       ws.on('connected', () => { connected = true; });
       ws.connect();
 
-      // Should not attempt connection
       expect(connected).toBe(false);
       expect(ws.isConnected()).toBe(false);
     });
@@ -186,7 +185,6 @@ describe('SyncWebSocket', () => {
         if (connectCount === 1) {
           // Try connecting again while already connected
           ws.connect();
-          // Should still be 1
           setTimeout(() => {
             expect(connectCount).toBe(1);
             ws.disconnect();
@@ -249,14 +247,12 @@ describe('SyncWebSocket', () => {
       let callCount = 0;
       const unsubscribe = ws.subscribe('connected', () => { callCount++; });
 
-      // Trigger event
       ws.emit('connected');
       expect(callCount).toBe(1);
 
-      // Unsubscribe
       unsubscribe();
       ws.emit('connected');
-      expect(callCount).toBe(1); // No change
+      expect(callCount).toBe(1);
     });
   });
 
@@ -286,7 +282,6 @@ describe('SyncWebSocket', () => {
         organizationId: 'org-1',
       });
 
-      // Should gracefully no-op
       expect(() => { ws.acknowledge(42); }).not.toThrow();
     });
   });
@@ -299,7 +294,6 @@ describe('SyncWebSocket', () => {
         organizationId: 'org-1',
       });
 
-      // Should not throw
       ws.resetReconnectAttempts();
       expect(ws).toBeDefined();
     });

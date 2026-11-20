@@ -29,7 +29,6 @@ describe('classifyCredentialKind', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
 
 function buildPrimitives(
   overrides: Partial<CredentialPrimitives> = {},

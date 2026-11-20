@@ -23,7 +23,6 @@ import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import { Ablo, type InternalAbloOptions } from '../../../src/Ablo';
 
-// ── Counting WebSocket wrapper ──────────────────────────────────────
 
 const wsConstructions: string[] = [];
 const originalWebSocket = globalThis.WebSocket;
@@ -106,7 +105,6 @@ describe('Architectural pin — one WebSocket per engine', () => {
     // calls land.
     await new Promise((r) => setTimeout(r, 50));
 
-    // ── The pin ──────────────────────────────────────────────────────
     expect(wsConstructions.length).toBe(1);
 
     await engine.dispose().catch(() => {});

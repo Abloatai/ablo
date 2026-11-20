@@ -1,5 +1,19 @@
 # @abloatai/humans
 
+## 0.67.4
+
+### Brief disconnects retain presence
+
+Presence and observed claim state now remain visible for up to five seconds after a disconnect, avoiding flicker during brief reconnects. A reconnect cancels the pending clear; a connection that stays down clears the stale state after the grace period.
+
+### React subscriptions retain unchanged snapshots
+
+Stable selectors keep their subscriptions and reuse unchanged snapshots across renders. Observable updates and external claim notifications still refresh the selection.
+
+### Warm point reads retain their evidence
+
+Unchanged server snapshots and their original row evidence can be reused while the authenticated connection remains live. Changes, reconnects and credential changes restore the authoritative path.
+
 ## 0.67.3
 
 ## 0.67.2

@@ -71,9 +71,6 @@ export class DatabaseManager {
 
   constructor(private readonly runtime: RuntimeContext = globalRuntime) {}
 
-  /**
-   * Initialize the meta database (ablo_databases)
-   */
   async initializeMetaDatabase(): Promise<void> {
     const open = (): Promise<IDBDatabase> =>
       openIDBWithTimeout(this.metaDbName, 1, {
@@ -122,22 +119,16 @@ export class DatabaseManager {
     }
   }
 
-  /**
-   * Calculate database info for a user/workspace combination
-   */
   async calculateDatabaseInfo(
     identity: PersistenceIdentity,
     userVersion = 1
   ): Promise<DatabaseInfo> {
-    // Get schema hash from the active ModelRegistry
     const schemaHash = hasActiveRegistry()
       ? getActiveRegistry().getSchemaHash()
       : 'no-registry-hash';
 
-    // Generate database name from userId, workspaceId, and versions
     const dbName = await persistenceDatabaseName(identity, userVersion);
 
-    // Check if we need to increment schema version
     const existingInfo = await this.getDatabaseInfo(dbName);
     if (existingInfo && !persistenceIdentityMatches(existingInfo, identity)) {
       throw new AbloConnectionError(
@@ -187,9 +178,6 @@ export class DatabaseManager {
     };
   }
 
-  /**
-   * Register database info in ablo_databases
-   */
   async registerDatabase(info: DatabaseInfo): Promise<void> {
     const metaDb = this.metaDb;
     if (!metaDb) {
@@ -214,9 +202,6 @@ export class DatabaseManager {
     });
   }
 
-  /**
-   * Get database info by name
-   */
   async getDatabaseInfo(name: string): Promise<DatabaseInfo | null> {
     const metaDb = this.metaDb;
     if (!metaDb) return null;
@@ -245,9 +230,6 @@ export class DatabaseManager {
     });
   }
 
-  /**
-   * Get all databases for a user
-   */
   async getDatabasesForUser(userId: string): Promise<DatabaseInfo[]> {
     const metaDb = this.metaDb;
     if (!metaDb) return [];
@@ -372,9 +354,6 @@ export class DatabaseManager {
     });
   }
 
-  /**
-   * Mark a model as persisted
-   */
   async setModelPersisted(db: IDBDatabase, modelName: string, persisted: boolean): Promise<void> {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(['__meta'], 'readwrite');
@@ -396,9 +375,6 @@ export class DatabaseManager {
     });
   }
 
-  /**
-   * Get all model persistence states
-   */
   async getAllModelPersistenceStates(db: IDBDatabase): Promise<Record<string, boolean>> {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(['__meta'], 'readonly');
@@ -409,7 +385,6 @@ export class DatabaseManager {
         const states: Record<string, boolean> = {};
 
         for (const item of request.result) {
-          // Skip metadata entry
           if (item.key === 'metadata') continue;
 
           if (item.modelName) {
@@ -424,9 +399,6 @@ export class DatabaseManager {
     });
   }
 
-  /**
-   * Delete a workspace database
-   */
   async deleteWorkspaceDatabase(dbInfo: DatabaseInfo): Promise<boolean> {
     const deleted = await deleteIDBWithTimeout(dbInfo.name);
     if (!deleted) {
@@ -451,9 +423,6 @@ export class DatabaseManager {
     return true;
   }
 
-  /**
-   * Get comprehensive database statistics
-   */
   async getDatabaseStatistics(): Promise<{
     metaDatabaseSize: number;
     totalWorkspaceDatabases: number;
@@ -482,7 +451,6 @@ export class DatabaseManager {
         const schemaVersions: Record<string, number> = {};
 
         for (const db of databases) {
-          // Count by user
           databasesByUser[db.userId] = (databasesByUser[db.userId] ?? 0) + 1;
 
           // Count schema versions

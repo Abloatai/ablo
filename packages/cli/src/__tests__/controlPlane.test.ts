@@ -142,10 +142,6 @@ describe('requestControlPlane — failure typing', () => {
   });
 
   it("headlines the server's message and keeps the driver's reason as detail", async () => {
-    // The register/validate rejections carry both: `message` is the sentence
-    // the server wrote for a person, `reason` the raw driver text beside it.
-    // The message must win the headline — the reason used to clobber it, which
-    // showed "getaddrinfo ENOTFOUND …" where the remedy should have been.
     const attempt = requestControlPlane({
       path: '/v1/datasources',
       baseUrl: 'https://x.test',

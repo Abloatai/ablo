@@ -1,12 +1,6 @@
 import { blockers, schemaDrift, type DataSourceState } from '../readiness';
 
-/**
- * The verdict `ablo status` closes with. It decides whether the command may
- * claim a write would succeed — the claim that previously went unqualified
- * while every write was being held, which sent the search into the application
- * instead of the setup. These exercise the pure decision on constructed inputs;
- * the network reads that produce them are covered where they are used.
- */
+/** The readiness verdict reported by `ablo status`. */
 
 // No hosts reported, so pooler detection finds nothing — the neutral baseline
 // these cases want, which is separate from what pooler detection does with one.

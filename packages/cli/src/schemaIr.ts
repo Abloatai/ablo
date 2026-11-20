@@ -85,7 +85,6 @@ function quoteString(s: string): string {
   return `'${s.replace(/[\\']/g, '\\$&')}'`;
 }
 
-// ── Field expression ────────────────────────────────────────────────────────
 
 function baseFieldExpr(f: IRField): string {
   switch (f.kind) {
@@ -109,7 +108,6 @@ function baseFieldExpr(f: IRField): string {
   }
 }
 
-/** Render one IR field as a `field.*()` chain. */
 export function fieldExpr(f: IRField): string {
   let expr = baseFieldExpr(f);
   // Only emit `.from()` when the column wouldn't round-trip through the engine's
@@ -121,7 +119,6 @@ export function fieldExpr(f: IRField): string {
   return expr;
 }
 
-// ── Emitter ─────────────────────────────────────────────────────────────────
 
 /**
  * Render an {@link IRSchema} as `defineSchema(...)` TypeScript source.

@@ -69,8 +69,6 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
       expect(data.models).toBeDefined();
       expect(typeof data.models).toBe('object');
 
-      // Should NOT have deltas field in full bootstrap
-      // (models field contains the full snapshot)
     });
 
     it('should contain all registered model types', async () => {
@@ -87,11 +85,9 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
 
   describe('partial bootstrap (with lastSyncId)', () => {
     it('should return partial with delta batch when gap is small', async () => {
-      // Get current sync state
       const fullData = await bootstrap();
       const currentSyncId = fullData.lastSyncId as number;
 
-      // Create a few mutations to build a small delta gap
       const itemIds: string[] = [];
       for (let i = 0; i < 3; i++) {
         const id = uuid();
@@ -118,7 +114,6 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
         const deltas = partialData.deltas as Record<string, unknown>[];
         expect(deltas.length).toBeGreaterThan(0);
 
-        // Log delta structure for debugging
         console.log('[Partial Bootstrap] Delta count:', deltas.length);
         const firstDelta = deltas[0];
         if (firstDelta) {
@@ -158,7 +153,6 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
         expect(currentId).toBeGreaterThanOrEqual(prevId);
         prevId = currentId;
 
-        // Create a mutation between bootstraps
         await batchAck([{
           type: 'CREATE', model: 'item', id: uuid(),
           input: { title: `Mono ${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
@@ -167,7 +161,6 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
     });
 
     it('lastSyncId from batchAck should match next bootstrap', async () => {
-      // Create a item and capture its syncId
       const syncId = await batchAck([{
         type: 'CREATE', model: 'item', id: uuid(),
         input: { title: 'SyncId check', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
@@ -183,11 +176,9 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
 
   describe('delta gap recovery', () => {
     it('partial bootstrap should fill the exact gap between old and current', async () => {
-      // Snapshot 1
       const snap1 = await bootstrap();
       const id1 = snap1.lastSyncId as number;
 
-      // Create 5 mutations
       for (let i = 0; i < 5; i++) {
         await batchAck([{
           type: 'CREATE', model: 'item', id: uuid(),
@@ -224,13 +215,11 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
     it('UPDATE should be visible in next bootstrap', async () => {
       const itemId = uuid();
 
-      // Create
       await batchAck([{
         type: 'CREATE', model: 'item', id: itemId,
         input: { title: 'Before update', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
-      // Update
       await batchAck([{
         type: 'UPDATE', model: 'item', id: itemId,
         input: { title: 'After update' },

@@ -142,7 +142,7 @@ describe('MutationQueue.loadPersistedTransactions', () => {
         Promise.resolve([
           { id: 'corrupt_1', type: 'update' }, // missing model addressing/context
           { id: 'mutation-queue', type: 'queue', mutations: [] }, // neighbor row: silent skip
-          VALID_ROW, // replayable
+          VALID_ROW,
         ]),
     });
 

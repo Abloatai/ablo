@@ -100,9 +100,6 @@ export interface ReferenceMetadata {
   nullable?: boolean;
 }
 
-/**
- * The resolved configuration for a model class.
- */
 export interface ModelMetadata {
   loadStrategy: LoadStrategy;
   syncGroup?: string;
@@ -218,9 +215,6 @@ export enum MutationOperationType {
   UPDATE = 'UPDATE',
 }
 
-/**
- * Describes a partial index used to load subsets of a large model.
- */
 export interface PartialIndexInfo {
   modelName: string;
   indexKey: string;

@@ -1,13 +1,8 @@
 /** @jest-environment node */
 
 /**
- * `read` reports a missing row as `data: undefined` — it does NOT throw.
- *
- * Previously the HTTP client threw `model_not_found` for a missing row while the
- * WebSocket client returned `T | undefined`, so the obvious read ("does this row
- * exist?") was a hard edge an agent had to wrap in try/catch on one transport
- * only. Both transports now agree: absent row → absent data. A claim on a
- * missing row still surfaces (nothing to hold).
+ * Missing reads return absent data on both transports.
+ * A claim on a missing row still fails because there is nothing to hold.
  */
 import { createHttpTransport } from '@abloatai/transaction/transport/http';
 import { AbloNotFoundError } from '@abloatai/transaction/errors';

@@ -215,7 +215,6 @@ const client = (
  * only codes from this set.
  */
 export const ERROR_CODES = {
-  // ── auth (401) ─────────────────────────────────────────────────────
   apikey_invalid: wire(
     'auth',
     401,
@@ -408,7 +407,6 @@ export const ERROR_CODES = {
     'The localhost Data Source connector could not authenticate. Rerun `ablo dev --local` so it mints and uses a fresh branch-bound secret key.'
   ),
 
-  // ── permission / capability (403) ──────────────────────────────────
   capability_scope_denied: wire(
     'capability',
     403,
@@ -638,7 +636,6 @@ export const ERROR_CODES = {
     'The supplied `Idempotency-Key` exceeds the maximum length. Use a shorter key — a UUID works well.'
   ),
 
-  // ── validation (400 / 422) ─────────────────────────────────────────
   read_evidence_client_mismatch: client(
     'validation',
     'Captured read evidence belongs to another Ablo client instance. Re-read through the writing client and revalidate authority and the decision before retrying. Rejected locally before write submission; param names reads or ifUnchanged. Details contain the model and opaque, process-local sourceClient and targetClient labels, never credentials or row contents.'
@@ -813,7 +810,6 @@ export const ERROR_CODES = {
     'This production Data Source has not opted into reverse-channel transport. `ablo dev --local` is for child branches; use a direct production endpoint or explicitly enable the supported production reverse-channel route.'
   ),
 
-  // ── not found (404) ────────────────────────────────────────────────
   entity_not_found: wire(
     'not_found',
     404,
@@ -908,7 +904,6 @@ export const ERROR_CODES = {
     'A stored value is outside the range the field was declared to hold. A number field reads back as a JavaScript number, which represents integers exactly only up to 9,007,199,254,740,991; a bigint column holding more than that would come back rounded. Declare the field as text to read those values digit for digit.'
   ),
 
-  // ── tenant / unknown model (400) ───────────────────────────────────
   server_execute_unknown_model: wire(
     'tenant',
     400,
@@ -934,7 +929,6 @@ export const ERROR_CODES = {
     "This model's table has no `organization_id` column, which Ablo requires to isolate rows by organization. Add the column before syncing this model."
   ),
 
-  // ── schema migration / declaration (validation) ────────────────────
   schema_mutable_missing_meta: wire(
     'schema',
     400,
@@ -1022,7 +1016,6 @@ export const ERROR_CODES = {
     'This migration changes a column to a type its current values may not convert to cleanly.'
   ),
 
-  // ── claim / lease (409 / transport) ───────────────────────────────
   claim_lease_unavailable: wire(
     'claim',
     503,
@@ -1052,7 +1045,6 @@ export const ERROR_CODES = {
     'The wait for the claim grant timed out before your turn arrived (`waitTimeoutMs`). Claim again to rejoin the line, raise the cap, or re-read and proceed without the claim.'
   ),
 
-  // ── bootstrap (transport) ──────────────────────────────────────────
   bootstrap_fetch_timeout: wire(
     'bootstrap',
     504,
@@ -1094,7 +1086,6 @@ export const ERROR_CODES = {
     'The bootstrap response parsed but failed schema validation, so it was not applied. Retrying may succeed.'
   ),
 
-  // ── transport / connection ─────────────────────────────────────────
   exchange_malformed_response: wire(
     'transport',
     502,
@@ -1328,7 +1319,6 @@ export const ERROR_CODES = {
     'A frame was sent before the WebSocket connection was established. Wait for the connection to open before sending.'
   ),
 
-  // ── quota / rate limit (429) ──────────────────────────────────────
   quota_exceeded: wire(
     'rate_limit',
     429,
@@ -1353,7 +1343,6 @@ export const ERROR_CODES = {
     'This API key is sending requests faster than its rate limit allows. Slow down and retry after the delay in the `Retry-After` header.'
   ),
 
-  // ── server (5xx) ───────────────────────────────────────────────────
   session_check_failed: wire(
     'server',
     503,
@@ -1400,7 +1389,6 @@ export const ERROR_CODES = {
     'The rate-limiter backend is unavailable and this endpoint is configured to fail closed; retry shortly.'
   ),
 
-  // ── client-only invariants (never serialized) ──────────────────────
   invalid_options: client(
     'client',
     'The Ablo client was constructed with invalid or incomplete options.'
@@ -1495,7 +1483,6 @@ export const ERROR_CODES = {
   mock_mutation_failed: client('client', 'A mock mutation adapter was configured to fail.'),
   mock_unsupported_operation: client('client', 'A mock adapter received an unsupported operation.'),
 
-  // ── HTTP route edge codes ──────────────────────────────────────────
   invalid_body: wire(
     'validation',
     400,

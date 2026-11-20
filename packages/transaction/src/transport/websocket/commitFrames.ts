@@ -87,17 +87,6 @@ export interface ClaimTracePorts {
   readonly observability: SocketObservability;
 }
 
-/**
- * Which frame reports each phase of a claim's life.
- *
- * The correspondence is real and was previously implicit: six dispatch handlers
- * each passed their own payload alongside a phase they picked by hand, and
- * nothing checked that the two matched. Stating it once means a caller cannot
- * label a rejection as an acquisition.
- *
- * Every value is the `z.infer` of the schema the dispatcher parsed with, so no
- * field is restated here — this maps existing types, it does not describe them.
- */
 interface ClaimFrameByPhase {
   acquired: ClaimAcquired;
   granted: ClaimGranted;
@@ -139,10 +128,6 @@ export function recordClaim<P extends keyof ClaimFrameByPhase>(
   // stays correlated to `phase`, which is what the widening cannot undo.
   const frame: ClaimFramePayload = payload;
   const target = 'target' in frame ? frame.target : undefined;
-  // The holder rides on the rejection and queued frames, with a summary of
-  // their claim beside it. Collecting it is the whole of "name the
-  // counterparty" — the wire has carried it all along and this projection used
-  // to flatten it into one string alongside the cause.
   const counterparty: ClaimCounterparty = {
     ...('heldBy' in frame && frame.heldBy !== undefined
       ? { actor: frame.heldBy }

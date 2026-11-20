@@ -100,7 +100,6 @@ export {
   type ServerSyncDelta,
 } from '../observation/contract.js';
 
-// Model builder
 export {
   model,
   scopeKindOf,

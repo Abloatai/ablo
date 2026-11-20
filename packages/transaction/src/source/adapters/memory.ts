@@ -36,7 +36,6 @@ function rowId(op: Operation): string {
 }
 
 export function memoryDataSource(): DataSourceAdapter {
-  /** model → (id → row). */
   const store = new Map<string, Map<string, Row>>();
   /** Permanent correlationId → intent hash + original response ledger. */
   const idempotency = new Map<

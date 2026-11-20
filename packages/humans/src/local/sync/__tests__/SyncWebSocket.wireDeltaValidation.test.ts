@@ -213,7 +213,6 @@ describe('SyncWebSocket wire delta validation (T1.2)', () => {
 
   it('drops a malformed delta (schema violation) with a breadcrumb, never emits', () => {
     const { fake, deltas, spy } = connectFake();
-    // modelId is required non-empty — this used to be cast straight through.
     deliver(fake, frame('delta', serverShapedDelta({ modelId: '' })));
     deliver(fake, frame('delta', serverShapedDelta({ actionType: 'NOPE' })));
     expect(deltas).toHaveLength(0);

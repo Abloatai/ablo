@@ -686,15 +686,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	        batchFence(claim?.target, claim?.fenceToken),
 	      );
 	      const wait = commitOptions.wait ?? 'confirmed';
-	      // Route through the MutationQueue's commit lane so the call
-	      // tolerates WS disconnects: the envelope stays in memory until
-	      // reconnect, mutationExecutor.commit() owns transport-level
-	      // retry, and `mutation_log` server-side dedupes replays by
-	      // clientTxId. Replaces the direct ws.sendCommit /
-	      // sendCommitQueued path that threw synchronously on
-	      // `ws.readyState !== OPEN`. The queue lives on the internal
-	      // SyncClient we already hold from createInternalComponents —
-	      // no need to leak an accessor through BaseSyncedStore.
+	      // Use the commit lane so the envelope survives WebSocket disconnects and retries.
 	      const queue = syncClient.getMutationQueue();
 	      await queue.enqueueCommit(clientTxId, operations, {
 	        ...(prepared.reads ? { reads: [...prepared.reads] } : {}),

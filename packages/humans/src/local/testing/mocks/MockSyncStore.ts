@@ -34,10 +34,8 @@ type ModelCtor<T extends Model> = abstract new (...args: never[]) => T;
  * assert on what happened.
  */
 export class MockSyncStore implements SyncStoreContract {
-  // Seeded data, keyed by model class
   private byClass = new Map<ModelCtor<Model>, Map<string, Model>>();
 
-  // Call tracking for assertions
   public calls = {
     retrieve: [] as { modelClass: ModelCtor<Model>; id: string }[],
     query: [] as { modelClass: ModelCtor<Model>; options?: QueryOptions<Model> }[],
@@ -61,9 +59,6 @@ export class MockSyncStore implements SyncStoreContract {
     this.byClass.set(modelClass, map);
   }
 
-  /**
-   * Adds or replaces a single model, keyed by its id.
-   */
   addModel<T extends Model>(modelClass: ModelCtor<T>, model: T): void {
     let map = this.byClass.get(modelClass);
     if (!map) {
@@ -73,16 +68,10 @@ export class MockSyncStore implements SyncStoreContract {
     map.set(model.id, model);
   }
 
-  /**
-   * Remove a model by ID.
-   */
   removeModel<T extends Model>(modelClass: ModelCtor<T>, id: string): void {
     this.byClass.get(modelClass)?.delete(id);
   }
 
-  /**
-   * Clear all seeded data and call history.
-   */
   reset(): void {
     this.byClass.clear();
     this.calls = {
@@ -95,7 +84,6 @@ export class MockSyncStore implements SyncStoreContract {
     };
   }
 
-  // ── SyncStoreContract implementation ──────────────────────────────────
 
   retrieve<T extends Model>(modelClass: ModelCtor<T>, id: string): T | undefined {
     this.calls.retrieve.push({ modelClass: modelClass, id });
@@ -118,12 +106,10 @@ export class MockSyncStore implements SyncStoreContract {
 
     let data = Array.from(map.values()) as T[];
 
-    // Apply predicate
     if (options?.predicate) {
       data = data.filter(options.predicate);
     }
 
-    // Apply ordering
     if (options?.orderBy) {
       const key = options.orderBy;
       const order = options.order ?? 'asc';
@@ -136,7 +122,6 @@ export class MockSyncStore implements SyncStoreContract {
       });
     }
 
-    // Apply pagination
     if (options?.offset) {
       data = data.slice(options.offset);
     }
@@ -206,10 +191,6 @@ export class MockSyncStore implements SyncStoreContract {
   };
 }
 
-/**
- * Create a new MockSyncStore.
- * Shorthand for `new MockSyncStore()`.
- */
 export function createMockSyncStore(): MockSyncStore {
   return new MockSyncStore();
 }

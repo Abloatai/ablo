@@ -118,7 +118,6 @@ describe('MutationQueue Delta Confirmation', () => {
       const item = createItemFixture();
       await queue.create(item, TEST_USER_CONTEXT);
 
-      // Process the batch
       await jest.advanceTimersByTimeAsync(10);
 
       // Advance past the delta confirmation timeout (100ms in test config)
@@ -143,7 +142,6 @@ describe('MutationQueue Delta Confirmation', () => {
       const item = createItemFixture();
       await queue.create(item, TEST_USER_CONTEXT);
 
-      // Process batch
       await jest.advanceTimersByTimeAsync(10);
 
       // First timeout at 100ms
@@ -171,7 +169,6 @@ describe('MutationQueue Delta Confirmation', () => {
       const item = createItemFixture();
       await queue.delete(item, TEST_USER_CONTEXT);
 
-      // Wait for processing
       await flushMicrotasks();
       await new Promise((r) => setTimeout(r, 50));
 

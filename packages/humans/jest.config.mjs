@@ -33,10 +33,12 @@ const config = {
         },
       },
     ],
+    // uuid 12+ ships ESM only. Compile it to CommonJS like our own sources.
+    '^.+/node_modules/uuid/.+\\.js$': ['ts-jest', { tsconfig: { allowJs: true, verbatimModuleSyntax: false } }],
   },
 
   transformIgnorePatterns: [
-    'node_modules/(?!(mobx|mobx-react-lite)/)',
+    'node_modules/(?!(mobx|mobx-react-lite|uuid)/)',
   ],
 
   testMatch: [

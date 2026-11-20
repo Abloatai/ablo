@@ -24,7 +24,10 @@ const config: Config = {
         },
       },
     ],
+    // uuid 12+ ships ESM only. Compile it to CommonJS like our own sources.
+    '^.+/node_modules/uuid/.+\\.js$': ['ts-jest', { tsconfig: { allowJs: true, verbatimModuleSyntax: false } }],
   },
+  transformIgnorePatterns: ['/node_modules/(?!uuid/)'],
 
   testMatch: ['<rootDir>/src/__tests__/**/*.test.ts'],
 

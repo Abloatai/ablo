@@ -441,7 +441,6 @@ export interface SyncInfraArtifact {
   readonly retired?: boolean;
 }
 
-/** Render a checklist item the way `ablo check` renders model rows. */
 function printCheckItem(item: CheckItem): void {
   if (item.ok) {
     console.log(`  ${pc.green('✓')} ${item.label}`);

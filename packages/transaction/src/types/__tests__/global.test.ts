@@ -118,8 +118,6 @@ type _AssertClaimThreadsTheOverride =
     : false;
 const _claimOverrideOk: _AssertClaimThreadsTheOverride = true;
 
-// A held claim used to drop the parameter, so `await using held = …` read an
-// untyped `held.target.meta` no matter what the program declared.
 type _AssertHeldClaimKeepsTheOverride =
   NonNullable<
     HeldClaim<Record<string, unknown>, Blocks>['target']['meta']

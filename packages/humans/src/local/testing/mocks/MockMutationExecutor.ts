@@ -55,7 +55,6 @@ export class MockMutationExecutor implements MutationExecutor {
   /** Per-method failure overrides: method name → error */
   private _failureOverrides = new Map<string, Error>();
 
-  /** Per-method response overrides */
   private _responseOverrides = new Map<string, unknown>();
 
   constructor(options: MockMutationExecutorOptions = {}) {
@@ -67,9 +66,6 @@ export class MockMutationExecutor implements MutationExecutor {
     this._missingIds = options.missingIds;
   }
 
-  // ─────────────────────────────────────────────
-  // Test control API
-  // ─────────────────────────────────────────────
 
   /** Returns the current sync id without advancing it. */
   get currentSyncId(): number {
@@ -143,9 +139,6 @@ export class MockMutationExecutor implements MutationExecutor {
     this._responseOverrides.clear();
   }
 
-  // ─────────────────────────────────────────────
-  // MutationExecutor interface implementation
-  // ─────────────────────────────────────────────
 
   async commit(
     operations: MutationOperation[],
@@ -242,9 +235,6 @@ export class MockMutationExecutor implements MutationExecutor {
     this._maybeThrow('executeUnarchive');
   }
 
-  // ─────────────────────────────────────────────
-  // Internal helpers
-  // ─────────────────────────────────────────────
 
   private _capture(
     method: string,
@@ -264,15 +254,12 @@ export class MockMutationExecutor implements MutationExecutor {
   }
 
   private _maybeThrow(method: string): void {
-    // Check specific method override first
     const methodError = this._failureOverrides.get(method);
     if (methodError) throw methodError;
 
-    // Check global override
     const globalError = this._failureOverrides.get('*');
     if (globalError) throw globalError;
 
-    // Check global flag
     if (!this._shouldSucceed) {
       throw new AbloError(`Mock mutation failed: ${method}`, {
         code: 'mock_mutation_failed',

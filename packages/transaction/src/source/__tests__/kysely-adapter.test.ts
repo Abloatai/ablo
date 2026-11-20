@@ -29,10 +29,6 @@ import {
 import { SOURCE_IDEMPOTENCY_RETENTION } from '../adapters/idempotency.js';
 import type { Row } from '../adapters/adapter.js';
 
-// A schema where field names DIVERGE from columns three ways:
-//   - operatorId      → operator_id      (default camelToSnake rule)
-//   - legacyName      → display_label    (explicit `field.from()` override)
-//   - organizationId  → organization_id  (base tenancy column)
 const schema = defineSchema({
   item: model({
     title: field.string(),
@@ -300,7 +296,6 @@ describe('kyselyDataSource', () => {
     const insert = db.calls.find((c) => c.kind === 'insert' && c.table === 'item');
     expect(insert?.values).toBeDefined();
     const cols = Object.keys(insert!.values!);
-    // Default rule: operatorId → operator_id. Explicit override: legacyName → display_label.
     expect(cols).toContain('operator_id');
     expect(cols).toContain('display_label');
     expect(cols).not.toContain('operatorId');

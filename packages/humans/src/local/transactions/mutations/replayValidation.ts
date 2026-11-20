@@ -142,11 +142,6 @@ export function deserializePersistedTransaction(
   };
 }
 
-/**
- * The shape of one entry in the persisted legacy local mutation journal — an item of
- * the `'queue'` row's `mutations` array, carrying the fields read when the
- * queue is restored on reconnect.
- */
 export const persistedMutationSchema = z
   .object({
     mutationId: z.string().min(1).optional(),

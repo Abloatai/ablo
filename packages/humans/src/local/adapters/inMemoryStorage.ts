@@ -50,7 +50,6 @@ export class InMemoryObjectStore implements ObjectStoreContract {
     const id = record.id as string;
     if (!id) return;
 
-    // Remove from old index entries if updating
     const existing = this.data.get(id);
     if (existing) {
       this.removeFromIndexes(id, existing);

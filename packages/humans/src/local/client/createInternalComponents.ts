@@ -50,6 +50,7 @@ export interface InternalComponentsInput<S extends SchemaRecord> {
   /** The owning client's runtime, threaded into every component built here.
    *  Defaults to the module-global bridge for direct construction. */
   readonly runtime?: RuntimeContext;
+  readonly isConnected?: () => boolean;
 }
 
 export interface InternalComponents {
@@ -128,6 +129,7 @@ export function createInternalComponents<S extends SchemaRecord>(
     // be further along.
     position: syncClient.position,
     isDeletePending: (id) => syncClient.isDeletePending(id),
+    isConnected: input.isConnected,
   });
   syncClient.on('optimistic:delete', (id: string) => hydration.markDeleted(id));
   syncClient.on('sync:delete', (id: string) => hydration.markDeleted(id));
@@ -137,6 +139,7 @@ export function createInternalComponents<S extends SchemaRecord>(
   // pure-local with no network; after a drop, deltas may have been missed, so
   // the next read of each query must re-confirm with the server once.
   syncClient.on('sync:reconnecting', () => { hydration.invalidate(); });
+  syncClient.on('connection:disconnected', () => { hydration.invalidate(); });
 
   return {
     modelRegistry,

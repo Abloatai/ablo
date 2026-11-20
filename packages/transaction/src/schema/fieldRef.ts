@@ -46,7 +46,6 @@ export function isFieldRef(value: unknown): value is FieldRef {
   );
 }
 
-/** Build the reference for one declared field. */
 export function fieldRef<
   const Model extends string,
   const Field extends string,

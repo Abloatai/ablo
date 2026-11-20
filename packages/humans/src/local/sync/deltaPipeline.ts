@@ -294,7 +294,6 @@ export function scheduleDeltaFlush(ctx: DeltaPipelineContext): void {
   }
 }
 
-/** Apply an authoritative legacy frame without exposing its persistence promise. */
 export function applyDeltaFrame(ctx: DeltaPipelineContext, deltas: SyncDelta[]): void {
   void persistDeltaFrame(ctx, deltas).catch(ctx.handleFlushError);
 }

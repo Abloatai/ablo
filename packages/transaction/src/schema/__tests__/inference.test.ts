@@ -6,7 +6,6 @@ import { z } from 'zod';
 import { defineSchema, model, field, relation } from '../index.js';
 import type { Model, InferCreate } from '../index.js';
 
-// ── Define a test schema ──────────────────────────────────────────────────
 
 const schema = defineSchema({
   items: model(
@@ -54,7 +53,6 @@ const schema = defineSchema({
   }),
 });
 
-// ── Type inference tests (compile-time) ───────────────────────────────────
 
 type Item = Model<typeof schema, 'items'>;
 type Workspace = Model<typeof schema, 'workspaces'>;
@@ -78,7 +76,6 @@ type _ItemHasStatus = Expect<Equal<Item['status'], 'todo' | 'in_progress' | 'don
 type _ItemHasPriority = Expect<Equal<Item['priority'], number>>;
 type _ItemHasBlocked = Expect<Equal<Item['isBlocked'], boolean>>;
 
-// Optional fields
 type _ItemDescOptional = Expect<Equal<Item['description'], string | undefined>>;
 type _ItemWorkspaceIdOptional = Expect<Equal<Item['workspaceId'], string | undefined>>;
 type _ItemDueDateOptional = Expect<Equal<Item['dueDate'], Date | undefined>>;
@@ -88,10 +85,8 @@ type _ItemMetadata = Expect<
   Equal<Item['metadata'], { tags: string[]; source?: string } | undefined>
 >;
 
-// Create input — fields with defaults are optional
 type _CreateItemTitleRequired = Expect<Equal<CreateItem['title'], string>>;
 
-// ── Runtime tests ─────────────────────────────────────────────────────────
 
 describe('Zod Schema DSL', () => {
   it('defineSchema returns schema with models', () => {
@@ -230,7 +225,6 @@ describe('Zod Schema DSL', () => {
   });
 });
 
-// ── Computed getter inference ───────────────────────────────────────────
 
 const schemaWithComputed = defineSchema({
   chats: model(

@@ -23,12 +23,11 @@ describe('computePrerollDelayMs', () => {
   });
 
   it('15m TTL → 10m (exactly the historical cadence, now derived)', () => {
-    expect(computePrerollDelayMs(15 * MINUTE, 0)).toBe(10 * MINUTE);
+    expect(computePrerollDelayMs(15 * MINUTE, 0, () => 0)).toBe(10 * MINUTE);
   });
 
   it('short TTL schedules INSIDE the credential lifetime (the bug this fixes)', () => {
-    // A 6-minute ek_ used to outlive the fixed 10-minute pre-roll entirely.
-    expect(computePrerollDelayMs(6 * MINUTE, 0)).toBe(4 * MINUTE);
+    expect(computePrerollDelayMs(6 * MINUTE, 0, () => 0)).toBe(4 * MINUTE);
   });
 
   it('long TTL is capped at the 10-minute ceiling', () => {
@@ -46,12 +45,14 @@ describe('CredentialLifecycle pre-roll scheduling', () => {
 
   beforeEach(() => {
     jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0);
     ctx = createTestContext();
   });
 
   afterEach(() => {
     ctx.cleanup();
     jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   function makeLifecycle() {

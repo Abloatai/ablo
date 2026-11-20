@@ -181,7 +181,7 @@ function extractLegacyEntries(obj: Record<string, unknown>): ProfileKeys {
   if (sandbox || production) {
     return { ...(sandbox ? { sandbox } : {}), ...(production ? { production } : {}) };
   }
-  const flat = asKeyEntry(obj); // legacy: { apiKey, ... } at the top level
+  const flat = asKeyEntry(obj);
   return flat ? { sandbox: flat } : {};
 }
 
@@ -300,7 +300,6 @@ export function setProfileKeys(
   return writeConfig(cfg);
 }
 
-/** Set the active environment. */
 export function setMode(mode: Mode): string {
   const cfg = readConfig() ?? emptyConfig(mode);
   cfg.mode = mode;

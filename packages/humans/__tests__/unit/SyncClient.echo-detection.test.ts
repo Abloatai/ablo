@@ -142,9 +142,6 @@ describe('SyncClient echo detection (architectural)', () => {
     expect(pool.get(model.id)).toBeUndefined();
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // 1. Reproduce the flicker
-  // ─────────────────────────────────────────────────────────────────────────
 
   it('does NOT resurrect a row when the CREATE echo arrives after an optimistic DELETE', () => {
     const layerId = 'layer-flicker-1';
@@ -158,8 +155,6 @@ describe('SyncClient echo detection (architectural)', () => {
       organizationId: 'org-1',
     };
 
-    // Step 1: optimistic create. The mutation hasn't reached the server
-    // yet, but the pool already reflects it.
     const created = pool.createFromData({ __typename: 'EntryDetail', ...layerData });
     expect(created).not.toBeNull();
     pool.add(created!, ModelScope.live);
@@ -188,8 +183,6 @@ describe('SyncClient echo detection (architectural)', () => {
 
     expect(pool.get(layerId)).toBeUndefined();
 
-    // Step 4: server's confirming DELETE delta arrives. Pool already
-    // empty; the remove is a no-op.
     const deleteEchoBatch: DbResult[] = [
       { action: 'remove', modelName: 'EntryDetail', modelId: layerId, transactionId: txDeleteId },
     ];
@@ -198,9 +191,6 @@ describe('SyncClient echo detection (architectural)', () => {
     expect(pool.get(layerId)).toBeUndefined();
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // 2. Foreign deltas still apply
-  // ─────────────────────────────────────────────────────────────────────────
 
   it('applies deltas from OTHER clients normally (unknown transactionId)', () => {
     const layerId = 'layer-foreign';
@@ -212,8 +202,6 @@ describe('SyncClient echo detection (architectural)', () => {
       organizationId: 'org-1',
     };
 
-    // No local transaction was staged for this id — the delta is from
-    // another client/agent. Pool should gain the row.
     const foreignBatch: DbResult[] = [
       { action: 'add', modelName: 'EntryDetail', modelId: layerId, data: layerData, transactionId: 'tx-from-other-client' },
     ];
@@ -309,9 +297,6 @@ describe('SyncClient echo detection (architectural)', () => {
     expect(pool.get(otherId)).toBeDefined();   // foreign applied
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // 5. Update echoes
-  // ─────────────────────────────────────────────────────────────────────────
 
   it('does not re-apply an UPDATE echo on top of newer local optimistic state', () => {
     const layerId = 'layer-update-echo';
@@ -328,7 +313,6 @@ describe('SyncClient echo detection (architectural)', () => {
     const live = pool.get(layerId)!;
     live.applyChanges({ zIndex: 5 });
 
-    // Mark the local update as pending; echo will arrive.
     client.markTransactionPending(txUpdate1);
 
     // Server's confirming UPDATE delta carries zIndex=5 (the value the
