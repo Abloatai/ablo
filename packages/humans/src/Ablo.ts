@@ -79,7 +79,6 @@ export type { ModelTarget, ModelClaim } from './local/client/resourceTypes.js';
  */
 export type Ablo<S extends SchemaRecord> = AbloClient<S>;
 
-// ── The factory ───────────────────────────────────────────────────────────
 
 /**
  * Create a sync engine client in one call.
@@ -270,7 +269,6 @@ export namespace Ablo {
   export type Store = import('./local/storeContract.js').SyncStoreContract;
   export type Status = import('./local/client/status.js').ClientStatus;
 
-  // ── Factory options ────────────────────────────────────────────────
   export type Options<S extends SchemaRecord = SchemaRecord> = AbloOptions<S>;
   /**
    * The read view of the client that `useAblo` selectors receive: model reads
@@ -281,12 +279,10 @@ export namespace Ablo {
   export type IfClaimedPolicy = import('./local/client/resourceTypes.js').IfClaimedPolicy;
   export type ClaimedOptions = import('./local/client/resourceTypes.js').ClaimedOptions;
 
-  // ── Entity pointers (flat — input shapes used everywhere) ─────────
   export type ClaimTarget = _Streams.ClaimTarget;
   export type PresenceTarget = _Streams.PresenceTarget;
   export type Duration = _Streams.Duration;
 
-  // ── Real-time multiplayer (flat — heterogeneous cluster) ──────────
   export type Presence = import('./presence/index.js').ReactivePresence;
   export type PresenceSession = import('@abloatai/transaction/presence').PresenceSession;
   export type PresenceActivity = import('@abloatai/transaction/presence').PresenceActivity;
@@ -310,7 +306,6 @@ export namespace Ablo {
     export type Actor = _Streams.ParticipantRef;
   }
 
-  // ── Schema (type + sub-namespace via declaration merge) ───────────
   export type Schema<S extends _SchemaTypes.SchemaRecord = _SchemaTypes.SchemaRecord> = _SchemaTypes.Schema<S>;
   /**
    * The schema this program has registered via `interface Register { Schema }`

@@ -72,6 +72,7 @@ export interface OnDemandLoaderOptions {
    */
   readonly position: Pick<LogPositionPort, 'readFloor'>;
   readonly isDeletePending?: (id: string) => boolean;
+  readonly isConnected?: () => boolean;
 }
 
 export interface FetchOptions<T> {
@@ -160,6 +161,14 @@ export class OnDemandLoader {
     for (const deleted of this.activeReadDeletes) deleted.add(id);
   }
   private readonly readEvidence = new WeakMap<object, number>();
+  private readSnapshots = new WeakMap<Model, {
+    data: string;
+    stamp: number;
+    position: number | undefined;
+    credential: string | null;
+    poolGeneration: number;
+  }>();
+  private evidenceGeneration = 0;
   private readonly inFlight = new Map<string, Promise<Model[]>>();
   /**
    * Query keys with a background confirm currently in flight. Distinct from
@@ -267,6 +276,31 @@ export class OnDemandLoader {
   /** Exact evidence retained for a row returned by a server-confirmed fetch. */
   getReadEvidence(row: object): number | undefined {
     return this.readEvidence.get(row);
+  }
+
+  /** A detached server snapshot, usable only while this exact row remains unchanged. */
+  getReadSnapshot(row: Model): { data: unknown; stamp: number } | undefined {
+    const snapshot = this.readSnapshots.get(row);
+    if (!snapshot || !this.opts.isConnected?.() ||
+        snapshot.poolGeneration !== this.opts.objectPool.generation ||
+        snapshot.credential !== (this.authTokenProvider?.() ?? null) ||
+        this.opts.objectPool.get(row.id) !== row || this.opts.isDeletePending?.(row.id) ||
+        this.opts.objectPool.watermarks.of(row) !== snapshot.position ||
+        Object.keys(row.getChanges()).length > 0) return undefined;
+    const data = JSON.parse(snapshot.data) as Record<string, unknown>;
+    if (this.rowSnapshot(row, data) !== snapshot.data) return undefined;
+    return { data, stamp: snapshot.stamp };
+  }
+
+  private rowSnapshot(row: Model, data: Record<string, unknown>): string | undefined {
+    try {
+      return JSON.stringify(Object.fromEntries(Object.keys(data).map((key) => [
+        key,
+        key === '__typename' ? row.getModelName() : Reflect.get(row, key) as unknown,
+      ])));
+    } catch {
+      return undefined;
+    }
   }
 
   private async runFetch(
@@ -378,6 +412,8 @@ export class OnDemandLoader {
    */
   invalidate(): void {
     this.hydratedKeys.clear();
+    this.readSnapshots = new WeakMap();
+    this.evidenceGeneration++;
   }
 
   /**
@@ -393,6 +429,9 @@ export class OnDemandLoader {
     options: FetchOptions<unknown> | undefined,
   ): Promise<Model[]> {
     const deleted = new Set<string>();
+    const generation = this.evidenceGeneration;
+    const poolGeneration = this.opts.objectPool.generation;
+    const credential = this.authTokenProvider?.() ?? null;
     this.activeReadDeletes.add(deleted);
     try {
       const network = await this.queryNetwork(modelName, clauses, options, deleted);
@@ -414,6 +453,7 @@ export class OnDemandLoader {
         )
         .filter((m): m is Model => m !== null);
 
+      const acceptedById = new Map(acceptedRows.map((row) => [(row as { id: string }).id, row]));
       for (const model of networkModels) {
         const stamp = evidenceById.get(model.id);
         if (stamp === undefined) continue;
@@ -421,6 +461,19 @@ export class OnDemandLoader {
         // and the position the pooled row now reflects, for freshness.
         this.readEvidence.set(model, stamp);
         this.opts.objectPool.watermarks.advance(model, stamp);
+        this.readSnapshots.delete(model);
+        const raw = acceptedById.get(model.id);
+        if (raw && generation === this.evidenceGeneration &&
+            poolGeneration === this.opts.objectPool.generation &&
+            credential === (this.authTokenProvider?.() ?? null) &&
+            Object.keys(model.getChanges()).length === 0) {
+          const data = JSON.stringify(raw);
+          if (this.rowSnapshot(model, raw as Record<string, unknown>) === data) {
+            this.readSnapshots.set(model, {
+              data, stamp, credential, poolGeneration, position: this.opts.objectPool.watermarks.of(model),
+            });
+          }
+        }
       }
 
       if (networkModels.length > 0) {
@@ -493,8 +546,6 @@ export class OnDemandLoader {
       if (!targetKey || !foreignKey) continue;
       const targetTypename = this.resolveTypename(targetKey);
 
-      // Skip parents whose children are already pool-resident (O(1) when the
-      // FK is indexed). Falls through to a local read for the rest.
       const missing = parentIds.filter(
         (pid) =>
           this.opts.objectPool.getByForeignKey(targetTypename, foreignKey, pid).length === 0,
@@ -809,7 +860,6 @@ export class OnDemandLoader {
   }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
 
 function stableKey(
   modelName: string,

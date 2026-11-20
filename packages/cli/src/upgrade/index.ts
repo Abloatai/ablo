@@ -142,7 +142,6 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
       flag(node, 'react-api', hint);
     }
 
-    // ── withSync → observer ──────────────────────────────────────────────
     for (const imp of sf.getImportDeclarations()) {
       if (!ABLO_REACT.has(imp.getModuleSpecifierValue())) continue;
       const ws = imp.getNamedImports().find((n) => n.getName() === 'withSync');
@@ -186,7 +185,6 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
       }
     }
 
-    // ── manual-review flags (detect only) ────────────────────────────────
     for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
       const t = call.getExpression().getText();
       if (t === 'drizzleDataSource' && call.getArguments().length === 2 && !Node.isIdentifier(call.getArguments()[1])) {
@@ -206,7 +204,6 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
     }
   }
 
-  // ── report ───────────────────────────────────────────────────────────
   const cwd = process.cwd();
   const rel = (f: string): string => f.replace(cwd + '/', '');
   console.log();

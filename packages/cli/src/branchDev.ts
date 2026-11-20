@@ -77,7 +77,6 @@ export function parseBranchDevArgs(argv: readonly string[]): BranchDevArgs {
   };
 }
 
-/** Convert a Git/CI ref into a safe branch slug. */
 export function branchSlugFromRef(ref: string): string {
   const base = ref
     .normalize('NFKD')

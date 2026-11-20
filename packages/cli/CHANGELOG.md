@@ -1,5 +1,13 @@
 # @abloatai/cli
 
+## 0.67.4
+
+### Missing runtime credentials point to the right command
+
+CLI diagnostics now direct a signed-in developer to `ablo dev`, which mints the runtime credential, rather than sending them back through management-key login.
+
+The CLI uses the updated transaction and reactive-client packages in the 0.67.4 release group.
+
 ## 0.67.3
 
 ### Patch Changes

@@ -74,7 +74,6 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
     });
 
     it('should contain items created via batchAck', async () => {
-      // Create a uniquely identifiable item
       const itemId = uuid();
       const title = `Bootstrap-verify-${itemId.slice(0, 8)}`;
       await batchAck([{
@@ -102,11 +101,9 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
 
   describe('partial bootstrap (delta gap)', () => {
     it('should return deltas since lastSyncId', async () => {
-      // Get current sync state
       const fullData = await fetchBootstrap();
       const beforeSyncId = fullData.lastSyncId as number;
 
-      // Create some items after the sync point
       const itemIds: string[] = [];
       for (let i = 0; i < 3; i++) {
         const id = uuid();
@@ -128,7 +125,6 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
       // The response should contain the new items (either as models or deltas)
       // Depending on server implementation it may return full or partial
       if (partialData.type === 'partial' && partialData.deltas) {
-        // Check deltas contain our items
         const deltas = partialData.deltas as Record<string, unknown>[];
         for (const id of itemIds) {
           const found = deltas.find((d) => d.modelId === id);
@@ -151,7 +147,6 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
 
   describe('data integrity after mutations', () => {
     it('should not return deleted entities in bootstrap', async () => {
-      // Create and delete a item
       const itemId = uuid();
       await batchAck([{
         type: 'CREATE', model: 'item', id: itemId,
@@ -177,13 +172,11 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
       const originalTitle = `Update-bootstrap-${itemId.slice(0, 8)}`;
       const updatedTitle = `Updated-${itemId.slice(0, 8)}`;
 
-      // Create
       await batchAck([{
         type: 'CREATE', model: 'item', id: itemId,
         input: { title: originalTitle, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
-      // Update
       await batchAck([{
         type: 'UPDATE', model: 'item', id: itemId,
         input: { title: updatedTitle },

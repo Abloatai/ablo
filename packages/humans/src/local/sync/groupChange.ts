@@ -250,8 +250,6 @@ export async function handleGroupRemoved(
   await ctx.database.clear();
   ctx.objectPool.clear();
 
-  // Update subscription metadata so the re-bootstrap fetches the
-  // correct set of groups.
   const current = new Set(ctx.getSubscribedSyncGroups());
   current.delete(groupKey);
   await ctx.database.updateWorkspaceMetadata({ subscribedSyncGroups: Array.from(current) });

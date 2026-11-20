@@ -149,6 +149,7 @@ export function buildStoreCluster(
   initRuntime(runtime);
 
   const components = createInternalComponents({
+    isConnected: () => transport.isConnected(),
     schema,
     url,
     options,

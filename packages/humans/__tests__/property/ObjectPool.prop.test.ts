@@ -44,7 +44,6 @@ describe('Property: ObjectPool Invariants', () => {
           const pool = new ObjectPool({ maxSize: 1000, gcInterval: 0, useWeakRefs: false }, registry);
           const models = new Map<string, TestItem>();
 
-          // Add all
           for (const id of ids) {
             const item = new TestItem({ id, title: `Item ${id}` });
             models.set(id, item);
@@ -166,14 +165,12 @@ describe('Property: ObjectPool Invariants', () => {
           const pool = new ObjectPool({ maxSize: 500, gcInterval: 0, useWeakRefs: false }, registry);
           pool.registerForeignKey('Item', 'workspaceId');
 
-          // Add all models
           const addedIds: string[] = [];
           for (const m of models) {
             pool.add(new TestItem({ id: m.id, workspaceId: m.workspaceId }));
             addedIds.push(m.id);
           }
 
-          // Remove some
           for (const idx of removeIndices) {
             if (addedIds.length > 0) {
               const actualIdx = idx % addedIds.length;
@@ -232,7 +229,6 @@ describe('Property: ObjectPool Invariants', () => {
             expect(p.getModelName()).toBe('Workspace');
           }
 
-          // No overlap
           const itemIds = new Set(items.map((t) => t.id));
           const workspaceIds = new Set(workspaces.map((p) => p.id));
           for (const id of itemIds) {

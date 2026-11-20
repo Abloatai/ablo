@@ -75,4 +75,35 @@ describe('presence projection store', () => {
     } satisfies PresencePatch);
     expect(projection.sessions).toEqual([]);
   });
+
+  it('rides out a brief disconnect without flashing the roster empty', () => {
+    jest.useFakeTimers();
+    try {
+      const source = events();
+      const projection = createPresenceProjection(source);
+      source.emit('presence_session', { presenceSessionId: 'self-session' });
+      source.emit('presence_snapshot', {
+        presenceSessionId: 'other-tab', participant: { id: 'person-1', kind: 'user' },
+        revision: 1, activities: [read('other-read')], tombstones: [],
+      } satisfies PresenceSnapshot);
+      expect(projection.others).toHaveLength(1);
+
+      // A short blip: disconnect, then reconnect well inside the grace window.
+      source.emit('disconnected');
+      jest.advanceTimersByTime(1000);
+      expect(projection.others).toHaveLength(1);
+      source.emit('connected');
+      jest.advanceTimersByTime(10_000);
+      expect(projection.others).toHaveLength(1);
+
+      // A disconnect that never recovers still clears, just after the grace window.
+      source.emit('disconnected');
+      jest.advanceTimersByTime(4_999);
+      expect(projection.others).toHaveLength(1);
+      jest.advanceTimersByTime(1);
+      expect(projection.others).toEqual([]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

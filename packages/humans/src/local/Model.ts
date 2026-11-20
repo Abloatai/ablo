@@ -21,11 +21,9 @@ interface SyncStoreRef {
   getById(id: string): Model | undefined;
   /** Persist a model (upsert). */
   save(model: Model): Promise<void>;
-  /** Delete a model. */
   delete(model: Model): Promise<void>;
   /** Archive a model (soft delete). */
   archive(model: Model): Promise<void>;
-  /** Unarchive a previously archived model. */
   unarchive(model: Model): Promise<void>;
 }
 import type { PropertyMetadata } from '@abloatai/transaction/types';
@@ -52,7 +50,6 @@ export interface PropertyChange {
 /** Validation rule function that returns error string or null if valid */
 type ValidationRule = (value: unknown) => string | null;
 
-/** Interface for objects that can be disposed */
 interface Disposable {
   dispose(): void;
 }
@@ -135,13 +132,10 @@ export abstract class Model {
   /** Referenced models cache */
   _referencedModels: Record<string, Model | null> = {};
 
-  /** Track property changes */
   modifiedProperties = new Map<string, PropertyChange>();
 
-  /** Track if this is a new model */
   private _isNew = true;
 
-  /** Original data snapshot */
   private _originalData?: ModelData;
 
   /**
@@ -156,18 +150,14 @@ export abstract class Model {
    */
   private _originalDataStale = false;
 
-  /** Sync status */
   syncStatus: 'pending' | 'syncing' | 'synced' = 'pending';
 
-  /** Timestamps */
   createdAt?: Date;
   updatedAt?: Date;
   archivedAt?: Date | null;
 
-  /** Validation rules */
   protected validationRules: Record<string, ValidationRule[]> = {};
 
-  /** Lifecycle state */
   private isDisposed = false;
   private disposers: (() => void)[] = [];
   /**
@@ -188,9 +178,8 @@ export abstract class Model {
   constructor(data: Partial<Model> = {}) {
     // Always generate permanent UUID on client
     this.id = data.id ?? Model.generateId();
-    this.clientId = this.id; // No more temp IDs!
+    this.clientId = this.id;
 
-    // Ensure dates are Date objects, not strings
     this.createdAt = data.createdAt
       ? data.createdAt instanceof Date
         ? data.createdAt
@@ -212,17 +201,10 @@ export abstract class Model {
     this.syncStatus = data.syncStatus ?? 'pending';
   }
 
-  /**
-   * Generate unique ID
-   */
   static generateId(): string {
     return uuid();
   }
 
-  /**
-   * Set the active SyncedStore reference for reactive queries.
-   * Called once at engine initialization.
-   */
   static setStore(store: SyncStoreRef): void {
     Model.store = store;
   }
@@ -246,18 +228,13 @@ export abstract class Model {
     return Model.store as T | null;
   }
 
-  /**
-   * Initialize MobX observability
-   */
   public makeObservable(): void {
     if (this._observabilityReady) return;
     const modelName = this.getModelName();
 
-    // Get metadata from static ModelRegistry
     const propertyMetadata = getActiveRegistry().getProperties(modelName);
     const referenceMetadata = getActiveRegistry().getReferences(modelName);
 
-    // Use M1 for observability setup
     M1(this, propertyMetadata, referenceMetadata);
     this._observabilityReady = true;
     this._observabilityDeferred = false;
@@ -277,9 +254,6 @@ export abstract class Model {
     if (this._observabilityDeferred) this.makeObservable();
   }
 
-  /**
-   * Track property changes
-   */
   propertyChanged(propertyName: string, oldValue: unknown, newValue: unknown): void {
     // `createdAt` and `updatedAt` are server-managed bookkeeping, not
     // user-authored model changes. In particular, every real field change
@@ -313,9 +287,6 @@ export abstract class Model {
     });
   }
 
-  /**
-   * Get changes as object
-   */
   getChanges(): ModelData {
     const changes: ModelData = {};
 
@@ -326,25 +297,16 @@ export abstract class Model {
     return changes;
   }
 
-  /**
-   * Check if model has changes
-   */
   get hasChanges(): boolean {
     return this.modifiedProperties.size > 0;
   }
 
-  /**
-   * Mark model as persisted (not new)
-   */
   markAsPersisted(): void {
     this._isNew = false;
     this._originalData = undefined;
     this._originalDataStale = true;
   }
 
-  /**
-   * Check if this is a new model
-   */
   isNew(): boolean {
     return this._isNew;
   }
@@ -370,9 +332,6 @@ export abstract class Model {
     return this._originalData;
   }
 
-  /**
-   * Clear tracked changes
-   */
   clearChanges(): void {
     runInAction(() => {
       this.modifiedProperties.clear();
@@ -449,9 +408,6 @@ export abstract class Model {
     }
   }
 
-  /**
-   * Validate model
-   */
   validate(): string[] {
     if (this.isDisposed) {
       throw new AbloValidationError('Cannot validate disposed model', {
@@ -465,7 +421,6 @@ export abstract class Model {
 
     const json = this.toJSON();
     for (const [propName, metadata] of properties) {
-      // Check required fields
       if (!metadata.nullable && !metadata.optional) {
         const value = json[propName];
         if (value == null || value === '') {
@@ -491,16 +446,10 @@ export abstract class Model {
     return errors;
   }
 
-  /**
-   * Override for custom validation
-   */
   protected customValidate(): string[] {
     return [];
   }
 
-  /**
-   * Add validation rule
-   */
   protected addValidationRule(propName: string, rule: ValidationRule): void {
     this.validationRules[propName] ??= [];
     this.validationRules[propName].push(rule);
@@ -517,14 +466,12 @@ export abstract class Model {
       });
     }
 
-    // Validate first
     const errors = this.validate();
     if (errors.length > 0) {
       throw new ValidationError(errors);
     }
 
     if (this._isNew) {
-      // New model - return create operation
       return {
         type: 'create',
         modelName: this.getModelName(), // the registered model name
@@ -532,7 +479,6 @@ export abstract class Model {
         timestamp: new Date(),
       };
     } else if (this.hasChanges) {
-      // Existing model with changes - return update operation
       return {
         type: 'update',
         modelName: this.getModelName(), // the registered model name
@@ -542,13 +488,9 @@ export abstract class Model {
       };
     }
 
-    // No changes
     return null;
   }
 
-  /**
-   * Prepare delete operation
-   */
   prepareDelete(): ModelChanges {
     if (this.isDisposed) {
       throw new AbloValidationError('Cannot prepare delete for disposed model', {
@@ -566,9 +508,6 @@ export abstract class Model {
     };
   }
 
-  /**
-   * Prepare archive operation
-   */
   prepareArchive(): ModelChanges {
     if (this.isDisposed) {
       throw new AbloValidationError('Cannot prepare archive for disposed model', {
@@ -586,9 +525,6 @@ export abstract class Model {
     };
   }
 
-  /**
-   * Prepare unarchive operation
-   */
   prepareUnarchive(): ModelChanges {
     if (this.isDisposed) {
       throw new AbloValidationError('Cannot prepare unarchive for disposed model', {
@@ -660,7 +596,6 @@ export abstract class Model {
         continue;
       }
 
-      // Handle date conversions
       const value = disposition === 'write-date' && raw
         ? new Date(raw as string | number)
         : raw;
@@ -751,7 +686,6 @@ export abstract class Model {
       }
     });
 
-    // Mark as persisted if updating existing model
     if (!this._isNew) {
       this._originalData = undefined;
       this._originalDataStale = true;
@@ -816,7 +750,6 @@ export abstract class Model {
 
     const self = this as Record<string, unknown>;
     for (const [propName, metadata] of properties) {
-      // Skip certain types
       if (metadata.type === 'ephemeralProperty') continue;
       if (metadata.type === 'referenceModel') continue;
       if (metadata.type === 'referenceCollection') continue;
@@ -830,9 +763,6 @@ export abstract class Model {
     return result;
   }
 
-  /**
-   * Clone this model
-   */
   clone(): this {
     const Constructor = this.constructor as new () => this;
     const clone = new Constructor();
@@ -868,9 +798,6 @@ export abstract class Model {
     return Reflect.get(this, name);
   }
 
-  /**
-   * Check equality
-   */
   equals(other: Model): boolean {
     return this.id === other.id && this.constructor === other.constructor;
   }
@@ -882,22 +809,11 @@ export abstract class Model {
     return `${this.constructor.name}[${this.id}]`;
   }
 
-  // ==========================================
-  // MobX Observation Tracking (for GC prevention)
-  // ==========================================
 
-  /**
-   * Register a LazyReferenceCollection as being observed
-   * Called by LazyReferenceCollection when onBecomeObserved fires
-   */
   _registerObservedCollection(collection: Disposable): void {
     this._observedCollections.add(collection);
   }
 
-  /**
-   * Unregister a LazyReferenceCollection that's no longer observed
-   * Called by LazyReferenceCollection when onBecomeUnobserved fires
-   */
   _unregisterObservedCollection(collection: Disposable): void {
     this._observedCollections.delete(collection);
   }
@@ -910,20 +826,13 @@ export abstract class Model {
     return this._observedCollections.size > 0;
   }
 
-  /**
-   * Get count of observed collections (for debugging)
-   */
   get observedCollectionCount(): number {
     return this._observedCollections.size;
   }
 
-  /**
-   * Dispose model
-   */
   dispose(): void {
     if (this.isDisposed) return;
 
-    // Clean up
     for (const disposer of this.disposers) {
       disposer();
     }
@@ -956,22 +865,13 @@ export abstract class Model {
     this.isDisposed = true;
   }
 
-  /**
-   * Check if disposed
-   */
   get disposed(): boolean {
     return this.isDisposed;
   }
 
-  /**
-   * Lifecycle hooks - override in subclasses
-   */
   protected didUpdate(): void {}
   protected willDelete(): void {}
 
-  /**
-   * Capture snapshot for change detection
-   */
   protected captureSnapshot(): ModelData {
     const snapshot: ModelData = {};
     const modelName = this.getModelName();
@@ -1063,9 +963,6 @@ export abstract class Model {
     return EMPTY_DERIVED_GETTERS;
   }
 
-  /**
-   * Get field changes for activity tracking
-   */
   getFieldChanges(): FieldChange[] {
     const changes: FieldChange[] = [];
 
@@ -1090,9 +987,6 @@ export abstract class Model {
     return 'string';
   }
 
-  /**
-   * Create model from JSON
-   */
   static fromJSON(
     data: ModelData & { __typename?: string; __class?: string; modelName?: string }
   ): Model {
@@ -1121,23 +1015,14 @@ export abstract class Model {
     return instance;
   }
 
-  /**
-   * Get sync status
-   */
   getSyncStatus(): 'pending' | 'syncing' | 'synced' {
     return this.syncStatus;
   }
 
-  /**
-   * Mark model as synced
-   */
   markAsSynced(): void {
     this.syncStatus = 'synced';
   }
 
-  /**
-   * Mark model as pending sync
-   */
   markAsPending(): void {
     this.syncStatus = 'pending';
   }

@@ -47,7 +47,6 @@ interface ReactiveWorkspace extends Model {
   createdBy: string;
 }
 
-// ── Test schema ─────────────────────────────────────────────────────
 
 const schema = defineSchema({
   workspaces: model({
@@ -70,7 +69,6 @@ const schema = defineSchema({
   }, }),
 });
 
-// ── Helpers ──────────────────────────────────────────────────────────
 
 function createEngine() {
   const opts: InternalAbloOptions<typeof schema.models> = {
@@ -123,7 +121,6 @@ function createWorkspace(pool: ObjectPool, data: WorkspaceData): ReactiveWorkspa
   return m as ReactiveWorkspace;
 }
 
-// ── Tests ────────────────────────────────────────────────────────────
 
 describe('reactive schema-generated model', () => {
   it('createSyncEngine returns without errors', () => {
@@ -170,7 +167,6 @@ describe.skip('change tracking (direct setters)', () => {
       createdBy: 'user-1',
     });
 
-    // Modify a field
     runInAction(() => {
       item.title = 'Updated';
     });
@@ -341,7 +337,7 @@ describe('field.json() integration', () => {
       createdBy: 'user-1',
     });
 
-    expect(workspace.metadataJson.color).toBe('#3B82F6'); // default
-    expect(workspace.metadataJson.icon).toBe('folder');    // default
+    expect(workspace.metadataJson.color).toBe('#3B82F6');
+    expect(workspace.metadataJson.icon).toBe('folder');
   });
 });

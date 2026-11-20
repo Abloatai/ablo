@@ -135,7 +135,6 @@ function randomBase62(len: number): string {
   return out;
 }
 
-// ── Zod schema (the executable spec) ────────────────────────────────────
 
 /** A structurally-valid Ablo API key, parsed into its parts. */
 export interface ParsedApiKey {
@@ -194,7 +193,6 @@ export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
   };
 });
 
-// ── Derived validators (thin wrappers over the same spec) ───────────────
 
 /** Parse + fully validate (incl. checksum). Returns null when invalid. */
 export function parseApiKey(raw: string): ParsedApiKey | null {
@@ -234,7 +232,6 @@ export function keyChecksumMatches(raw: string): boolean {
   return checksum6(raw.slice(0, -CHECKSUM_LEN)) === body.slice(KEY_BODY_LEN);
 }
 
-// ── Mint + hash (node:crypto) ───────────────────────────────────────────
 
 /**
  * Mint a branch-bound key: `<prefix>_<body><checksum>`. Returns the plaintext

@@ -8,8 +8,6 @@
  * NOT marked 'use client' — this module must be importable from all runtimes
  * (server, client, edge).
  */
-// ── Single source of truth for sensitive field names ──────────────────────────
-// Covers auth tokens, PII, and financial data (SOC 2 / investment banking context)
 export const SENSITIVE_KEYS: readonly string[] = [
   // Auth & credentials
   'password',
@@ -22,14 +20,11 @@ export const SENSITIVE_KEYS: readonly string[] = [
   'auth',
   'credential',
   'auth_token',
-  // Infrastructure
   'database_url',
   'redis_url',
   'connection_string',
-  // PII
   'ssn',
   'social_security',
-  // Financial
   'account_number',
   'routing_number',
   'credit_card',
@@ -48,7 +43,6 @@ const SENSITIVE_HEADER_PATTERNS = ['authorization', 'cookie', 'token', 'api-key'
 // Query param keys that must be redacted
 const SENSITIVE_QUERY_PARAMS = ['api_key', 'token', 'password', 'secret'];
 
-// ── Type-safe helpers ─────────────────────────────────────────────────────────
 
 /**
  * Recursively mask values whose keys match any sensitive pattern.

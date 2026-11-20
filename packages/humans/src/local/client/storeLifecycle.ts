@@ -212,9 +212,6 @@ export function startStoreLifecycle<S extends SchemaRecord>(
           }
         }
 
-        // Resolve participant identity + scope. Three branches —
-        // hosted-cloud apiKey exchange, self-derived from capability
-        // token, or legacy explicit options. See `./identity.ts`.
         const resolved = await resolveParticipantIdentity({
           options: internalOptions,
           internalOptions,
@@ -350,7 +347,6 @@ export function startStoreLifecycle<S extends SchemaRecord>(
         // always an AbloError — connection setup is held to the same
         // never-leak-untagged contract as the model operations.
         const error = toAbloError(err);
-        // Make sure syncStatus reflects the failure for observer() components
         store.syncStatus.state = 'error';
         store.syncStatus.error = error;
         // Log the typed envelope (type + code + status), not just the bare

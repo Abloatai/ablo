@@ -101,7 +101,6 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
       }).catch(() => undefined);
     });
 
-    // Bootstrap events
     const onBootstrapRequired = deps.syncWebSocket.subscribe(
       'bootstrap_required',
       (hint: BootstrapHint) => { deps.handleBootstrapRequired(hint); }
@@ -112,7 +111,6 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
       deps.handleBootstrapData(data);
     });
 
-    // Error events
     const onError = deps.syncWebSocket.subscribe('error', (error: Error) => {
       if (error.message === 'Network is offline' || error.message === 'WebSocket connection failed') {
         deps.updateSyncStatus({ state: 'offline', offlineSince: new Date() });

@@ -35,6 +35,23 @@ export interface PresenceProjection extends PresenceView {
   dispose(): void;
 }
 
+/**
+ * How long to keep showing the last-known roster after the socket reports
+ * `disconnected` before actually clearing it. The transport emits that event
+ * on every drop, including brief blips — its own reconnect backoff starts at
+ * 1s and doubles from there (see `transport.ts`). Clearing immediately means a
+ * one-second network hiccup wipes every participant's avatar and then
+ * repopulates it moments later on `presence_snapshot`, which reads as
+ * flicker rather than a real departure, and it happens to everyone else's
+ * presence too, not just the local session's. Deferring the clear and
+ * cancelling it on `connected` rides out ordinary reconnects silently; a
+ * connection that stays down past the grace window still clears, same as
+ * before. The server's own `LEASE_TTL_MS` (packages/transaction/src/wire/
+ * protocol.ts) is the authoritative timeout for a genuinely gone session —
+ * this is only about not flashing the UI empty during routine reconnects.
+ */
+const DISCONNECT_CLEAR_GRACE_MS = 5_000;
+
 export function createPresenceProjection(events: PresenceProjectionEvents): PresenceProjection {
   let currentPresenceSessionId: string | null = null;
   const snapshots = new Map<string, PresenceSnapshot>();
@@ -42,6 +59,7 @@ export function createPresenceProjection(events: PresenceProjectionEvents): Pres
   const unsubscribers: Array<() => void> = [];
   let sessionSnapshot: readonly PresenceSession[] = Object.freeze([]);
   let othersSnapshot: readonly PresenceSession[] = Object.freeze([]);
+  let pendingClear: ReturnType<typeof setTimeout> | null = null;
 
   const rebuild = (): void => {
     sessionSnapshot = Object.freeze(
@@ -66,10 +84,22 @@ export function createPresenceProjection(events: PresenceProjectionEvents): Pres
     }
   };
 
+  const cancelPendingClear = (): void => {
+    if (pendingClear === null) return;
+    clearTimeout(pendingClear);
+    pendingClear = null;
+  };
+
   const clear = (): void => {
+    cancelPendingClear();
     if (snapshots.size === 0) return;
     snapshots.clear();
     notify();
+  };
+
+  const scheduleClear = (): void => {
+    cancelPendingClear();
+    pendingClear = setTimeout(clear, DISCONNECT_CLEAR_GRACE_MS);
   };
 
   unsubscribers.push(
@@ -99,8 +129,8 @@ export function createPresenceProjection(events: PresenceProjectionEvents): Pres
       snapshots.set(patch.presenceSessionId, applyPresencePatch(initial, patch));
       notify();
     }),
-    events.subscribe('connected', clear),
-    events.subscribe('disconnected', clear),
+    events.subscribe('connected', cancelPendingClear),
+    events.subscribe('disconnected', scheduleClear),
   );
 
   return {
@@ -125,6 +155,7 @@ export function createPresenceProjection(events: PresenceProjectionEvents): Pres
       return () => { listeners.delete(listener); };
     },
     dispose() {
+      cancelPendingClear();
       for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
       listeners.clear();
       snapshots.clear();

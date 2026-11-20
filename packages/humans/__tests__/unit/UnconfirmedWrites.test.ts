@@ -68,7 +68,7 @@ describe('UnconfirmedWrites', () => {
     tracker.markPending('tx-3');
     tracker.markPending('tx-4'); // forces eviction of tx-1
 
-    expect(tracker.consumeEcho('tx-1')).toBe(false); // evicted
+    expect(tracker.consumeEcho('tx-1')).toBe(false);
     expect(tracker.consumeEcho('tx-2')).toBe(true);
     expect(tracker.consumeEcho('tx-3')).toBe(true);
     expect(tracker.consumeEcho('tx-4')).toBe(true);

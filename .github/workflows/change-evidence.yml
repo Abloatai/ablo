@@ -1,12 +1,12 @@
 name: Change evidence
 
 on:
+  # Release PRs and hotfixes into main only; PRs into dev need no evidence.
   pull_request_target:
+    branches: [main]
     types: [opened, reopened, synchronize, edited, ready_for_review]
-  issue_comment:
-    types: [created, edited, deleted]
   workflow_run:
-    workflows: [CI]
+    workflows: [Release check]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -23,7 +23,6 @@ permissions:
 jobs:
   evidence:
     name: Reconcile change evidence
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

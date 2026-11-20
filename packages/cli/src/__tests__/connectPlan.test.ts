@@ -41,7 +41,6 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
     expect(withOwn.findIndex((s) => s.key === 'own')).toBeLessThan(
       withOwn.findIndex((s) => s.key === 'publication'),
     );
-    // No inherit-grants → no ownership stage; the ordinary plan is unchanged.
     expect(plan({ credentials: CREDS }).some((s) => s.key === 'own')).toBe(false);
   });
 

@@ -445,11 +445,7 @@ export class BootstrapFetcher {
 	    this.options.authToken = authToken;
 	  }
 
-  /**
-   * Fetch bootstrap data from sync engine with partial bootstrap support
-   * @param lastSyncId - Optional: client's current lastSyncId for partial bootstrap
-   * @returns Bootstrap data (either full snapshot or delta batch)
-   */
+  /** Request a full snapshot or changes since lastSyncId. */
   async fetchBootstrap(
     lastSyncId?: number,
     /**
@@ -522,19 +518,14 @@ export class BootstrapFetcher {
     // See `fetchBootstrapWithETag` for the full rationale.
     const params = new URLSearchParams();
 
-    // Add lastSyncId for partial bootstrap support
     if (lastSyncId !== undefined && lastSyncId > 0) {
       params.append('lastSyncId', lastSyncId.toString());
     }
 
-    // Add sync groups (per-call override wins over the configured set).
     (syncGroupsOverride ?? this.options.syncGroups).forEach((group) => {
       params.append('syncGroups', group);
     });
 
-    // Selective bootstrap: only request instant-strategy models.
-    // When present, the server skips all other models → smaller payload.
-    // When absent, server returns all models (backward compat).
     if (this.options.instantModels && this.options.instantModels.length > 0) {
       params.append('models', this.options.instantModels.join(','));
     }
@@ -833,7 +824,6 @@ export class BootstrapFetcher {
     const etag = res.headers.get('ETag');
 
     if (res.status === 304) {
-      // Log for telemetry
       this.runtime.logger.info('[Bootstrap] 304 Not Modified - using cached data');
       return { notModified: true, etag };
     }
@@ -1136,15 +1126,10 @@ export class BootstrapFetcher {
     return (await response.json()) as Record<string, unknown> | null;
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  /**
-   * Clear all cached bootstrap data
-   */
   clearCache(): void {
     if (typeof window === 'undefined') return;
 
     try {
-      // Clear all bootstrap cache keys
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -1162,7 +1147,6 @@ export class BootstrapFetcher {
     }
   }
 
-  // Cache helpers for offline bootstrap
   private getBootstrapCacheKey(orgId: string): string {
     return `ablo:bootstrap:v5:${JSON.stringify([orgId, this.options.baseUrl, [...new Set(this.options.syncGroups)].sort()])}`;
   }
@@ -1204,9 +1188,6 @@ export class BootstrapFetcher {
     this.cancelActive(cancelled('Bootstrap aborted by its caller'));
   }
 
-  /**
-   * Helper to delay execution
-   */
   private async delay(ms: number, lane: CancelLane): Promise<void> {
     const controller = new AbortController();
     this.activeControllers.set(controller, lane);
@@ -1224,9 +1205,6 @@ export class BootstrapFetcher {
     }
   }
 
-  /**
-   * Get health status of sync engine
-   */
   async checkHealth(): Promise<boolean> {
     try {
       const response = await fetch(`${this.options.baseUrl}/health`, {

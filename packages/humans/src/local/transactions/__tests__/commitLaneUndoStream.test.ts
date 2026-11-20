@@ -84,7 +84,6 @@ describe('commit-lane writes reach the undo stream', () => {
     expect(tx.type).toBe('update');
     expect(tx.modelId).toBe(item.id);
     expect(tx.data).toEqual({ title: 'After' });
-    // Only the patched key — NOT the full row.
     expect(tx.previousData).toEqual({ title: 'Before' });
   });
 

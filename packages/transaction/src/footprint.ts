@@ -49,7 +49,6 @@ export interface FootprintArtifact {
   readonly hazard?: string;
 }
 
-// ── The names, for the code that creates and reads these objects ────────────
 
 /** Prefix used to derive a branch-scoped publication name. The exact unsuffixed
  * name is retained only so `ablo connect scan` can identify an old installation. */
@@ -79,7 +78,6 @@ export function isValidReplicationSlotName(name: string): boolean {
   return REPLICATION_SLOT_NAME.test(name);
 }
 
-// ── Per-connection names (ADR 0020) ─────────────────────────────────────────
 
 /** The immutable branch coordinates that identify one customer Data Source. */
 export interface DataSourceIdentity {

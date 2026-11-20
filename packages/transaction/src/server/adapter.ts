@@ -37,7 +37,6 @@ import type { SubjectRule } from '../schema/subject.js';
  */
 export type Row = Record<string, unknown>;
 
-// ── read results ───────────────────────────────────────────────────────────
 
 /**
  * The result of a {@link Row} read. Its two shapes mirror the two kinds of
@@ -66,7 +65,6 @@ export type ReadResult =
       readonly nextCursor?: string;
     };
 
-// ── sync ─────────────────────────────────────────────────────────────────────
 
 /**
  * Where a `sync` call resumes: the client's last-seen position in the
@@ -80,7 +78,6 @@ export interface SyncCursor {
   readonly lastSyncId: number;
 }
 
-// ── capabilities ─────────────────────────────────────────────────────────────
 
 export interface DataAdapterCapabilities {
   /** The backend can dry-run a change without committing it. */
@@ -93,7 +90,6 @@ export interface DataAdapterCapabilities {
   readonly schemaIntrospection?: boolean;
 }
 
-// ── proposal (capability-gated) ───────────────────────────────────────────────
 
 /** Result of a dry-run proposal (only adapters with `capabilities.propose`). */
 export interface ProposalResult {
@@ -106,7 +102,6 @@ export interface ProposalResult {
   readonly rows?: readonly Row[];
 }
 
-// ── read request ───────────────────────────────────────────────────────────
 
 /**
  * A request for canonical rows, in one of two shapes:
@@ -149,7 +144,6 @@ export type ReadRequest =
       readonly runHosted: () => Promise<Row[]>;
     };
 
-// ── change set (commit input) ──────────────────────────────────────────────
 
 /**
  * A change to apply to the canonical store. `runHosted` holds the write already
@@ -165,7 +159,6 @@ export interface ChangeSet {
   readonly runHosted: () => Promise<CommitExecutionResult>;
 }
 
-// ── sync result ────────────────────────────────────────────────────────────
 
 export interface SyncResult {
   /** Deltas in `(cursor.lastSyncId, nextCursor.lastSyncId]`, scoped to syncGroups. */
@@ -175,7 +168,6 @@ export interface SyncResult {
   readonly needsFullRead: boolean;
 }
 
-// ── the interface ──────────────────────────────────────────────────────────
 
 /**
  * The interface every storage mode implements. The package defines the

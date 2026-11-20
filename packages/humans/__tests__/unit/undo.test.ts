@@ -40,7 +40,6 @@ import { ViewRegistry } from '../../src/local/views/ViewRegistry';
 import { createTestContext } from '../../src/local/testing';
 import { AbloClaimedError, AbloConnectionError } from '@abloatai/transaction/errors';
 
-// ── Shared schema + model ──────────────────────────────────────────────
 
 const testSchema = defineSchema({
   items: model(
@@ -174,7 +173,6 @@ async function seed(input: { title: string; status?: 'todo' | 'in_progress' | 'd
   return (created as { id: string }).id;
 }
 
-// ── RecordingMutation (inverse derivation) ──────────────────────────
 
 describe('RecordingMutation', () => {
   it('captures create → delete inverse', async () => {
@@ -255,7 +253,6 @@ describe('RecordingMutation', () => {
   });
 });
 
-// ── UndoScope undo/redo (real state reversal) ──────────────────────────
 
 describe('UndoScope.undo (real reversal)', () => {
   it('reverses a create (item disappears from pool)', async () => {
@@ -439,7 +436,7 @@ describe('UndoScope conflict resolution (e2e)', () => {
   });
 
   it('skip-stale (default): undo leaves a field a collaborator changed after you', async () => {
-    const scope = new UndoScope(testSchema, store, 'org-1'); // default policy
+    const scope = new UndoScope(testSchema, store, 'org-1');
     const id = await seed({ title: 'old' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
@@ -606,7 +603,6 @@ describe('resolveOps (unit)', () => {
   });
 });
 
-// ── Reactivity & failure handling ──────────────────────────────────────
 
 describe('UndoScope reactivity & failure handling', () => {
   it('resumes a partially accepted bulk replay one row at a time', async () => {
@@ -678,10 +674,10 @@ describe('UndoScope reactivity & failure handling', () => {
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
     await rec.tx.mutations.items.create({ title: 'X' });
-    scope.record(rec.getEntry()!); // 1
-    await scope.undo(); // 2
-    await scope.redo(); // 3
-    scope.clear(); // 4
+    scope.record(rec.getEntry()!);
+    await scope.undo();
+    await scope.redo();
+    scope.clear();
 
     expect(changes).toBe(4);
     off();
@@ -766,7 +762,6 @@ describe('UndoManager (named scopes)', () => {
   });
 });
 
-// ── Stream recording (observe the local-mutation stream) ───────────────
 
 function makeStreamScope(): UndoScope<typeof testSchema> {
   return new UndoScope(testSchema, store, 'org-1', { recordFromStream: true });

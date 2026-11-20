@@ -49,6 +49,7 @@ done
 python3 -m unittest discover -s scripts/compliance/github-changes
 RELEASE_WORKFLOW=".github/workflows/release.yml"
 grep -q 'id-token: write' "$RELEASE_WORKFLOW"
+grep -Fq "if: github.ref == 'refs/heads/main'" "$RELEASE_WORKFLOW"
 if grep -Eq 'NPM_TOKEN|NODE_AUTH_TOKEN' "$RELEASE_WORKFLOW"; then
   echo "error: release workflow contains a long-lived npm credential" >&2
   exit 1

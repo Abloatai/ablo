@@ -51,9 +51,6 @@ export class MockWebSocket {
     return this._sessionError;
   }
 
-  // ─────────────────────────────────────────────
-  // Event subscription (matches the real connection's API)
-  // ─────────────────────────────────────────────
 
   on(event: string, handler: EventHandler): () => void {
     if (!this._listeners.has(event)) {
@@ -76,9 +73,6 @@ export class MockWebSocket {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // Test control: connection lifecycle
-  // ─────────────────────────────────────────────
 
   /** Fires a successful connection, emitting the `connected` event. */
   simulateConnect(): void {
@@ -111,9 +105,6 @@ export class MockWebSocket {
     this.emit('reconnect_failed');
   }
 
-  // ─────────────────────────────────────────────
-  // Test control: delta injection
-  // ─────────────────────────────────────────────
 
   /** Delivers a single delta, emitting a `delta` event as if the server had sent it. */
   receiveDelta(delta: MockDelta): void {
@@ -125,9 +116,6 @@ export class MockWebSocket {
     this.emit('delta_batch', deltas);
   }
 
-  // ─────────────────────────────────────────────
-  // Test control: bootstrap hints
-  // ─────────────────────────────────────────────
 
   /** Emits a `bootstrap_required` hint, telling the client to rebuild its data instead of catching up. */
   simulateBootstrapHint(hint: MockBootstrapHint): void {

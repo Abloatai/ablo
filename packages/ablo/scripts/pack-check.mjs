@@ -1,5 +1,5 @@
 /**
- * pack:check — tarball hygiene gate (run per-PR in ci.yml "sdk-packaging").
+ * pack:check — tarball hygiene gate (run locally before an SDK release).
  *
  * Packs the package into a temp dir (running the real prepack/postpack
  * lifecycle) and asserts:

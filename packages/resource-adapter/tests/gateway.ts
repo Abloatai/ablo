@@ -23,7 +23,6 @@ test('contention returns promptly without queuing; unavailable errors stay disti
   const socketPath = join(directory, 'gateway');
   const gateway = await startResourceClaimGateway({ socketPath, workspaceId: 'workspace', workers: [worker] });
   try {
-    // Send the supervisor's authenticated envelope over the actual Unix gateway socket.
     const { createConnection } = await import('node:net');
     const request = (resource: string, waitMs?: number) => new Promise<string>((resolve, reject) => {
       const socket = createConnection(socketPath);

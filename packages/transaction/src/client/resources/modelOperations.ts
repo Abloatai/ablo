@@ -192,7 +192,9 @@ export interface ServerReadOptions<T> {
    * Reactive query hydration: `complete` forces a network query and awaits
    * accepted rows' local storage writes. Omitted/`unknown` is local-first,
    * confirming a warm query once per connection; cold queries await network.
-   * Point reads also request exact server evidence after query hydration.
+   * Reactive point reads can reuse an unchanged, server-confirmed row snapshot
+   * with its exact evidence on the same live connection and credential. Missing
+   * evidence and explicit `complete` reads request authoritative point evidence.
    * HTTP clients always read remotely.
    */
   type?: 'complete' | 'unknown';
@@ -243,7 +245,6 @@ export type ClaimField<T> = FieldRef<
  * - **how long you hold** — `ttl` / `heartbeat`, the lease.
  */
 export interface ClaimTargetOptions<T = Record<string, unknown>> {
-  // ── What you claim — the target, narrowed below the row ────────────────
 
   /**
    * Narrow the claim to Zod-declared fields of the row. Return one field
@@ -257,7 +258,6 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    */
   fields?: FieldSelector<ClaimableFields<T>>;
 
-  // ── What others see — the presence half ────────────────────────────────
 
   /** Peer-visible description of the work being performed — the sentence a
    *  contending participant reads to decide whether to wait, work elsewhere, or
@@ -271,7 +271,6 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    */
   meta?: ResolveClaimMeta;
 
-  // ── How you handle contention ──────────────────────────────────────────
 
   /**
    * Behavior under contention. Prefer the structured form so the decision,
@@ -312,7 +311,6 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    */
   signal?: AbortSignal;
 
-  // ── How long you hold — the lease ──────────────────────────────────────
 
   /** Crash-cleanup TTL — the claim auto-releases if the holder dies. */
   ttl?: Duration;

@@ -20,9 +20,6 @@ import {
   findIndexById,
 } from './incrementalView.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 /**
  * The slice of the object pool that a {@link QueryView} reads. It is a minimal
@@ -50,9 +47,6 @@ export interface QueryViewOptions<T> {
   state?: ModelScope;
 }
 
-// ---------------------------------------------------------------------------
-// QueryView
-// ---------------------------------------------------------------------------
 
 export class QueryView<T extends Record<string, unknown>> implements IncrementalView {
   /** The full (unlimited) internal result set, kept sorted. */
@@ -91,7 +85,6 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
     this.pool = pool;
     this.registry = registry;
 
-    // Parse options
     this.whereEntries = options.where
       ? Object.entries(options.where).filter(([, v]) => v !== undefined)
       : null;
@@ -103,7 +96,6 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
     this.offsetN = options.offset ?? 0;
     this.scope = options.state ?? ModelScope.live;
 
-    // Check for FK-index optimization: single-field where with an indexed FK
     this.fkField = null;
     this.fkValue = null;
     const soleWhereEntry =
@@ -120,19 +112,14 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
     this._internal = observable.array<T>([], { deep: false });
     this.results = observable.array<T>([], { deep: false });
 
-    // Perform initial scan
     this.initialScan();
 
-    // Register for incremental updates
     this.registry.register(
       typename,
       this,
     );
   }
 
-  // -----------------------------------------------------------------------
-  // Initial scan
-  // -----------------------------------------------------------------------
 
   private initialScan(): void {
     let candidates: Model[];
@@ -156,7 +143,6 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
       }
     }
 
-    // Sort
     if (this.sortKey) {
       const key = this.sortKey;
       const dir = this.sortDir;
@@ -229,9 +215,6 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
     });
   }
 
-  // -----------------------------------------------------------------------
-  // Dispose
-  // -----------------------------------------------------------------------
 
   dispose(): void {
     if (this.disposed) return;
@@ -242,11 +225,7 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
     );
   }
 
-  // -----------------------------------------------------------------------
-  // Private helpers
-  // -----------------------------------------------------------------------
 
-  /** Check whether an entity passes both `where` and `filter`. */
   private matchesFilter(entity: T): boolean {
     // Note: scope is tracked per-entry in the InstanceCache, not on the model.
     // The initial scan handles scope via getByTypeName(typename, scope).
@@ -283,7 +262,6 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
     }
   }
 
-  /** Find index of entity by id in _internal. */
   private findIndexById(id: string): number {
     return findIndexById(this._internal, id);
   }

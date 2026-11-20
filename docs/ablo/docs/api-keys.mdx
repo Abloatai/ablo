@@ -264,11 +264,9 @@ Cross-organization mints select the target organization's root branch, including
 when the issuer is bound to a child branch.
 
 Normal dashboard key provisioning does not grant this scope. Ablo operators
-provision it using `apps/sync-server/scripts/provision-platform-key.ts` with
-`--org=<issuer-org> --branch=<issuer-branch> --env=sandbox` (or `production`). The
+provision it using `scripts/ops/api-keys/mint.mts` with
+`--org=<issuer-org> --branch=<issuer-branch> --scope=organization:act-as`. The
 script requires control-plane database access and emits a new secret once.
-The environment flag controls the credential prefix; it does not force target
-sessions onto a staging branch.
 
 For customers sharing one application, use model subject rules and verified
 session groups with an ordinary application key. See

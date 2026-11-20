@@ -98,7 +98,6 @@ describe('ConnectionManager — recovery after a WS drop on a healthy network', 
     expect(cm.state).toBe('offline');
     expect(cbs.onDisconnectWebSocket).toHaveBeenCalledTimes(1);
 
-    // No probe while the NIC is down — that would only burn cycles.
     await flush();
     expect(mockedProbeNetwork).not.toHaveBeenCalled();
     expect(cm.state).toBe('offline');

@@ -189,9 +189,6 @@ describe('createGroupAddedDelta (incremental shape)', () => {
   });
 
   it('payload matches the Go EmitGroupAdded wire format', () => {
-    // The Go writer emits { group: <string>, userId: <string> }.
-    // The client detects this shape to dispatch to handleGroupAdded
-    // (no re-bootstrap) instead of the legacy handleSyncGroupChange path.
     const delta = createGroupAddedDelta('user_alpha', 'workspace:proj_xyz');
     const data = delta.data as Record<string, unknown>;
 
@@ -202,9 +199,6 @@ describe('createGroupAddedDelta (incremental shape)', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GroupAdded ('G') — legacy payload shape { addedGroups, removedGroups }
-// ─────────────────────────────────────────────────────────────────────────────
 
 describe('createLegacyGroupChangeDelta', () => {
   beforeEach(() => {

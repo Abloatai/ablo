@@ -118,7 +118,6 @@ describe('MutationQueue Rollback', () => {
 
       await firstFailure;
 
-      // Should have attempted multiple calls (initial + retries)
       const batchCalls = ctx.mocks.mutationExecutor.getCallsByMethod('commit');
       expect(batchCalls.length).toBeGreaterThanOrEqual(2);
 
@@ -132,10 +131,8 @@ describe('MutationQueue Rollback', () => {
       item.markAsPersisted();
       item.propertyChanged('title', 'Old', 'New');
 
-      // Create an update first
       await queue.update(item, TEST_USER_CONTEXT, { title: 'New' });
 
-      // Then delete — should cancel the pending update
       const txDelete = await queue.delete(item, TEST_USER_CONTEXT);
 
       // The delete should take priority; wait for ITS confirmation rather than

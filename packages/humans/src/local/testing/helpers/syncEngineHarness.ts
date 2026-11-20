@@ -69,16 +69,13 @@ export interface TestHarnessOptions {
  * ```
  */
 export function createTestHarness(options: TestHarnessOptions = {}): TestHarness {
-  // Reset counters for deterministic tests
   resetFixtureCounter();
   resetDeltaCounter();
 
-  // Create and register test models
   const registry = new ModelRegistry();
   setActiveRegistry(registry);
   registerTestModels(registry);
 
-  // Create the dependency-injection context with the test config
   const testConfig = createTestConfig();
   const context = createTestContext({
     config: testConfig,
@@ -88,7 +85,6 @@ export function createTestHarness(options: TestHarnessOptions = {}): TestHarness
     },
   });
 
-  // Create the real object pool with foreign-key indexes
   const pool = new InstanceCache(
     {
       maxSize: options.poolConfig?.maxSize ?? 10000,
@@ -99,13 +95,11 @@ export function createTestHarness(options: TestHarnessOptions = {}): TestHarness
     registry
   );
 
-  // Register foreign-key indexes for the test models
   pool.registerForeignKey('Item', 'workspaceId');
   pool.registerForeignKey('Comment', 'itemId');
   pool.registerForeignKey('Entry', 'collectionId');
   pool.registerForeignKey('EntryDetail', 'entryId');
 
-  // Create mock WebSocket
   const webSocket = new MockWebSocket();
 
   return {

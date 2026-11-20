@@ -715,7 +715,6 @@ export class MutationQueue extends EventEmitter {
     commitDispatchTimeoutMs: 30_000,
   };
 
-  // Track executing transactions for backpressure
   private executingCount = 0;
 
   private readonly localMutationPort: LocalMutationPort;
@@ -756,7 +755,6 @@ export class MutationQueue extends EventEmitter {
     this.deltaConfirmation.noteAck(lastSyncId);
   }
 
-  // Batch management
   private batchIndex = 0;
 
   /** Mints the request identity once; retry paths only read the stored value. */
@@ -1228,7 +1226,6 @@ export class MutationQueue extends EventEmitter {
       }
       return;
     }
-    // state === 'disconnected'
     if (this.commitOfflineGraceTimer !== null) return; // already armed
     const graceMs = this.config.commitOfflineGraceMs;
     this.commitOfflineGraceTimer = setTimeout(() => {
@@ -1333,7 +1330,6 @@ export class MutationQueue extends EventEmitter {
 
     if (this.createdTransactions.length === 0) return;
 
-    // Increment batch index - all transactions in this commit share it
     this.batchIndex++;
     const currentBatchIndex = this.batchIndex;
 
@@ -1612,7 +1608,6 @@ export class MutationQueue extends EventEmitter {
    */
   waitForConfirmation(transactionId: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Check if already completed
       const tx = this.store.get(transactionId);
       if (tx?.status === 'completed') {
         resolve();
@@ -1796,9 +1791,6 @@ export class MutationQueue extends EventEmitter {
    * used to cascade a parent deletion. The caller supplies the foreign-key
    * relationship; this method performs the cancellation.
    *
-   * @param childModelName - The child model type (for example 'Block').
-   * @param foreignKey - The foreign-key property name (for example 'sectionId').
-   * @param parentId - The deleted parent's id.
    * @returns The number of transactions cancelled.
    */
   cancelTransactionsByForeignKey(
@@ -1816,7 +1808,6 @@ export class MutationQueue extends EventEmitter {
 
     for (const transaction of allTransactions) {
       if (transaction.modelName === childModelName) {
-        // Check if this transaction's data contains the parent FK
         const fkValue = transaction.data?.[foreignKey];
         if (fkValue === parentId) {
           this.store.updateStatus(transaction.id, 'rolled_back');
@@ -1986,7 +1977,6 @@ export class MutationQueue extends EventEmitter {
       });
     }
 
-    // Clear processing
     if (this.processTimer) {
       clearTimeout(this.processTimer);
     }
@@ -2001,7 +1991,6 @@ export class MutationQueue extends EventEmitter {
     this.replicationLagTimeouts.clear();
     this.replicationLagErrors.clear();
 
-    // Clear the offline-grace timer armed by setConnectionState('disconnected').
     if (this.commitOfflineGraceTimer !== null) {
       clearTimeout(this.commitOfflineGraceTimer);
       this.commitOfflineGraceTimer = null;
@@ -2013,7 +2002,6 @@ export class MutationQueue extends EventEmitter {
     for (const timer of this.retryTimers) clearTimeout(timer);
     this.retryTimers.clear();
 
-    // Clear store
     this.store.clear();
     this.localMutationPort.updates.clear();
     this.executionQueue = [];
@@ -2026,10 +2014,8 @@ export class MutationQueue extends EventEmitter {
     this.commitStore.clear();
     this.commitMissingIds.clear();
 
-    // Clear event listeners
     this.removeAllListeners();
 
-    // Reset state
     this.isProcessing = false;
     this.batchIndex = 0;
   }

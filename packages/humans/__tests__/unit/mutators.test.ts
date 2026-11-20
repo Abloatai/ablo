@@ -20,7 +20,6 @@ import { createTestContext } from '../../src/local/testing';
 import { createTransaction, type Transaction } from '../../src/local/mutators/Transaction';
 import { defineMutators } from '../../src/local/mutators/defineMutators';
 
-// ── Test schema ────────────────────────────────────────────────────────
 
 const testSchema = defineSchema({
   items: model(
@@ -43,7 +42,6 @@ const testSchema = defineSchema({
 
 type TestSchema = typeof testSchema;
 
-// ── Test model classes ────────────────────────────────────────────────
 
 class TestItem extends Model {
   title!: string;
@@ -79,7 +77,6 @@ class TestWorkspace extends Model {
   }
 }
 
-// ── Minimal SyncStoreContract wrapping a real ObjectPool ──────────────
 
 interface TestStore extends SyncStoreContract {
   saveCalls: Model[];
@@ -141,7 +138,6 @@ function createStore(pool: ObjectPool): TestStore {
   return store;
 }
 
-// ── Setup ──────────────────────────────────────────────────────────────
 
 let pool: ObjectPool;
 let registry: ModelRegistry;
@@ -166,7 +162,6 @@ afterEach(() => {
   cleanupCtx();
 });
 
-// ── Helpers ────────────────────────────────────────────────────────────
 
 interface ItemShape {
   id: string;
@@ -192,9 +187,6 @@ function asWorkspace(m: unknown): WorkspaceShape {
   return m as WorkspaceShape;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// A. defineMutators pass-through
-// ═══════════════════════════════════════════════════════════════════════
 
 describe('defineMutators', () => {
   it('returns the same mutators object (pass-through)', () => {
@@ -398,9 +390,6 @@ describe('Transaction.mutate batch operations', () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-// D. Transaction.read.*
-// ═══════════════════════════════════════════════════════════════════════
 
 describe('Transaction.read', () => {
   it('tx.read.items.retrieve returns the typed model', async () => {
@@ -448,9 +437,6 @@ describe('Transaction.read', () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-// E. Custom mutator end-to-end
-// ═══════════════════════════════════════════════════════════════════════
 
 describe('Custom mutator end-to-end', () => {
   it('creates item + subitem — both land in pool, 2 saves', async () => {
@@ -580,9 +566,6 @@ describe('Custom mutator end-to-end', () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-// F. Cross-model mutators
-// ═══════════════════════════════════════════════════════════════════════
 
 describe('Cross-model mutators', () => {
   it('creates a workspace + 3 items attached to it — all 4 entities land', async () => {

@@ -1,15 +1,4 @@
-/**
- * Gap 2 regression — the typed error hierarchy and HTTP-to-class
- * translator. Proves:
- *   - Every subclass is reachable via `instanceof AbloError` (base
- *     chain works across package boundaries)
- *   - The `type` discriminator matches the class name (dual pattern)
- *   - `translateHttpError` routes every interesting status to the
- *     right subclass
- *   - Legacy classes (`ApiKeyError`, `CapabilityError`) still match
- *     their original `instanceof` checks AND now also match the new
- *     hierarchy
- */
+/** Typed error hierarchy and HTTP-to-class translation tests. */
 
 import {
   AbloError,

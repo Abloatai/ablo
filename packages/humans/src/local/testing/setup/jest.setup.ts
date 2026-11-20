@@ -9,17 +9,11 @@ import 'fake-indexeddb/auto';
 import { resetRuntime } from '../../context.js';
 import { deserialize, serialize } from 'node:v8';
 
-// ─────────────────────────────────────────────
-// Reset sync engine context between tests
-// ─────────────────────────────────────────────
 
 beforeEach(() => {
   resetRuntime();
 });
 
-// ─────────────────────────────────────────────
-// Mock global.fetch
-// ─────────────────────────────────────────────
 
 if (typeof globalThis.fetch === 'undefined') {
   (globalThis as Record<string, unknown>).fetch = jest.fn();
@@ -29,9 +23,6 @@ if (typeof globalThis.fetch === 'undefined') {
   );
 }
 
-// ─────────────────────────────────────────────
-// Mock WebSocket
-// ─────────────────────────────────────────────
 
 class MockGlobalWebSocket {
   static CONNECTING = 0;
@@ -115,9 +106,6 @@ if (typeof navigator !== 'undefined') {
   });
 }
 
-// ─────────────────────────────────────────────
-// Make document.visibilityState writable
-// ─────────────────────────────────────────────
 
 if (typeof document !== 'undefined') {
   Object.defineProperty(document, 'visibilityState', {
@@ -143,9 +131,6 @@ if (typeof globalThis.structuredClone === 'undefined') {
     deserialize(serialize(value)) as T;
 }
 
-// ─────────────────────────────────────────────
-// TextEncoder / TextDecoder polyfill (jsdom)
-// ─────────────────────────────────────────────
 
 if (typeof globalThis.TextEncoder === 'undefined') {
   const { TextEncoder, TextDecoder } = require('util');

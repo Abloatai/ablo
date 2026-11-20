@@ -197,8 +197,6 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
   it('does not resurrect a deleted layer when CREATE echo arrives — using REAL MutationQueue path', async () => {
     const queue = client.getMutationQueue();
 
-    // Step 1: optimistic CREATE via the queue (publishes
-    // 'transaction:created' → SyncClient.markTransactionPending).
     const layer = createEntryLayerFixture({
       entryId: 'entry-1',
       type: 'rect',
@@ -255,7 +253,6 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
     // resurrect for the ~2s window before the DELETE echo arrived.
     expect(pool.get(layerId)).toBeUndefined();
 
-    // Step 4: server's DELETE confirmation lands.
     const deleteEchoBatch: DbResult[] = [
       {
         action: 'remove',

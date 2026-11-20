@@ -1,5 +1,15 @@
 # @abloatai/transaction
 
+## 0.67.4
+
+### Warm point reads retain their evidence
+
+Unchanged server snapshots retain their original row evidence on the same authenticated connection. Each decision receives a detached snapshot; changes and reconnects restore authoritative reads.
+
+### Invalid options fail before a request
+
+Base URLs ending in an empty query or fragment are refused. HTTP claim requests reject heartbeat intervals that cannot renew the lease before it expires.
+
 ## 0.67.3
 
 ### Patch Changes

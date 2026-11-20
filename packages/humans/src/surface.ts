@@ -24,7 +24,6 @@ type Equal<A, B> =
 // `Expect<T extends true>` errors at the declaration when T is `false`.
 type Expect<T extends true> = T;
 
-// ── the per-`ablo.<model>` verb surface ────────────────────────────────────
 /**
  * The names of every method available on `ablo.<model>`, matching the keys of
  * the {@link ModelOperations} interface. Documentation tooling reads this
@@ -51,7 +50,6 @@ type _ModelVerbsExact = Expect<
   Equal<(typeof PUBLIC_MODEL_VERBS)[number], keyof ModelOperations<unknown, unknown> & string>
 >;
 
-// ── the read/list query option surface ─────────────────────────────────────
 /**
  * The option keys accepted by `local.list` and `onChange`, matching the
  * keys of {@link LocalReadOptions}. Note that the lifecycle filter is named
@@ -70,7 +68,6 @@ type _ListOptionKeysExact = Expect<
   Equal<(typeof PUBLIC_LIST_OPTION_KEYS)[number], keyof LocalReadOptions<unknown> & string>
 >;
 
-// ── the `Ablo({ … })` constructor option surface ───────────────────────────
 /**
  * The keys of the client constructor options, {@link AbloOptions}. Only
  * `schema` is required; every other key is optional.

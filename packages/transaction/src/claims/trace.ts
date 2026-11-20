@@ -62,9 +62,6 @@ export function formatConflict(e: ConflictEvent): string {
   return `conflict: tx ${e.clientTxId} — ${e.rows.length} row(s) changed underneath${rows ? `: ${rows}` : ''}`;
 }
 
-// ─────────────────────────────────────────────
-// Log — collect → inspect / assert
-// ─────────────────────────────────────────────
 
 /** One ordered entry in a {@link ClaimLog}. */
 export interface ClaimLogEntry {
@@ -121,7 +118,6 @@ export class ClaimLog implements CoordinationObserver {
     this.add({ line: formatConflict(conflict), collision: true, conflict });
   }
 
-  // —— reactivity ——
 
   /**
    * Fire `listener` every time an event lands. Returns an unsubscribe fn. Same
@@ -140,7 +136,6 @@ export class ClaimLog implements CoordinationObserver {
     return () => this.listeners.delete(listener);
   };
 
-  // —— inspection ——
 
   /** The full ordered list. Stable reference until the next event lands. */
   get entries(): readonly ClaimLogEntry[] {

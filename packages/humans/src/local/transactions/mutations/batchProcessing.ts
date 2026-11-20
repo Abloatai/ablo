@@ -87,7 +87,6 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
           // retain both their original membership and operation order.
           batch = ctx.takeNextExecutionBatch();
           if (batch.length === 0) return;
-          // Track executing count for backpressure
           ctx.setExecutingCount(ctx.executingCount + batch.length);
 
           try {
@@ -98,12 +97,10 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
           }
           const commitIdempotencyKey = ctx.ensureCommitEnvelope(batch);
 
-          // Mark all as executing
           for (const tx of batch) {
             ctx.store.updateStatus(tx.id, 'executing');
           }
 
-          // Build every operation for one unified commit (a single round trip).
           const batchOps: {
             tx: QueuedMutation;
             op: {
@@ -397,7 +394,6 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
                   }
                 }
               } else {
-                // Handle other batch failures - mark all as failed
                 for (const { tx } of [...batchOps].reverse()) {
                   await ctx.handleFailure(tx, error as Error);
                 }
@@ -408,10 +404,8 @@ export async function processBatch(ctx: BatchProcessingContext): Promise<void> {
         } finally {
           ctx.setIsProcessing(false);
 
-          // Decrement executing count for backpressure tracking
           ctx.setExecutingCount(ctx.executingCount - batch.length);
 
-          // Process next batch if needed
           if (ctx.executionQueue.length > 0 && batch.length > 0) {
             ctx.scheduleProcessing(true);
           }

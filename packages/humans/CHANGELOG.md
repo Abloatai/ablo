@@ -1,5 +1,15 @@
 # @abloatai/humans
 
+## 0.67.4
+
+### React subscriptions retain unchanged snapshots
+
+Stable selectors keep their subscriptions and reuse unchanged snapshots across renders. Observable updates and external claim notifications still refresh the selection.
+
+### Warm point reads retain their evidence
+
+Unchanged server snapshots and their original row evidence can be reused while the authenticated connection remains live. Changes, reconnects and credential changes restore the authoritative path.
+
 ## 0.67.3
 
 ## 0.67.2

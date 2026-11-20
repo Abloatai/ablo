@@ -22,7 +22,6 @@ import type {
 } from '@abloatai/transaction/commit';
 import type { CommitOutboxScope } from '@abloatai/transaction/commit';
 
-// ── Options ───────────────────────────────────────────────────────────────
 
 /**
  * An async function that resolves an apiKey at request time. Use it for credential
@@ -216,7 +215,6 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
   /** Custom fetch implementation for tests, proxies, or non-standard runtimes. */
   fetch?: typeof fetch | undefined;
 
-  /** Default headers sent with every API request. */
   defaultHeaders?: Record<string, string | null | undefined> | undefined;
 
   /** Default query parameters sent with every API request. */
@@ -302,10 +300,6 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    */
   schema: Schema<S>;
 
-  // ── Deprecated ──────────────────────────────────────────────────────
-  // Options retained for backward compatibility. New consumers should pass only
-  // `{ schema, apiKey }` and let Ablo resolve account scope, participant identity,
-  // and realtime permissions from the key.
 
   /**
    * @deprecated The server derives the participant kind from the apiKey's scope.
@@ -412,12 +406,6 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    */
   bootstrapMode?: 'full' | 'none';
 
-  // ── Advanced dependency-injection overrides ──────────────────────────────
-  //
-  // The fields below let an integrator replace the client's no-op defaults with
-  // their own implementations, so an app that already runs its own observability,
-  // analytics, and mutation executor can keep them. Most consumers can ignore
-  // these — the built-in defaults work for the documented zero-config setup.
 
   /**
    * Custom observability provider (Sentry, Honeycomb, OTel, etc.).
@@ -444,14 +432,6 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    */
   onlineStatus?: OnlineStatusProvider;
 
-  /**
-   * Replace the built-in `MutationExecutor` (which posts a hardcoded
-   * `commit` method against `${url}/graphql`) with one that uses your own
-   * GraphQL client, auth headers, retry policy, and observability hooks.
-   *
-   * Default: a fetch-based executor that targets `${url}/graphql` and sends
-   * the configured bearer (`apiKey` / backend-minted token) as `Authorization`.
-   */
   mutationExecutor?: MutationExecutor;
 
   /**

@@ -53,7 +53,6 @@ declare module '@abloatai/transaction/types/global' {
 /** The reference that keeps the two crossing modules above in this program. */
 export type CrossingModules = [typeof createHttpTransport];
 
-// ── The registration reaches the resolver ────────────────────────────────
 
 export const resolverIsTheRegistration: Identical<ResolveClaimMeta, ReviewMeta> =
   true;
@@ -87,10 +86,8 @@ export const heldClaimReadsTheRegistration: Identical<
   ReviewMeta
 > = true;
 
-// ── What that buys at a call site ────────────────────────────────────────
 
 declare const observed: Claim;
-/** No `typeof` guard, no cast: the declaration is what makes this compile. */
 export const observedBlocks: string[] | undefined = observed.target.meta?.blocks;
 
 export const claimToCreate: ClaimCreateOptions = {

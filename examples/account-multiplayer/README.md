@@ -18,12 +18,19 @@ From this directory, with Node 24 and an authenticated Ablo CLI:
 
 ```sh
 npm install
-npx ablo dev --no-watch --branch account-multiplayer --schema src/schema.ts
+DEMO_BRANCH="account-multiplayer-$(date +%s)"
+DEMO_EXPIRES_AT="$(node -e 'console.log(new Date(Date.now()+8*60*60*1000).toISOString())')"
+npx ablo branch create "$DEMO_BRANCH" --kind test --hosted --expires-at "$DEMO_EXPIRES_AT"
+npx ablo dev --no-watch --branch "$DEMO_BRANCH" --schema src/schema.ts
 ```
 
-Use an isolated branch dedicated to this example. The command pushes the example
-schema. It does not migrate your application's tables; use a throwaway hosted
-plane, or provision matching tables in your own database before running it.
+This explicitly creates a disposable hosted test branch, then mints its runtime
+credential and pushes the example schema. Ordinary `ablo dev` does not create
+hosted storage. The test branch expires after eight hours; it is not a production
+Postgres integration and does not prove WAL confirmation. To exercise your own
+Postgres, use a separate non-production database with matching tables and the
+reviewed connection setup instead. Never use a production branch for this app.
+When finished, delete the disposable branch with `npx ablo branch delete "$DEMO_BRANCH"`.
 Load the generated `.env.local` into the process environment and set a local
 `DEMO_PASSWORD`, then:
 
@@ -61,36 +68,47 @@ test uses three isolated authenticated contexts and a second tab. It starts two
 distinct agent identities on the same row, verifies exactly one execution and
 one skipped contender, then verifies acquisition after release. Bob renames the
 chat while Alice is offline; Alice must receive that exact title after reconnect.
-Selectors use the exact conversation ID returned by create. The integrated lane
-runs the browser suite twice on the same branch to prove it tolerates prior rows.
+Selectors use the exact conversation ID returned by create. Run the browser suite against a populated branch when checking repeatability;
+a single passing run does not prove repeated-run or production acceptance.
 
-The server's existing `subject-authorization` journey suite supplies direct-ID,
-list, write and claim denial coverage below the UI. From the monorepo root:
+`tests/data-plane.spec.ts` additionally uses public scoped SDK clients directly.
+It checks allowed reads and writes, cross-account direct-ID and list isolation,
+and denial of cross-account updates, forged creates and claims. A read-only
+session must also fail to update its own account. These checks do not rely on
+what the UI hides.
 
-```sh
-npm run test:journeys -w @ablo/sync-server -- subject-authorization
-```
+### Composed local acceptance
 
-The browser test cannot replace those adversarial checks: absence from a filtered
-UI alone does not prove authorization. Both layers are required before claiming
-end-to-end isolation on a target data plane.
-
-The dedicated account-multiplayer CI workflow runs both the fast checks and the
-real browser/account-denial lane on pull requests and main pushes:
+From a repository checkout, build the SDK and CLI, install this example's
+dependencies and Chromium, and provide local Postgres 17 and Redis binaries.
+Then run from this directory:
 
 ```sh
-# Monorepo root; requires built SDKs, Postgres, Redis and Playwright Chromium.
-npm run test:multiplayer --workspace=@ablo/sync-server
+npm run test:acceptance
 ```
 
-This lane uses the existing journey harness to boot a real sync server with
-temporary Postgres and Redis, create a fresh organization and branch credential,
-push this schema, and pass the key directly to the example's server process.
-The browser still mints real per-human sessions through the example's auth route.
-The same lane runs all three subject-authorization journey suites. No CI secret
-or hosted project is needed; missing infrastructure and failed assertions fail
-the job. Cleanup closes the server and destroys the temporary database. This
-proves the checked-out server with hosted SQL storage, not a deployed fleet.
+This opt-in command reuses the engine journey harness to start disposable
+Postgres, Redis and Rust processes. `ABLO_JOURNEY_SERVER_BIN` can select a native
+server built from the candidate source; otherwise the harness resolves its
+normal server binary. `ABLO_PG_BIN` can select the directory containing
+`initdb` and `pg_ctl`. It requires no hosted credentials or production access.
+
+The first check installs freshly packed public CLI/SDK packages in a temporary
+project, pushes the generated schema, and creates, reads, updates and reads back
+a row. The second pushes this reference's schema and runs both the direct
+authorization checks and the existing multiplayer browser test against the same
+local engine. A startup smoke pass alone is not acceptance evidence.
+
+The disposable fixture uses Ablo-owned log storage. It does not prove customer
+Postgres/WAL confirmation, production deployment recovery, grant revocation,
+field redaction, subscription sharing or a latency target. The password adapter
+and simulated agent remain local demonstrations. The command is separate from
+the normal journey suite and does not replace a release gate.
+
+The account-multiplayer workflow runs on manual dispatch. It typechecks the
+example, runs its unit tests and production build, runs the startup smoke test
+in Chromium, and runs the React suites in `@abloatai/humans` that the example
+depends on. It does not boot a sync server.
 
 For a deployed-plane check, `npm run test:browser` still accepts your isolated
 branch's `ABLO_API_KEY` and `ABLO_BASE_URL` plus `DEMO_PASSWORD`. Never point the

@@ -206,9 +206,6 @@ export function renderPricingMdx(): string {
     'A write counts the same whether it arrived over HTTP or over the WebSocket. The transport is not part of the price.',
   );
   push('');
-  // The local-read rule used to sit here as a third bullet. It belongs on the
-  // read meter, which is the only place it applies, and stating it twice reads
-  // as two different rules.
   push('Two rules decide whether a request is counted at all:');
   push('');
   push('1. Only successful requests count. A rejected or failed request is never metered.');

@@ -22,9 +22,12 @@ class ChangeEvidenceTest(unittest.TestCase):
             self.assertIn("Owner exception recorded", description)
             self.assertIn(f"{len(checks)} not passing", description)
 
-    def test_review_does_not_replace_check_evidence(self):
+    def test_review_covers_absent_checks_but_not_failed_ones(self):
         review = {"user": {"login": "peer"}, "state": "APPROVED", "commit_id": SHA}
-        self.assertEqual(evaluate(PR, [review], [], [])[0], "failure")
+        state, description = evaluate(PR, [review], [], [])
+        self.assertEqual(state, "success")
+        self.assertIn("no hosted checks ran", description)
+        self.assertEqual(evaluate(PR, [review], [], [{"state": "failure"}])[0], "failure")
         self.assertEqual(evaluate(PR, [review], [], [{"state": "success"}])[0], "success")
 
     def test_stale_self_or_dismissed_reviews_do_not_qualify(self):

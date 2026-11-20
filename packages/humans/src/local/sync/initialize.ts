@@ -80,18 +80,15 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
         host.runtime.observability.captureBootstrapFailure(hydrateError, { type: 'hydration-from-idb' });
       }
 
-      // Get sync baseline for WebSocket
       const lastSyncId = (yield host.database.getLastSyncId()) as number;
       host.syncClient.position.advancePersisted(lastSyncId || 0);
 
-      // If local data available, show UI immediately
       if (hasLocalData) {
         host.dataReady = true;
         host.initialized = true;
         host.updateSyncStatus({ state: 'syncing', progress: 50 });
       }
 
-      // Setup WebSocket
       host.setupWebSocketSync(context, lastSyncId);
 
       // Bootstrap from server if needed.

@@ -65,7 +65,6 @@ function buildObservableModelClass(modelName: string, lazyObservable: boolean) {
   return ModelClass as new (data?: Record<string, unknown>) => Model & TestFields;
 }
 
-/** Register a model type's fields with the registry so M1 can annotate. */
 function registerType(
   registry: ModelRegistry,
   modelName: string,
@@ -281,12 +280,6 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
   });
 
   it('applyChanges DOES record outbound changes (local update must sync)', () => {
-    // Regression guard: `proxy.update({ id, data })` routes through
-    // `applyChanges`. The edited fields MUST land in `modifiedProperties` so
-    // `getChanges()` / the transaction queue send them to the server.
-    // Previously the proxy used `updateFromData`, producing an empty
-    // `input: {}` no-op mutation — e.g. a collection theme change that reverted on
-    // reopen.
     const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
     setActiveRegistry(registry);
     const Cls = buildObservableModelClass('LocalCollection', true);
@@ -317,9 +310,7 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
 
     const changes = instance.getChanges();
     expect(changes).toEqual({ position });
-    // IndexedDB uses structured clone. Deep-observing modifiedProperties used
-    // to turn `position` into a MobX Proxy here, which throws DataCloneError
-    // and makes the fail-closed journal discard the write before dispatch.
+    // IndexedDB structured clone rejects MobX proxies.
     expect(() => structuredClone(changes)).not.toThrow();
   });
 
@@ -335,8 +326,6 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
 
     instance.title = 'Changed';
 
-    // Only the initial autorun read should have fired — plain models don't
-    // emit MobX reactions.
     expect(reads).toEqual(['Initial']);
     dispose();
   });

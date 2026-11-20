@@ -80,13 +80,6 @@ describe('ablo status --json (runtime-key provenance)', () => {
     });
   });
 
-  /**
-   * The scoped production key `ablo login` stores used to be visible only as a
-   * prefix, so the fact that it cannot push arrived as a 403 in the middle of a
-   * deploy. Both surfaces carry it now: the human output says what the key does
-   * and names the key that deploys, and `--json` reports the kind so a pipeline
-   * can check before it pushes rather than after it fails.
-   */
   it('names a scoped key and the secret key that deploys, rather than leaving it to a 403', async () => {
     writeConfig({
       mode: 'production',

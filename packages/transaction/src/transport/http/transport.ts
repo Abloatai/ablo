@@ -69,6 +69,7 @@ import {
 } from '../../wire/modelResponses.js';
 import { toMs } from '../../utils/duration.js';
 import {
+  assertHeartbeatFitsLease,
   heartbeatCadenceMs,
   resolveHeartbeatOptions,
   resolveHeartbeatPlan,
@@ -1232,7 +1233,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     const policy = options?.ifClaimed ?? defaultPolicy;
     if (policy === 'return') return;
 
-    // policy === 'fail' — gate the read only when the caller opts in.
     const state = await listClaimState(target);
     if (state.active.length === 0) return;
     throw claimedError(target, state.active, 'model_claimed');
@@ -1425,13 +1425,15 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
 
   async function readModel<T>(
     modelName: string,
-    params: ModelReadOptions & { readonly id: string }
+    params: ModelReadOptions & { readonly id: string },
+    signal?: AbortSignal,
   ): Promise<HttpTransportRead<T>> {
     await applyClaimedPolicy({ model: modelName, id: params.id }, params);
 
-    const query = modelReadResponseSchema.parse(await requestModelRead({
-      kind: 'read', model: modelName, id: params.id,
-    }));
+    const query = modelReadResponseSchema.parse(signal
+      ? await requestJson(`/v1/models/${encodeURIComponent(modelName)}/${encodeURIComponent(params.id)}`,
+          { method: 'GET', signal, cache: 'no-store' }, modelReadResponseSchema)
+      : await requestModelRead({kind: 'read', model: modelName, id: params.id}));
 
     // A miss is `data: undefined`, not a thrown error. The WebSocket client's
     // `read` returns `T | undefined` for a missing row; throwing only here
@@ -1444,6 +1446,28 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     const data = (query.data ?? undefined) as T | undefined;
 
     return { data, stamp: query.stamp, claims: query.claims };
+  }
+
+  async function readCreatedModel<T>(name: string, id: string, clientTxId: string, correlationId?: string): Promise<T> {
+    // A durable receipt can precede the conservative settled-read boundary.
+    // Retry only the read, retaining the exact accepted write's identity.
+    const controller = new AbortController();
+    const deadline = requestTimeoutMs > 0
+      ? setTimeout(() => controller.abort(), requestTimeoutMs) : null;
+    try {
+      for (;;) {
+        const read = await readModel<T>(name, { id }, controller.signal);
+        if (read.data !== undefined) return read.data;
+        await waitForHttpRetry(HTTP_CONFIRMATION_POLL_INTERVAL_MS, controller.signal);
+      }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw replicationLagTimeout({idempotencyKey:clientTxId}, {correlationId}, requestTimeoutMs);
+      }
+      throw error;
+    } finally {
+      if (deadline) clearTimeout(deadline);
+    }
   }
 
   /**
@@ -1787,6 +1811,14 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       const params: ClaimParams<Fields> = rowFree
         ? { ...(opts ?? {}), id: idOrParams }
         : idOrParams;
+      // A stateless lease ends at its ttl unless a beat renews it. A claim
+      // dispatched over a socket is left to that transport's own renewal.
+      if (!options.dispatchClaim) {
+        assertHeartbeatFitsLease(
+          params.ttl !== undefined ? toMs(params.ttl) : DEFAULT_CLAIM_TTL_MS,
+          params,
+        );
+      }
       let acquired: {
         id: string;
         fenceToken?: number;
@@ -2082,15 +2114,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             id,
             params.data,
             options,
-            async () => {
-              const read = await readModel<T>(name, { id });
-              if (read.data === undefined) {
-                throw new AbloNotFoundError(
-                  `create ${name}/${id} did not yield a readable row (the write did not confirm).`,
-                  [id]
-                );
-              }
-              created = read.data;
+            async response => {
+              created = await readCreatedModel<T>(name, id, response.clientTxId, response.correlationId);
             }
           );
           if (created === undefined) {
@@ -2149,10 +2174,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           modelName: name,
           ids,
           operationResults: receipt.operationResults,
-          readRow: async (id) => {
-            const read = await readModel<T>(name, { id });
-            return read.data;
-          },
+          readRow: id => readCreatedModel<T>(name, id, receipt.id),
         });
       },
       update: updateModel,

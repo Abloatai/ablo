@@ -1,50 +1,99 @@
-/*
- * Token and style overrides — the last layer in Blume's cascade, after the
- * defaults and the `theme` block in blume.config.ts.
- */
+/* Match Lobby docs' application surfaces and controls. */
+/* Adopt the Lobby application's own neutral palette (apps/web/app/styles.css'
+   shadcn-style tokens), not the marketing landing's Butter/Deep Red brand.
+   Pure grayscale (oklch chroma 0) in both reader modes. */
+:root {
+  --blume-foreground: oklch(0.145 0 0);
+  --blume-accent-foreground: oklch(0.145 0 0);
+  --blume-muted: oklch(0.97 0 0);
+  /* The app's own 0.556 muted-foreground falls below 4.5:1 for small docs
+     text (it's tuned for the app's larger/bolder UI chrome); darkened here,
+     same reasoning as the previous theme's red muted-foreground bump. */
+  --blume-muted-foreground: oklch(0.45 0 0);
+  --blume-border: oklch(0.922 0 0);
+  --blume-font-body: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --blume-font-display: var(--blume-font-body);
+  --blume-inline-code-background: var(--blume-muted);
+  --blume-code-background: #262522;
+}
 
-/*
- * The header search trigger ships with a hardcoded `rounded-full`, so it ignores
- * `theme.radius` and reads as a pill against our otherwise tight corners. Pull
- * it back onto the site's own radius token.
- */
-[data-blume-search-open] {
+:root[data-theme="dark"] {
+  --blume-foreground: oklch(0.985 0 0);
+  --blume-accent-foreground: oklch(0.985 0 0);
+  --blume-muted: oklch(0.269 0 0);
+  --blume-muted-foreground: oklch(0.708 0 0);
+  --blume-border: oklch(1 0 0 / 10%);
+  --blume-inline-code-background: var(--blume-muted);
+  --blume-code-background: #262522;
+}
+
+/* The left sidebar and header use the app's own `--sidebar` token: a subtly
+   distinct tone from the main background, exactly like the real app's
+   workspace sidebar vs. its main pane. Text, muted surfaces and borders are
+   already the same values for sidebar and main in the app's own tokens, so
+   only the background needs overriding here. The header drops Blume's
+   `bg-background/90` blur in favor of flatly matching the sidebar. */
+:root:not([data-theme="dark"]) [data-blume-nav-drawer],
+:root:not([data-theme="dark"]) [data-blume-header] {
+  background-color: oklch(0.985 0 0);
+  --blume-background: oklch(0.985 0 0);
+}
+
+:root[data-theme="dark"] [data-blume-nav-drawer],
+:root[data-theme="dark"] [data-blume-header] {
+  background-color: oklch(0.205 0 0);
+  --blume-background: oklch(0.205 0 0);
+}
+
+/* Inline labels are prose, not fenced syntax-highlighted code blocks. */
+.prose :not(pre) > code:not(:where([class~="not-prose"] *)) {
+  background: var(--blume-inline-code-background);
   border-radius: var(--blume-radius);
 }
 
-/*
- * Hide the "Edit on GitHub" page action. Blume derives it from `github` in the
- * config with no separate toggle, but it points readers at the wrong file: most
- * pages here are generated from `packages/ablo/docs/*.md`, so an edit to
- * the .mdx it links to is overwritten by the next `npm run build:docs`.
- * `display: none` (not `visibility`) so it leaves the accessibility tree too.
- * The header repo link and the feedback widget are unaffected.
- */
-[data-blume-page-actions] a[href*="/edit/"] {
-  display: none;
+/* Blume's navigation and actions use fixed radii outside its radius token. */
+a, button, input, dialog, kbd, [class*="rounded-"] {
+  border-radius: var(--blume-radius);
 }
 
-/* Design v21: reversible butter/red, system type. */
-:root {
-  --blume-font-body: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --blume-font-display: var(--blume-font-body);
-  --blume-foreground: #9a241c;
-  --blume-muted: #ecd090;
-  --blume-muted-foreground: color-mix(in srgb, #9a241c 90%, #f4e18c);
-  --blume-border: #c49957;
-  --blume-accent-foreground: #f4e18c;
-  --blume-code-background: #fae8b8;
+:focus-visible {
+  outline: 2px solid var(--blume-accent);
+  outline-offset: 3px;
 }
-:root[data-theme="dark"] {
-  --blume-foreground: #f4e18c;
-  --blume-muted: color-mix(in srgb, #9a241c 90%, #f4e18c);
-  --blume-muted-foreground: #efd5a4;
-  --blume-border: color-mix(in srgb, #9a241c 65%, #f4e18c);
-  --blume-accent: #f4e18c;
-  --blume-accent-foreground: #9a241c;
-  --blume-code-background: color-mix(in srgb, #9a241c 94%, white);
+
+/* Keep syntax colors on their dark surface in both reader modes, independent
+   of the app's light/white or dark/near-black page background. */
+.prose pre.astro-code {
+  --blume-background: #262522;
+  --blume-foreground: oklch(0.985 0 0);
+  --blume-accent: oklch(0.985 0 0);
+  --blume-muted-foreground: oklch(0.985 0 0);
+  --blume-muted: color-mix(in srgb, white 10%, #262522);
+  --blume-border: color-mix(in srgb, white 35%, #262522);
+
+  background: var(--blume-code-background) !important;
 }
-article h1 { font-weight: 450; letter-spacing: -.055em; }
+
+/* Opaque search keeps text contrast independent of the page underneath. */
+[data-blume-search-dialog] {
+  background: var(--blume-background);
+}
+
+[data-blume-search-dialog] mark {
+  background: var(--blume-accent);
+  color: var(--blume-accent-foreground);
+}
+
+[data-blume-search-filters] .opacity-60 {
+  opacity: 1;
+}
+
+/* Generated page metadata still owns icons; the reader navigation stays plain. */
+[data-blume-nav-drawer] svg.shrink-0 { display: none; }
+
+/* Generated docs point their edit action at the wrong source file. */
+[data-blume-page-actions] a[href*="/edit/"] { display: none; }
+
 .ablo-docs-footer { margin-top: 64px; padding: 72px clamp(22px, 5vw, 84px) 38px; background: var(--blume-background); color: var(--blume-foreground); font-family: var(--blume-font-body); line-height: 1.5; }
 .ablo-docs-footer-inner { max-width: 1440px; margin-inline: auto; }
 .ablo-docs-footer nav { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
@@ -54,15 +103,11 @@ article h1 { font-weight: 450; letter-spacing: -.055em; }
 .ablo-docs-footer a:hover, [data-blume-header] a:hover { text-decoration: underline; }
 .ablo-docs-footer a:focus-visible { outline: 2px solid currentColor; outline-offset: 5px; }
 .ablo-docs-signature { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 24px; }
-.ablo-docs-signature > a { font-size: clamp(80px, 13vw, 180px); font-weight: 450; line-height: 1.02; letter-spacing: -.065em; }
+.ablo-docs-signature > a { display: block; width: min(100%, clamp(220px, 32vw, 420px)); }
+.ablo-docs-wordmark { display: block; aspect-ratio: 2820 / 800; background: currentColor; mask: url('/logo/wordmark.svg') center / contain no-repeat; }
 .ablo-docs-worktable { aspect-ratio: 2; background: currentColor; mask: url('/shared-worktable-outline.png') center / contain no-repeat; }
 .ablo-docs-copyright { margin-top: 24px; font-size: 12px; }
-/* Match the sidebar icons: 16px outer padding plus 10px row padding. */
-[data-blume-header] { height: 106px; padding-inline: 26px; border: 0; background: var(--blume-background); color: var(--blume-foreground); }
-[data-blume-header] nav a { border-radius: 0; font-weight: 400; color: inherit; }
-[data-blume-header] nav a:hover { background: transparent; }
 .ablo-docs-logo { display: inline-flex; flex-shrink: 0; color: inherit; }
-.ablo-docs-emblem { display: block; width: 42px; height: 42px; background: currentColor; mask: url('/logo/light.svg') center / contain no-repeat; }
-@media (width >= 1024px) { [data-blume-nav-drawer], [data-blume-toc] { top: 106px; height: calc(100dvh - 106px); } }
-@media (width <= 700px) { .ablo-docs-signature { grid-template-columns: 1fr; } [data-blume-header] { height: 82px; padding-inline: 16px; gap: 8px; } }
+.ablo-docs-emblem { display: block; width: 32px; height: 32px; background: currentColor; mask: url('/logo/light.svg') center / contain no-repeat; }
+@media (width <= 700px) { .ablo-docs-signature { grid-template-columns: 1fr; } }
 @media (width < 640px) { .ablo-docs-footer nav section > div { grid-template-columns: 1fr; } }

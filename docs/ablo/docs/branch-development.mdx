@@ -331,9 +331,10 @@ The last point is a safety boundary. A generic `DATABASE_URL` does not prove
 that the database is an isolated feature branch; automatically registering it
 could bind a development credential to production.
 
-Until provider-verified database-branch binding lands, use Ablo's hosted branch
-plane for the inner loop or explicitly prepare and review an isolated database
-through [Connect Your Database](/data-sources). Never point a child branch at
+Until provider-verified database-branch binding lands, explicitly prepare and
+review an isolated database for ordinary development branches using
+[Connect Your Database](/data-sources), or use the expiring hosted test-branch
+procedure above for disposable integration checks. Never point a child branch at
 production merely because its migrations are compatible.
 
 ## Production rollout
@@ -382,8 +383,8 @@ npx ablo branch check feature-order-approval
 ```
 
 The result distinguishes a missing schema, a branch lifecycle failure, and an
-unready connected database. A hosted branch is a valid development state and
-is reported explicitly rather than as a missing database.
+unready connected database. An explicitly hosted, expiring test branch is reported as internal storage,
+rather than as a missing database; it is not the ordinary development default.
 
 ### The app still reaches another plane
 

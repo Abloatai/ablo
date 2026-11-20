@@ -21,7 +21,6 @@ import { DefaultFallback } from './DefaultFallback.js';
  * forwards errors and gates bootstrap; the application owns client disposal.
  */
 
-// ── Props ────────────────────────────────────────────────────────────
 
 /**
  * Props for `<AbloProvider>`.
@@ -47,7 +46,6 @@ import { DefaultFallback } from './DefaultFallback.js';
  * tests and platform builders — if you don't recognize a prop there, you
  * don't need it.
  */
-// ── Implementation ───────────────────────────────────────────────────
 
 export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   props: AbloProvider.Props<R>,
@@ -140,7 +138,6 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
     };
   }, [engine, reportError]);
 
-  // ── beforeunload + preventUnsavedChanges ─────────────────────────
 
   useEffect(() => {
     if (typeof window === 'undefined') return;

@@ -351,9 +351,6 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     });
 
     it('falls back to the default profile when the active project has NO key — the lockout fix', () => {
-      // Key minted only for `default`, then switched to a project we never logged
-      // into. resolveMutationApiKey (strict, data path) returns nothing, which is what
-      // used to strand `ablo projects use default`; resolveOrgKey still resolves.
       setProfileKeys('default', { sandbox: { apiKey: 'sk_test_default' } }, { mode: 'sandbox', activeProject: undefined });
       setActiveProject({ id: 'p9', slug: 'mail' });
       expect(resolveMutationApiKey()).toBeUndefined();

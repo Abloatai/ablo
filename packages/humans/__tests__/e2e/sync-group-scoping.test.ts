@@ -97,7 +97,6 @@ describeE2E('E2E: Sync Group Scoping & Security', () => {
         });
       });
 
-      // Create a item — should produce a delta on the WS
       const itemId = uuid();
       await batchAck(USER_ID, ORG_ID, [{
         type: 'CREATE',

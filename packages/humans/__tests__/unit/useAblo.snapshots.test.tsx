@@ -95,6 +95,7 @@ it('keeps selected model handles usable by other core operations', () => {
 });
 
 it('updates ownership selected through the core claim state', () => {
+  jest.useFakeTimers();
   const { client, wrapper } = setup();
   const { result } = renderHook(() => useAblo(ablo => ablo.chats.claim.state({ id: 'one' })), { wrapper });
   expect(result.current).toBeNull();
@@ -109,5 +110,23 @@ it('updates ownership selected through the core claim state', () => {
   }); });
   expect(result.current?.id).toBe('lease-1');
   act(() => { client._ws.emit('disconnected', { code: 1006, reason: 'offline' }); });
+  expect(result.current?.id).toBe('lease-1');
+  act(() => { jest.advanceTimersByTime(5_000); });
   expect(result.current).toBeNull();
+  jest.useRealTimers();
+});
+
+it('keeps one subscription across re-renders with a stable selector', () => {
+  const { client, wrapper } = setup();
+  addRow(client, { id: 'one', title: 'Before' });
+  const select = jest.fn((ablo: Parameters<Parameters<typeof useAblo>[0]>[0]) => ablo.chats.local.get('one')?.title);
+  const { result, rerender } = renderHook(() => useAblo(select), { wrapper });
+  expect(result.current).toBe('Before');
+  const afterMount = select.mock.calls.length;
+  for (let i = 0; i < 20; i++) rerender();
+  expect(select).toHaveBeenCalledTimes(afterMount);
+  const row = client.chats.local.get('one');
+  if (!row) throw new Error('Expected local row');
+  act(() => { runInAction(() => { row.title = 'After'; }); });
+  expect(result.current).toBe('After');
 });

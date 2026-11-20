@@ -50,19 +50,12 @@ export class LazyReferenceCollection<T extends Model> {
   private static _database: Database | null = null;
   private static _objectPool: InstanceCache | null = null;
 
-  /**
-   * Set global dependencies for all LazyReferenceCollection instances
-   * Called once during SyncedStore initialization
-   */
   static setDependencies(database: Database, objectPool: InstanceCache): void {
     LazyReferenceCollection._database = database;
     LazyReferenceCollection._objectPool = objectPool;
     getContext().logger.debug('LazyReferenceCollection dependencies set');
   }
 
-  /**
-   * Clear dependencies (e.g., on logout/store disposal)
-   */
   static clearDependencies(): void {
     LazyReferenceCollection._database = null;
     LazyReferenceCollection._objectPool = null;
@@ -71,7 +64,6 @@ export class LazyReferenceCollection<T extends Model> {
   /** Loaded items (null = not loaded, [] = loaded but empty) */
   items: T[] | null = null;
 
-  /** Loading state */
   isLoading = false;
 
   /** Error state */
@@ -83,18 +75,14 @@ export class LazyReferenceCollection<T extends Model> {
    */
   _isBeingObserved = false;
 
-  /** Promise for ongoing hydration */
   private hydrationPromise: Promise<void> | null = null;
 
-  /** Disposer for observation lifecycle hooks */
   private observationDisposer: (() => void) | null = null;
 
-  /** Get database from static dependencies */
   private get database(): Database | null {
     return LazyReferenceCollection._database;
   }
 
-  /** Get objectPool from static dependencies */
   private get objectPool(): InstanceCache | null {
     return LazyReferenceCollection._objectPool;
   }
@@ -132,7 +120,6 @@ export class LazyReferenceCollection<T extends Model> {
    * When React components observe this collection, we prevent GC of the parent model
    */
   private _setupObservationTracking(): void {
-    // Track when 'items' becomes observed (React component is rendering)
     const disposeOnObserved = onBecomeObserved(this, 'items', () => {
       this._isBeingObserved = true;
 
@@ -141,32 +128,25 @@ export class LazyReferenceCollection<T extends Model> {
         this.objectPool.touch(this.parent.id);
       }
 
-      // Register this collection with parent for observation tracking
       if (this.parent) {
         this.parent._registerObservedCollection(this);
       }
     });
 
-    // Track when 'items' stops being observed (component unmounted)
     const disposeOnUnobserved = onBecomeUnobserved(this, 'items', () => {
       this._isBeingObserved = false;
 
-      // Unregister from parent
       if (this.parent) {
         this.parent._unregisterObservedCollection(this);
       }
     });
 
-    // Store combined disposer for cleanup
     this.observationDisposer = () => {
       disposeOnObserved();
       disposeOnUnobserved();
     };
   }
 
-  /**
-   * Check if this collection is currently being observed by React/MobX
-   */
   get isBeingObserved(): boolean {
     return this._isBeingObserved;
   }
@@ -212,9 +192,6 @@ export class LazyReferenceCollection<T extends Model> {
     return raw.filter((item) => pool.has(item.id));
   }
 
-  /**
-   * Check if collection has been loaded
-   */
   get loaded(): boolean {
     return this.items !== null;
   }
@@ -226,23 +203,14 @@ export class LazyReferenceCollection<T extends Model> {
     return this.loaded && this.items!.length === 0;
   }
 
-  /**
-   * Check if currently loading
-   */
   get loading(): boolean {
     return this.isLoading;
   }
 
-  /**
-   * Get load error if any
-   */
   get error(): Error | null {
     return this.loadError;
   }
 
-  /**
-   * Get collection size
-   */
   get size(): number {
     // Touch parent model when accessing collection size
     if (this.objectPool && this.parent?.id) {
@@ -256,12 +224,10 @@ export class LazyReferenceCollection<T extends Model> {
    * Hydrate the collection from local storage and/or network
    */
   async hydrate(): Promise<void> {
-    // Return existing hydration promise if already in progress
     if (this.hydrationPromise) {
       return this.hydrationPromise;
     }
 
-    // Skip if already loaded
     if (this.items !== null) {
       return;
     }
@@ -275,21 +241,16 @@ export class LazyReferenceCollection<T extends Model> {
     }
   }
 
-  /**
-   * Internal hydration implementation
-   */
   private async _performHydration(): Promise<void> {
     this._setLoading(true);
     this._setError(null);
 
     try {
-      // Step 1: Try loading from IndexedDB
       const localData = await this._loadFromLocal();
 
       if (localData.length > 0) {
         this._setItems(localData);
 
-        // Check if we can skip network hydration
         if (this.options.canSkipNetworkHydration?.()) {
           this._setLoading(false);
           return;
@@ -308,9 +269,6 @@ export class LazyReferenceCollection<T extends Model> {
     }
   }
 
-  /**
-   * Load items from IndexedDB
-   */
   private async _loadFromLocal(): Promise<T[]> {
     try {
       if (!this.database) {
@@ -330,7 +288,6 @@ export class LazyReferenceCollection<T extends Model> {
       const store = this.database.getStore(this.modelName);
       const rawData = store ? await store.getAllFromIndex(this.foreignKey, this.parent.id) : [];
 
-      // Get model class from registry
       const ModelClass = getActiveRegistry().getModelByName(this.modelName);
       if (!ModelClass) {
         getContext().observability.breadcrumb(
@@ -341,7 +298,6 @@ export class LazyReferenceCollection<T extends Model> {
         return [];
       }
 
-      // Convert raw data to model instances
       const models: T[] = [];
 
       for (const data of rawData) {
@@ -352,11 +308,9 @@ export class LazyReferenceCollection<T extends Model> {
         // narrow-checked here rather than assumed.
         if (typeof id !== 'string') continue;
 
-        // Check if already in InstanceCache
         let model = this.objectPool.get(id);
 
         if (!model) {
-          // Create new model instance
           model = new ModelClass();
           model.updateFromData(data);
           this.objectPool.add(model);
@@ -370,18 +324,15 @@ export class LazyReferenceCollection<T extends Model> {
         }
       }
 
-      // Apply filtering if specified
       let filteredModels = models;
       if (this.options.filter) {
         filteredModels = models.filter(this.options.filter);
       }
 
-      // Apply sorting if specified
       if (this.options.sort) {
         filteredModels.sort(this.options.sort);
       }
 
-      // Apply limit if specified
       if (this.options.limit) {
         filteredModels = filteredModels.slice(0, this.options.limit);
       }
@@ -417,25 +368,18 @@ export class LazyReferenceCollection<T extends Model> {
     });
   }
 
-  /**
-   * Add an item to the collection
-   */
   add(item: T): void {
     if (this.items === null) {
       this.items = [];
     }
 
-    // Check if item already exists
     const existingIndex = this.items.findIndex((existing) => existing.id === item.id);
 
     if (existingIndex >= 0) {
-      // Replace existing item
       this.items[existingIndex] = item;
     } else {
-      // Add new item
       this.items.push(item);
 
-      // Apply sorting if specified
       if (this.options.sort) {
         this.items.sort(this.options.sort);
       }
@@ -444,9 +388,6 @@ export class LazyReferenceCollection<T extends Model> {
     getContext().logger.debug('Added item to collection', { model: item.getModelName(), id: item.id });
   }
 
-  /**
-   * Remove an item from the collection
-   */
   remove(itemOrId: T | string): boolean {
     if (this.items === null) return false;
 
@@ -464,9 +405,6 @@ export class LazyReferenceCollection<T extends Model> {
     return false;
   }
 
-  /**
-   * Find an item in the collection
-   */
   find(predicate: (item: T) => boolean): T | undefined {
     // Touch parent model when searching collection
     if (this.objectPool && this.parent?.id) {
@@ -477,9 +415,6 @@ export class LazyReferenceCollection<T extends Model> {
     return this.items.find(predicate);
   }
 
-  /**
-   * Filter items in the collection
-   */
   filter(predicate: (item: T) => boolean): T[] {
     // Touch parent model when filtering collection
     if (this.objectPool && this.parent?.id) {
@@ -490,9 +425,6 @@ export class LazyReferenceCollection<T extends Model> {
     return this.items.filter(predicate);
   }
 
-  /**
-   * Check if collection contains an item
-   */
   contains(itemOrId: T | string): boolean {
     if (this.items === null) return false;
 
@@ -507,30 +439,18 @@ export class LazyReferenceCollection<T extends Model> {
     return this.value;
   }
 
-  /**
-   * Set items directly (internal use)
-   */
   private _setItems(items: T[]): void {
     this.items = items;
   }
 
-  /**
-   * Set loading state (internal use)
-   */
   private _setLoading(loading: boolean): void {
     this.isLoading = loading;
   }
 
-  /**
-   * Set error state (internal use)
-   */
   private _setError(error: Error | null): void {
     this.loadError = error;
   }
 
-  /**
-   * Clear the collection
-   */
   clear(): void {
     this.items = [];
     this.loadError = null;
@@ -548,7 +468,6 @@ export class LazyReferenceCollection<T extends Model> {
       this.observationDisposer = null;
     }
 
-    // Unregister from parent if still registered
     if (this._isBeingObserved && this.parent) {
       this.parent._unregisterObservedCollection(this);
     }

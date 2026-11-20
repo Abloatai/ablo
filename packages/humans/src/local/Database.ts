@@ -79,11 +79,9 @@ export interface BootstrapResult {
 }
 
 export class Database {
-  // Core database components
   private databaseManager: DatabaseManager;
   private storeManager: StoreManager;
 
-  // Injected dependencies
   private modelRegistry: ModelRegistry;
   private bootstrapHelper: BootstrapFetcher;
 
@@ -102,11 +100,9 @@ export class Database {
   async fetchScopedBootstrapData(
     syncGroups: readonly string[],
   ): Promise<BootstrapData> {
-    // No lastSyncId → a full snapshot of exactly these groups.
     return this.bootstrapHelper.fetchBootstrap(undefined, syncGroups);
   }
 
-  // Database state
   private currentDbInfo: DatabaseInfo | null = null;
   private workspaceDb: IDBDatabase | null = null;
 
@@ -187,7 +183,6 @@ export class Database {
     return store;
   }
 
-  /** Get store or throw if not found (for operations that require the store). */
   private getRequiredStore(modelName: string) {
     const store = this.getStore(modelName);
     if (!store) {
@@ -251,7 +246,6 @@ export class Database {
           new InMemoryObjectStore(modelName, storeName),
         );
       }
-      // Create a __transactions store for the offline queue
       this.inMemoryStores.set(
         '__transactions',
         new InMemoryObjectStore('__transactions', '__transactions'),
@@ -262,10 +256,8 @@ export class Database {
       return;
     }
 
-    // ── Browser mode: IndexedDB (existing behavior, unchanged) ───
     this.runtime.logger.debug('Opening IndexedDB database');
 
-    // Initialize meta database
     await this.databaseManager.initializeMetaDatabase();
 
     this.currentDbInfo = await this.databaseManager.calculateDatabaseInfo(
@@ -276,10 +268,8 @@ export class Database {
     // Both persistence layers must share the complete authenticated authority.
     this.bootstrapHelper.setCacheScope(this.currentDbInfo.name);
 
-    // Register database
     await this.databaseManager.registerDatabase(this.currentDbInfo);
 
-    // Open workspace database
     this.workspaceDb = await this.databaseManager.openWorkspaceDatabase(
       this.currentDbInfo,
       async (db) => {
@@ -296,7 +286,6 @@ export class Database {
     openedDb.addEventListener('versionchange', connectionClosed);
     openedDb.addEventListener('close', connectionClosed);
 
-    // Initialize stores
     await this.storeManager.initializeStores(this.workspaceDb);
 
     // A live group addition can have widened a previous client's replica after
@@ -472,16 +461,11 @@ export class Database {
     const readiness = await this.storeManager.checkReadinessOfStores();
     const metadata = await this.databaseManager.getWorkspaceMetadata(this.workspaceDb);
 
-    // Get models from registry
     const instantModels = this.modelRegistry.getModelsByLoadStrategy(LoadStrategy.instant);
     const lazyModels = this.modelRegistry.getModelsByLoadStrategy(LoadStrategy.lazy);
     const modelsToLoad = [...instantModels, ...lazyModels];
 
-    // Gate the PERSISTED cursor through the sync-position schema field —
-    // the one trust boundary for resume state. IDB can hand back anything
-    // (a corrupted negative/float cursor would previously pass `|| 0`,
-    // which only catches falsy, and get sent to the server as the resume
-    // point). Invalid → 0 → full bootstrap, the safe degradation.
+    // Invalid persisted cursors fall back to 0, forcing a full bootstrap.
     const metadataLastSyncId =
       logPositionSnapshotSchema.shape.persisted.safeParse(metadata?.lastSyncId).data ?? 0;
     const dataAge = metadata?.updatedAt ? Date.now() - metadata.updatedAt.getTime() : Infinity;
@@ -516,7 +500,6 @@ export class Database {
       navigatorOnline: typeof navigator !== 'undefined' ? navigator.onLine : 'N/A',
     });
 
-    // Determine bootstrap type based on connectivity and data state
     const offline = typeof navigator !== 'undefined' && navigator && !navigator.onLine;
     let type: BootstrapType;
 
@@ -606,7 +589,6 @@ export class Database {
         await this.clear();
       }
 
-      // Handle partial bootstrap (delta batch)
       if (bootstrapData.type === 'partial') {
         const deltas = bootstrapData.deltas ?? [];
 
@@ -679,7 +661,6 @@ export class Database {
       let modelsStored = 0;
 
       for (const [modelName, modelData] of Object.entries(bootstrapData.models)) {
-        // Handle null, undefined, or non-array data
         if (!modelData) {
           this.runtime.observability.breadcrumb(
             `No data received for ${modelName}`,
@@ -698,7 +679,6 @@ export class Database {
           continue;
         }
 
-        // Skip empty arrays silently (expected for some models)
         if (modelData.length === 0) {
           this.runtime.logger.debug(`No ${modelName} items to store (empty array)`);
           continue;
@@ -723,9 +703,6 @@ export class Database {
         await this.setModelPersisted(modelName, true);
       }
 
-      // Update workspace metadata with bootstrap snapshot's lastSyncId
-      // Note: This method is only called for 'full' bootstrap (not 'local')
-      // For 'partial' bootstrap (future): would need intelligent merge logic here
       await this.updateWorkspaceMetadata({
         lastSyncId: bootstrapData.lastSyncId,
         schemaHash: this.modelRegistry.getSchemaHash(),
@@ -751,7 +728,6 @@ export class Database {
         navigatorOnline: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
       });
 
-      // Track bootstrap failure telemetry
       this.runtime.analytics?.capture('bootstrap_failed', {
         bootstrapType: requirements.type,
         lastSyncId: requirements.lastSyncId,
@@ -862,8 +838,6 @@ export class Database {
       }
 
       case 'U': {
-        // Update: merge onto the existing record (partial-delta pattern).
-        // Read the existing record first.
         const existing = await store.get(modelId);
 
         // Skip the update when there's no existing record to merge with:
@@ -879,14 +853,12 @@ export class Database {
               modelId: modelId.slice(0, 12),
             }
           );
-          // Return verify action to signal no changes were made
           return { action: 'verify', modelName, modelId, data: null };
         }
 
         // Shallow merge: delta overrides existing fields (safe - existing is guaranteed)
         const merged = { ...existing, ...compacted };
 
-        // Log preserved fields for debugging partial updates
         if (existing && compacted) {
           this.logPreservedFields(modelName, modelId, existing, compacted);
         }
@@ -913,7 +885,6 @@ export class Database {
       }
 
       case 'D': {
-        // Delete synchronously
         try {
           await store.delete(modelId);
           if (options.updateCursor !== false && typeof syncId === 'number') {
@@ -935,7 +906,6 @@ export class Database {
       }
 
       case 'A': {
-        // Archive
         const archivedData = this.compactRecord(modelName, { ...data, archivedAt: new Date() });
         try {
           await store.put(archivedData);
@@ -956,7 +926,7 @@ export class Database {
         return { action: 'archive', modelName, modelId, data: archivedData };
       }
 
-      case 'V': // Verify
+      case 'V':
         return { action: 'verify', modelName, modelId, data };
 
       // 'G' (GroupAdded) and 'S' (GroupRemoved) are sync-group membership
@@ -1238,7 +1208,7 @@ export class Database {
             // value, so the stale predecessor requires no separate write.
             persistedIndexes.add(idx);
             skippedDueToConflict++;
-            return; // Skip this delta
+            return;
           }
         }
       }
@@ -1265,7 +1235,6 @@ export class Database {
       });
     }
 
-    // Process each store's deltas in a single transaction
     for (const [modelName, storeDeltas] of deltasByStore.entries()) {
       const store = this.storeManager.getStore(modelName);
       if (!store) continue;
@@ -1364,7 +1333,6 @@ export class Database {
           continue;
         }
 
-        // Step 3: Start a single readwrite transaction for this store
         const tx = this.workspaceDb.transaction([modelName], 'readwrite');
         const objectStore = tx.objectStore(modelName);
 
@@ -1389,8 +1357,8 @@ export class Database {
               : dataWithId;
 
           switch (actionType) {
-            case 'C': // Create
-            case 'I': // Insert
+            case 'C':
+            case 'I':
               objectStore.put(compacted);
               stagedResults.push({
                 action: 'add',
@@ -1402,7 +1370,6 @@ export class Database {
               break;
 
             case 'U': {
-              // Update: merge the delta onto the existing record (already fetched).
               const existing = existingRecords.get(modelId);
 
               // Skip a stale update: if the entity is neither in the local
@@ -1414,7 +1381,7 @@ export class Database {
                   modelId: modelId.slice(0, 12),
                 });
                 stagedResults.push({ action: 'verify', modelName, modelId, idx });
-                break; // Skip this delta
+                break;
               }
 
               // Skip the update when there's no existing record to merge with:
@@ -1431,13 +1398,12 @@ export class Database {
                   }
                 );
                 stagedResults.push({ action: 'verify', modelName, modelId, idx });
-                break; // Skip this delta
+                break;
               }
 
               // Safe to merge - existing record is guaranteed
               const merged = { ...existing, ...compacted };
 
-              // Log preserved fields for debugging partial updates
               if (existing && compacted) {
                 this.logPreservedFields(modelName, modelId, existing, compacted);
               }
@@ -1447,18 +1413,18 @@ export class Database {
                 action: 'update',
                 modelName,
                 modelId,
-                data: merged, // Return merged data, not just delta
+                data: merged,
                 idx,
               });
               break;
             }
 
-            case 'D': // Delete
+            case 'D':
               objectStore.delete(modelId);
               stagedResults.push({ action: 'remove', modelName, modelId, idx });
               break;
 
-            case 'A': // Archive
+            case 'A':
               const archivedData = this.compactRecord(modelName, {
                 ...data,
                 archivedAt: new Date(),
@@ -1473,13 +1439,12 @@ export class Database {
               });
               break;
 
-            case 'V': // Verify
+            case 'V':
               stagedResults.push({ action: 'verify', modelName, modelId, data, idx });
               break;
           }
         }
 
-        // Wait for transaction to complete
         await new Promise<void>((resolve, reject) => {
           tx.oncomplete = () => { resolve(); };
           tx.onabort = () => { reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError')); };
@@ -1527,7 +1492,6 @@ export class Database {
           modelName,
           error: idbErr,
         });
-        // Mark all store deltas as verify in their original positions
         for (const { idx, delta } of storeDeltas) {
           results[idx] = { action: 'verify', modelName, modelId: delta.modelId };
         }
@@ -1577,7 +1541,6 @@ export class Database {
     return { results: stampSyncIds(results, deltas), persistedSyncId: highestPersistedSyncId };
   }
 
-  /** Get raw data for hydration */
   async hydrateModels(modelName: string): Promise<ModelData[]> {
     const store = this.getStore(modelName, 'hydrate');
     if (!store) {
@@ -1601,8 +1564,6 @@ export class Database {
     await store.put(compacted);
   }
 
-  /** Get data by index. `value` is an IDB key — string, number, Date,
-   *  BufferSource, or array thereof. */
   async getDataByIndex(modelName: string, indexName: string, value: IDBValidKey): Promise<ModelData[]> {
     const store = this.getRequiredStore(modelName);
     return await store.getAllFromIndex(indexName, value);
@@ -1920,11 +1881,8 @@ export class Database {
     return this.storeManager.getAllStores();
   }
 
-  /**
-   * Model persistence tracking
-   */
   async setModelPersisted(modelName: string, persisted: boolean): Promise<void> {
-    if (this.inMemory) return; // No persistence tracking in memory mode
+    if (this.inMemory) return;
     if (!this.workspaceDb) {
       throw new AbloConnectionError('Database not opened', {
         code: 'db_not_opened',

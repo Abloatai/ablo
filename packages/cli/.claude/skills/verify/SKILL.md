@@ -15,19 +15,19 @@ importing CLI internals.
 cd packages/cli && npm run build   # → dist/cli.cjs
 ```
 
-## Boot a real server (journey wiring: real routes + real api-key auth)
+## Boot a real server (the engine binary + real api-key auth)
 
-Write a small CJS-safe launch script (async `main()`, NO top-level await — the
-harness files use `__dirname` and break as ESM) that uses the journey harness
-primitives, then run it with `npx tsx --experimental-wasm-modules` from
-`apps/sync-server/`:
+Write a small launch script run with `npx tsx` that uses the test fixtures in
+`@ablo/db/testing` (`packages/database/testing/`) and the engine binary:
 
-- `startEphemeralPostgres()` (`src/__journeys__/harness/ephemeralPostgres.ts`) — control-plane PG, prisma-pushed
-- `startJourneyServer(pg.url, { tenantRouting: true })` (`harness/journeyServer.ts`) — real routes on an ephemeral port; `tenantRouting` wires the datasource-registration stack
-- `seedJourneyOrg(server.sql, label)` + `mintSecretKey(server.sql, orgId, 'sandbox', label)` (`harness/seed.ts`) — a real `sk_test_` key
-- print/write `server.baseURL` + key, hold the process open; `server.shutdown()` + `pg.stop()` on SIGTERM
+- `startEphemeralPostgres()` + `startEphemeralRedis()` — control-plane PG (prisma-pushed) and a private Redis
+- `seedJourneyOrg(sql, label)` + `mintSecretKey(sql, orgId, 'sandbox', label)` over `connectTestDatabase(pg.url)` — a real `sk_` key
+- spawn `experiments/rust-sync/full-server/target/release/server` (`cargo build --release --bin server` there) with `ABLO_NATIVE_DATABASE_URL=<pg.url> ABLO_NATIVE_REDIS_URL=<redis.url> ABLO_NATIVE_PORT=0 AGENT_AUDIT_HMAC_KEY=<any>`; it prints `{"ready":true,"port":N}` on stdout
+- hold the process open; kill the server, `redis.stop()` and `pg.stop()` on SIGTERM
 
-Point the CLI at it with `ABLO_API_URL=<baseURL> ABLO_API_KEY=<minted>`.
+`packages/engine-journeys/src/harness/journeyServer.ts` is the same launch inside vitest.
+
+Point the CLI at it with `ABLO_API_URL=http://127.0.0.1:<port> ABLO_API_KEY=<minted>`.
 
 ## Customer database for `connect` flows
 

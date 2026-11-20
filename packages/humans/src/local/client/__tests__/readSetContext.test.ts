@@ -29,6 +29,8 @@ class ItemModel extends Model {
     Object.assign(this, data);
   }
 
+  declare title: string;
+
   override getModelName(): string {
     return 'Item';
   }
@@ -98,6 +100,50 @@ describe('reactive/WebSocket ReadSet context', () => {
         expect.objectContaining({ model: 'items', id: 'item-1', readAt: 54 }) as CommitRecord['reads'][number],
       ]) as CommitRecord['reads'],
     })]);
+  });
+
+  it('reads a retained snapshot without I/O and preserves the earlier decision evidence', async () => {
+    const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
+    registry.registerModel('Item', ItemModel, { loadStrategy: LoadStrategy.instant });
+    const pool = new InstanceCache({ maxSize: 100 }, registry);
+    const resident = new ItemModel({ id: 'item-1', title: 'original', status: 'todo' });
+    pool.add(resident, ModelScope.live);
+    const unused = (): never => { throw new Error('not used'); };
+    const syncClient = {
+      add: unused, delete: unused, update: unused,
+      getOrganizationId: () => null,
+      syncNow: unused, waitForConfirmation: unused,
+    };
+    let stamp = 12;
+    const hydration = {
+      fetch: jest.fn(() => Promise.resolve([resident])),
+      getReadSnapshot: jest.fn(() => ({ data: { id: 'item-1', title: resident.title }, stamp })),
+    };
+    const collaboration: ModelCollaboration = {
+      openText: unused, openCounter: unused, commitBatch: unused, createClaim: unused,
+      currentReadAt: () => 0, state: () => null, holders: () => [], queue: () => [],
+      reorder: unused, waitFor: unused, selfParticipantId: 'user-1',
+      readPoint: jest.fn(() => Promise.resolve({ data: { id: 'item-1', title: 'remote' }, stamp: 20 })),
+    };
+    const context = createReadSetContext();
+    const items = createModelOperations<ItemRow, Omit<ItemRow, 'id'>>(
+      'items', 'Item', pool, syncClient, registry, hydration, collaboration, context,
+    );
+    const first = await items.read({ id: 'item-1' });
+    stamp = 13;
+    resident.title = 'changed';
+    const second = await items.read({ id: 'item-1' });
+    if (!first) throw new Error('expected captured first snapshot');
+    expect(first).toMatchObject({ title: 'original' });
+    expect(second).toMatchObject({ title: 'changed' });
+    expect(hydration.fetch).not.toHaveBeenCalled();
+    expect(collaboration.readPoint).not.toHaveBeenCalled();
+    const prepared = prepareReadSet(context, syncClient, undefined, undefined, [first]);
+    expect(prepared.reads).toEqual([{ model: 'item', id: 'item-1', readAt: 12 }]);
+    expect(() => prepareReadSet(context, {}, undefined, undefined, [first])).toThrow();
+    await items.read({ id: 'item-1', type: 'complete' });
+    expect(hydration.fetch).toHaveBeenCalledTimes(1);
+    expect(collaboration.readPoint).toHaveBeenCalledTimes(1);
   });
 
   it('carries explicitly supplied row evidence into the mutation queue', async () => {

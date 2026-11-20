@@ -144,7 +144,6 @@ export function createClaimStream(
   const activeByClaimId = new Map<string, Claim>();
   let claimsSnapshot: readonly Claim[] = Object.freeze([]);
 
-  // ── State: our own open grants, keyed by the exact claim id ─────
   const ownClaims = new Map<string, OwnGrant>();
   // Releases made while the socket was down, sent on reconnect so a held lease
   // never outlives its release just because the connection dropped.
@@ -161,7 +160,6 @@ export function createClaimStream(
   // once per change (not re-logged on every server re-fan of the same line).
   const lastLoggedQueuePos = new Map<string, number>();
 
-  // ── Subscribers ──────────────────────────────────────────────────
   const listeners = new Set<() => void>();
   const rejectionListeners = new Set<(r: ClaimRejection) => void>();
   const lostListeners = new Set<(l: ClaimLost) => void>();
@@ -233,7 +231,6 @@ export function createClaimStream(
     });
   };
 
-  // ── Wire wiring ──────────────────────────────────────────────────
   let attached: ClaimTransport | null = null;
   const unsubs: (() => void)[] = [];
 
@@ -471,7 +468,6 @@ export function createClaimStream(
     unsubs.push(presence.onChange(refreshPresenceClaims));
   }
 
-  // ── Outbound ────────────────────────────────────────────────────
   function sendBegin(claimId: string, claim: OwnClaim): void {
     if (!attached?.isConnected()) return;
     attached.send({
@@ -573,9 +569,6 @@ export function createClaimStream(
     });
   }
 
-  // The locator half derives from `OwnClaim` rather than being restated: a
-  // member spelled out here is a member that dies before `sendBegin`, which is
-  // how `fields` used to be lost between `claim()` and the socket.
   function mintHandle(
     args: Omit<OwnClaim, 'description' | 'estimatedMs' | 'queue'> & {
       description: string;

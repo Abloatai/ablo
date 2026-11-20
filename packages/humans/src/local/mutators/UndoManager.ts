@@ -41,7 +41,6 @@ const normalizeModelAlias = (modelName: string): string =>
 export type { InverseOp, UndoEntry };
 export type { UndoConflictPolicy } from './undoApply.js';
 
-// ── Scope ──────────────────────────────────────────────────────────────────
 
 export interface UndoScopeOptions {
   /** The maximum number of undo entries to keep. Older entries drop off the
@@ -134,7 +133,6 @@ export class UndoScope<S extends Schema> {
   private readonly tracksModel?: (schemaKey: string) => boolean;
   /** registered-name / alias → schema key, built once from the schema. */
   private readonly schemaKeyByAlias = new Map<string, string>();
-  /** Unsubscribe from the local-mutation stream. */
   private readonly unsubscribe: () => void;
   private readonly replayOrigin: MutationOrigin = { undoScopeId: crypto.randomUUID() };
   /** Operations collected during the current tick, flushed together as one entry. */
@@ -537,7 +535,6 @@ function buildUndoOps(
   }
 }
 
-// ── Manager ────────────────────────────────────────────────────────────────
 
 /**
  * The registry of named undo scopes. One instance is created per application
@@ -605,7 +602,6 @@ export class UndoManager<S extends Schema> {
   }
 }
 
-// ── Internal helpers ───────────────────────────────────────────────────────
 
 /** Bulk history becomes individually confirmed steps so accepted rows never repeat. */
 function expandReplayOps(ops: InverseOp[]): ReplayOperation[] {

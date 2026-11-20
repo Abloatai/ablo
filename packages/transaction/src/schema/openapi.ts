@@ -250,7 +250,6 @@ const jsonBody = (schema: Json): Json => ({
   required: true,
   content: { 'application/json': { schema } },
 });
-/** For routes where an empty body is meaningful — a bare claim, a plain beat. */
 const optionalJsonBody = (schema: Json): Json => ({
   required: false,
   content: { 'application/json': { schema } },

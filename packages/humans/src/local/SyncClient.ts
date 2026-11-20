@@ -77,7 +77,6 @@ export class SyncClient extends EventEmitter {
   readonly mutationQueue: MutationQueue;
   private observers = new Set<SyncObserver>();
 
-  // Authentication context
   private userId: string | null = null;
   private organizationId: string | null = null;
 
@@ -185,10 +184,8 @@ export class SyncClient extends EventEmitter {
     return this.pendingDeletes.has(id);
   }
 
-  // Connection state
   private connectionState: 'connected' | 'disconnected' | 'connecting' = 'disconnected';
 
-  // Configuration
   private isDisposed = false;
 
   /**
@@ -222,7 +219,6 @@ export class SyncClient extends EventEmitter {
     this.commitOutboxNamespace = commitOutboxNamespace;
     this.networkMonitor = new NetworkMonitor(this.runtime);
 
-    // Initialize MutationQueue with proper configuration
     const localMutationPort = createLocalMutationPort((event, payload) => {
       this.mutationQueue.emit(event, payload);
     });
@@ -262,13 +258,9 @@ export class SyncClient extends EventEmitter {
     // exhausted, the write is cached so it survives a tab close.
     this.setupAwaitingTransactionPersistence();
 
-    // Setup network monitoring
     this.setupNetworkMonitoring();
   }
 
-  /**
-   * Setup network monitoring handlers
-   */
   private setupNetworkMonitoring(): void {
     // Both handlers emit to external listeners (which can throw) before/around
     // their own try/catch — route rejections into observability rather than
@@ -610,9 +602,6 @@ export class SyncClient extends EventEmitter {
     }
   }
 
-  /**
-   * Initialize sync client with authentication
-   */
   async initialize(userId: string, organizationId: string): Promise<void> {
     this.userId = userId;
     this.organizationId = organizationId;
@@ -732,7 +721,6 @@ export class SyncClient extends EventEmitter {
       });
     }
 
-    // Get model types that should be hydrated on startup (skip lazy per LSE)
     const modelTypes = this.objectPool.registry.getRegisteredModelNames().filter((name) => {
       const meta = this.objectPool.registry.getMetadata(name);
       return meta?.loadStrategy === LoadStrategy.instant;
@@ -755,11 +743,9 @@ export class SyncClient extends EventEmitter {
     for (const modelType of modelTypes) {
       const typeStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
       try {
-        // Get raw data from Database (via StoreManager)
         const rawData = await this.database.hydrateModels(modelType);
         const afterFetch = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
-        // Create models in batch first, collect for deferred addBatch
         const modelsForType: Model[] = [];
         const recordsToHeal: { id: string; data: Record<string, unknown> }[] = [];
 
@@ -786,7 +772,6 @@ export class SyncClient extends EventEmitter {
           }
         }
 
-        // Collect models for the single batched addBatch call in Phase 2
         allModelsToAdd.push(...modelsForType);
 
         // Persist healed records back to IndexedDB (fire-and-forget, non-blocking)
@@ -1193,19 +1178,6 @@ export class SyncClient extends EventEmitter {
     return this.mutate('archive', model, () => { this.objectPool.updateScope(model.id, ModelScope.archived); });
   }
 
-  /**
-   * Append a mutation to the pending queue and schedule its sync work.
-   *
-   * IndexedDB persistence and the server push are deferred to a microtask, so
-   * many pushes within the same tick collapse into a single serialization and
-   * a single process call. Without the deferral, queueing a hundred mutations
-   * at once — a large paste, a document import, bulk row creation — would
-   * reserialize the whole growing queue a hundred times, an O(N²) cost in
-   * `model.toJSON()`.
-   *
-   * @param mutation.capturedChanges - Pre-captured, frozen changes, used to
-   *   avoid re-reading a model after pool operations that might clear them.
-   */
   /** Stage one mutation through the queue, which owns durability and execution. */
   private stageMutation(
     type: 'create' | 'update' | 'delete' | 'archive',
@@ -1286,9 +1258,6 @@ export class SyncClient extends EventEmitter {
     return result;
   }
 
-  /**
-   * Handle network reconnection
-   */
   private async handleReconnection(): Promise<void> {
     this.runtime.observability.breadcrumb('Network reconnected', 'sync.offline');
     this.emit('sync:reconnecting');
@@ -1308,18 +1277,12 @@ export class SyncClient extends EventEmitter {
     }
   }
 
-  /**
-   * Handle network disconnection
-   */
   private async handleDisconnection(): Promise<void> {
     this.runtime.observability.breadcrumb('Network disconnected', 'sync.offline');
     this.setConnectionState('disconnected');
     this.emit('sync:offline');
   }
 
-  /**
-   * Get current sync state
-   */
   getState(): SyncState {
     return {
       connectionState: this.connectionState,
@@ -1329,9 +1292,6 @@ export class SyncClient extends EventEmitter {
     };
   }
 
-  /**
-   * Set connection state
-   */
   private setConnectionState(state: 'connected' | 'disconnected' | 'connecting'): void {
     const oldState = this.connectionState;
     this.connectionState = state;
@@ -1349,35 +1309,22 @@ export class SyncClient extends EventEmitter {
     }
   }
 
-  /**
-   * Subscribe to events with disposer pattern
-   */
   subscribe(event: string, handler: (data?: unknown) => void): () => void {
     super.on(event, handler);
 
-    // Return disposer function
     return () => {
       this.off(event, handler);
     };
   }
 
-  /**
-   * Add observer for sync events
-   */
   addObserver(observer: SyncObserver): void {
     this.observers.add(observer);
   }
 
-  /**
-   * Remove observer
-   */
   removeObserver(observer: SyncObserver): void {
     this.observers.delete(observer);
   }
 
-  /**
-   * Notify all observers
-   */
   private notifyObservers(event: SyncEvent): void {
     this.markModelChanged(event.modelType);
     for (const observer of this.observers) {
@@ -1419,9 +1366,6 @@ export class SyncClient extends EventEmitter {
     return this.reconnectDrain.drain(() => this.mutationQueue.drainPending());
   }
 
-  /**
-   * Dispose and cleanup
-   */
   dispose(): void {
     this.modelOperations?.clear();
     this.isDisposed = true;
@@ -1475,9 +1419,6 @@ export class SyncClient extends EventEmitter {
    * deletion. The store calls this when a delete delta arrives for a parent,
    * cancelling any queued writes on children that reference it.
    *
-   * @param childModelName - The child model type (for example, `Block`).
-   * @param foreignKey - The foreign-key property name (for example, `sectionId`).
-   * @param parentId - The id of the deleted parent.
    * @returns The number of transactions cancelled.
    */
   cancelTransactionsByForeignKey(
@@ -1524,10 +1465,6 @@ export class SyncClient extends EventEmitter {
     };
   }
 
-  /**
-   * Get pending transaction count from MutationQueue
-   * Used by SyncedStore to compute hasUnsyncedChanges
-   */
   getPendingTransactionCount(): number {
     const stats = this.mutationQueue.getStats();
     // Include pending and executing as "unsynced"
@@ -1536,10 +1473,6 @@ export class SyncClient extends EventEmitter {
     return stats.pending + stats.executing;
   }
 
-  /**
-   * Subscribe to transaction events for sync status tracking
-   * Returns unsubscribe function
-   */
   onTransactionEvent(event: 'created' | 'completed' | 'failed', callback: () => void): () => void {
     const eventName = `transaction:${event}`;
     this.mutationQueue.on(eventName, callback);
@@ -1614,9 +1547,6 @@ export class SyncClient extends EventEmitter {
   }
 
 
-  /**
-   * Get detailed debug info for the sync debug page
-   */
   getDebugInfo() {
     return {
       connectionState: this.connectionState,
@@ -1625,7 +1555,6 @@ export class SyncClient extends EventEmitter {
     };
   }
 
-  // ── Delta + Bootstrap application (owns InstanceCache writes) ──────────────
 
   /**
    * Apply a batch of delta results from Database to the InstanceCache.
@@ -1851,13 +1780,8 @@ export class SyncClient extends EventEmitter {
             const resolved = this.resolveConflicts(existing, result.data);
             modelsToUpsert.push(resolved);
           }
-          // Resurrection drop: if `existing` is gone (optimistic delete
-          // discarded it; the matching D delta is in-flight) we used
-          // to call `createFromData` here, which reintroduced the row
-          // for a frame before the D delta stripped it again — the
-          // chart-delete flicker. Trust the local state. If the server
-          // still considers the row alive, a subsequent bootstrap or
-          // resync will reconcile.
+          // Trust the optimistic delete. A later bootstrap or resync can reconcile
+          // if the server still considers the row alive.
           break;
         }
         case 'remove':
@@ -1904,10 +1828,6 @@ export class SyncClient extends EventEmitter {
     if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
   }
 
-  /**
-   * Apply bootstrap data to the InstanceCache with ghost removal.
-   * Owns: model creation, batch upsert, ghost detection + removal.
-   */
   applyBootstrapDataToPool(
     bootstrapData: BootstrapSnapshot,
     protectedIds?: ReadonlySet<string>,
@@ -2009,7 +1929,6 @@ export class SyncClient extends EventEmitter {
       removedCount = this.objectPool.removeBatch(ghostIds);
     }
 
-    // Emit changed model types so QueryProcessor can auto-invalidate
     const changedTypes = new Set(Object.keys(bootstrapData.models));
     if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
 

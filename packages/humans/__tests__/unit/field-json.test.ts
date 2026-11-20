@@ -13,7 +13,6 @@ import { model } from '@abloatai/transaction/schema/model';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { Ablo, type InternalAbloOptions } from '../../src/Ablo';
 
-// ── Schema-level tests ──────────────────────────────────────────────────
 
 describe('field.json() schema', () => {
   it('accepts a plain object shape and produces a ZodObject', () => {
@@ -65,7 +64,6 @@ describe('field.json() schema', () => {
   });
 });
 
-// ── Runtime tests (via createSyncEngine) ────────────────────────────────
 
 describe('field.json() runtime accessor', () => {
   const schema = defineSchema({
@@ -126,7 +124,7 @@ describe('field.json() runtime accessor', () => {
     expect(result2.success).toBe(true);
     if (result2.success) {
       expect(result2.data.icon).toBe('custom-icon');
-      expect(result2.data.color).toBe('#F59E0B'); // default
+      expect(result2.data.color).toBe('#F59E0B');
       expect(result2.data.summary).toBe('A collection');
     }
 
@@ -138,7 +136,7 @@ describe('field.json() runtime accessor', () => {
     if (result3.success) {
       expect(result3.data.icon).toBe('star');
       expect(result3.data.isWelcome).toBe(true);
-      expect(result3.data.color).toBe('#F59E0B'); // default for missing field
+      expect(result3.data.color).toBe('#F59E0B');
     }
   });
 
@@ -147,7 +145,6 @@ describe('field.json() runtime accessor', () => {
       icon: z.string().default('fallback'),
     });
 
-    // null → defaults
     expect(subSchema.safeParse({}).data).toEqual({ icon: 'fallback' });
 
     // Invalid JSON string → safeParse({}) → defaults

@@ -296,8 +296,6 @@ describe('staged-batch drain liveness', () => {
     const confirmation = syncClient.update(item);
     syncClient.markConnected();
 
-    // Reconnect used to bypass `pendingStages` and dispatch here while the
-    // strict outbox source row was still absent.
     await wait(50);
     expect(calls).toHaveLength(0);
 

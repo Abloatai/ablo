@@ -107,10 +107,8 @@ export type SpanAttributes = Record<string, string | number | boolean | undefine
 export interface ObservabilityProvider
   extends CoordinationObservability,
     TransportObservability {
-  /** Set user/org context for error grouping */
   setContext(userId: string, organizationId: string): void;
 
-  /** Update connection state tag */
   setConnectionState(state: 'connected' | 'disconnected' | 'connecting'): void;
 
   // `breadcrumb` and `captureWebSocketError` are inherited from
@@ -129,16 +127,13 @@ export interface ObservabilityProvider
    */
   captureMutationFailure(details: TransactionFailureDetails): void;
 
-  /** Capture bootstrap failure */
   captureBootstrapFailure(error: Error | unknown, details?: BootstrapFailureDetails): void;
 
   /** Capture reconciliation needed (delta confirmation timeout) */
   captureReconciliation(details: ReconciliationDetails): void;
 
-  /** Capture delta retry exhausted */
   captureDeltaRetryExhausted(details: DeltaRetryExhaustedDetails): void;
 
-  /** Capture self-healing event */
   captureSelfHealing(details: SelfHealingDetails): void;
 
   // `captureClaim` and `captureConflict` are inherited from
@@ -160,17 +155,11 @@ export interface ObservabilityProvider
   ): Promise<T>;
 }
 
-// ─────────────────────────────────────────────
-// Analytics
-// ─────────────────────────────────────────────
 
 export interface Analytics {
   capture(event: string, properties?: Record<string, unknown>): void;
 }
 
-// ─────────────────────────────────────────────
-// Session Error Detection
-// ─────────────────────────────────────────────
 
 /**
  * Detects whether an error represents an expired/invalid session.
@@ -180,22 +169,15 @@ export interface SessionErrorDetector {
   /** Check if an error is a session error (401/403) */
   isSessionError(error: unknown): boolean;
 
-  /** Check if an HTTP response status indicates a session error */
   isSessionErrorResponse(status: number, body?: string): boolean;
 }
 
-// ─────────────────────────────────────────────
-// Online Status
-// ─────────────────────────────────────────────
 
 export interface OnlineStatusProvider {
   /** Returns true if the device is currently online */
   isOnline(): boolean;
 }
 
-// ─────────────────────────────────────────────
-// Model Debug Logger
-// ─────────────────────────────────────────────
 
 export interface ModelDebugLoggerContract {
   logOperation(info: {
@@ -210,15 +192,7 @@ export interface ModelDebugLoggerContract {
   logObservableSetup(modelName: string, observableProps: string[], computedProps: string[]): void;
 }
 
-// ─────────────────────────────────────────────
-// Mutation Execution (replaces GraphQLClient coupling)
-// ─────────────────────────────────────────────
 
-/**
- * Result returned by an injected mutation executor. The input type is inferred
- * from the runtime compatibility schema: legacy `{lastSyncId}` remains valid,
- * while every explicit queued result requires a WAL correlation.
- */
 export type MutationCommitResult = MutationCommitResultInput;
 
 // `MutationOptions` describes how a write is issued — request identity, commit
@@ -345,19 +319,13 @@ export interface MutationExecutor {
     items: { id: string; input: Record<string, unknown> }[]
   ): Promise<{ id: string; url: string }[]>;
 
-  /** Delete a subscription entity */
   deleteSubscription?(entityType: string, entityId: string, txId: string): Promise<void>;
 
-  /** Delete a favorite entity */
   deleteFavorite?(modelId: string, txId: string): Promise<void>;
 
-  /** Register a callback for session expiry detection */
   onSessionExpired?(callback: () => void): void;
 }
 
-// ─────────────────────────────────────────────
-// Sync Engine Configuration
-// ─────────────────────────────────────────────
 
 /**
  * Application-specific configuration for the sync engine, describing how your
@@ -440,9 +408,6 @@ export interface RuntimeConfig {
   expectedModelShapes?: Readonly<Record<string, Readonly<Record<string, { readonly type: string; readonly isOptional: boolean }>>>>;
 }
 
-// ─────────────────────────────────────────────
-// WebSocket Event Configuration
-// ─────────────────────────────────────────────
 
 /**
  * Extends the WebSocket event map with your own collaboration events, such as
