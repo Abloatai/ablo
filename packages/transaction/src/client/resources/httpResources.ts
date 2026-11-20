@@ -62,7 +62,6 @@ import type {
   ServerReadOptions,
 } from './modelOperations.js';
 
-// ── Model proxy types ─────────────────────────────────────────────────────
 
 /**
  * The operations available on each model in the sync engine:
@@ -183,7 +182,6 @@ async function* walkModelList<T>(
   );
 }
 
-/** Collect a complete list through the same guarded cursor loop as async iteration. */
 export async function collectModelList<T>(
   first: ModelList<T>,
   options: ModelListWalkOptions = {},

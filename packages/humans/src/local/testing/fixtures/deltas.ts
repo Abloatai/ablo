@@ -9,7 +9,6 @@ import type { SyncActionType, SyncAction } from '../../stores/syncAction.js';
 
 let deltaCounter = 0;
 
-/** Reset the delta counter (call in beforeEach for deterministic IDs) */
 export function resetDeltaCounter(): void {
   deltaCounter = 0;
 }
@@ -19,7 +18,6 @@ export interface CreateDeltaOptions {
   id?: number;
   /** Model name (e.g., 'Item', 'Entry') */
   modelName: string;
-  /** Model ID */
   modelId: string;
   /** Action type: I=Insert, U=Update, D=Delete, A=Archive, V=Unarchive */
   action: SyncActionType;

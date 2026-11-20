@@ -110,7 +110,7 @@ describe('Model', () => {
     it('should be idempotent', () => {
       const item = createItemFixture();
       item.dispose();
-      item.dispose(); // Should not throw
+      item.dispose();
       expect(item.disposed).toBe(true);
     });
 

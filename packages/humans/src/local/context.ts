@@ -63,16 +63,10 @@ export const globalRuntime: RuntimeContext = {
   getModelMetadata: (name) => getContext().getModelMetadata(name),
 };
 
-/**
- * Check if the sync engine has been initialized.
- */
 export function isRuntimeInitialized(): boolean {
   return _context !== null;
 }
 
-/**
- * Reset context (for testing or cleanup).
- */
 export function resetRuntime(): void {
   _context = null;
 }

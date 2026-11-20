@@ -43,7 +43,6 @@ describe('Property: Delta Ordering Invariants', () => {
         (modelId, syncId, repeatCount) => {
           const pool = new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
 
-          // Add the same model with the same syncId multiple times
           for (let i = 0; i < repeatCount; i++) {
             pool.add(
               new TestItem({ id: modelId, title: `Attempt ${i}` }),
@@ -76,7 +75,6 @@ describe('Property: Delta Ordering Invariants', () => {
         (modelId, baseSyncId, title1, title2) => {
           const pool = new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
 
-          // INSERT
           const model = new TestItem({ id: modelId, title: title1 });
           pool.add(model, ModelScope.live, { action: 'I', syncId: baseSyncId });
 
@@ -166,7 +164,6 @@ describe('Property: Delta Ordering Invariants', () => {
         (modelId, priorOps) => {
           const pool = new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
 
-          // Apply prior operations
           let syncId = 1;
           for (const op of priorOps) {
             if (op === 'insert') {
@@ -184,7 +181,6 @@ describe('Property: Delta Ordering Invariants', () => {
             }
           }
 
-          // DELETE
           pool.remove(modelId);
 
           // INVARIANT: model is gone regardless of prior state

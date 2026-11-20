@@ -57,9 +57,6 @@ describe('LogPosition', () => {
   });
 
   it('the persisted-cursor field gates corrupted IDB resume state (Database load path)', () => {
-    // Database.requiredBootstrap parses `metadata.lastSyncId` through this
-    // exact schema field; invalid → undefined → caller falls back to 0
-    // (full bootstrap). `|| 0` previously let a NEGATIVE cursor through.
     const field = logPositionSnapshotSchema.shape.persisted;
     expect(field.safeParse(42).data).toBe(42);
     expect(field.safeParse(-5).data).toBeUndefined();

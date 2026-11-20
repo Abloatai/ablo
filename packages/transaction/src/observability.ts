@@ -21,9 +21,6 @@ export interface CoordinationObservability {
   captureConflict(event: ConflictEvent): void;
 }
 
-// ─────────────────────────────────────────────
-// Transport observability
-// ─────────────────────────────────────────────
 
 /** Breadcrumb severity levels */
 export type BreadcrumbLevel = 'debug' | 'info' | 'warning' | 'error';
@@ -56,7 +53,6 @@ export interface WebSocketErrorDetails {
  * satisfies both.
  */
 export interface TransportObservability {
-  /** Add a breadcrumb for sync lifecycle events */
   breadcrumb(
     message: string,
     category: BreadcrumbCategory,
@@ -64,7 +60,6 @@ export interface TransportObservability {
     data?: Record<string, string | number | boolean | undefined>
   ): void;
 
-  /** Capture WebSocket error */
   captureWebSocketError(details: WebSocketErrorDetails): void;
 }
 

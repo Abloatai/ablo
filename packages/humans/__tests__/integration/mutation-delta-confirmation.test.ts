@@ -102,19 +102,16 @@ describe('Integration: Mutation → Delta Confirmation', () => {
 
   describe('FK-ordered batch', () => {
     it('should send parent entities before children in batchAck', async () => {
-      // Create in reverse FK order
       const layer = createEntryLayerFixture({ entryId: 'entry-1' });
       const entry = createEntryFixture({ id: 'entry-1', collectionId: 'collection-1' });
       const collection = createEntryCollectionFixture({ id: 'collection-1' });
 
       pool.addBatch([collection, entry, layer]);
 
-      // Create transactions in reverse order
       await queue.create(layer, USER_CTX);
       await queue.create(entry, USER_CTX);
       await queue.create(collection, USER_CTX);
 
-      // All staged in same microtask → same batch
       await flushMicrotasks();
       await new Promise((r) => setTimeout(r, 100));
 

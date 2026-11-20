@@ -82,7 +82,6 @@ export class InstanceCache {
     this.accessTimes.set(id, at);
   }
 
-  // Deduplication tracking
   private recentAdditions = new Map<string, number>(); // "modelType:modelId" -> timestamp
   // Conservative minimum: removal/refresh may leave it stale, causing only an extra scan.
   private earliestRecentAddition = Infinity;
@@ -107,7 +106,6 @@ export class InstanceCache {
   // Registry of which fields to index: Map<modelName, fieldName[]>
   private foreignKeyConfig = new Map<string, string[]>();
 
-  // Performance tracking
   private metrics = {
     hits: 0,
     misses: 0,
@@ -116,7 +114,6 @@ export class InstanceCache {
     duplicatesSkipped: 0,
   };
 
-  // Configuration
   private config: Required<Omit<PoolConfig, 'runtime'>>;
   private readonly runtime: RuntimeContext;
   private gcTimer?: NodeJS.Timeout;
@@ -135,13 +132,11 @@ export class InstanceCache {
    * pooled model.
    */
   readonly watermarks = new RowWatermarks();
+  private resetGeneration = 0;
+  get generation(): number { return this.resetGeneration; }
 
-  // Subscription registry
   private subscriptions = new Map<string, Set<(model: Model) => void>>();
 
-  /**
-   * Subscribe to updates for a specific model type.
-   */
   subscribe<T extends Model>(
     modelClass: ModelConstructor<T>, 
     callback: (model: T) => void
@@ -200,26 +195,14 @@ export class InstanceCache {
   constructor(config: PoolConfig = {}, modelRegistry?: ModelRegistry) {
     this.config = {
       maxSize: config.maxSize ?? 10000,
-      // Idle-eviction disabled by default. The 5-minute default used to
-      // live here, but with schema-driven dynamic classes not
-      // registering `LazyReferenceCollection`s, the
-      // `hasObservedCollections()` guard in gc() didn't fire for most
-      // actively-rendered models — and they'd evict out from under a
-      // user whose tab sat for 10 minutes. Memory pressure relief is
-      // handled by the `maxSize` LRU cap (see `evictOldest`), which is
-      // the bound that actually matches usage: "keep the most recent N
-      // entities, not the entities touched in the last N minutes."
-      //
-      // Callers who genuinely want time-based eviction can pass an
-      // explicit `maxAge`. Leaving the default at Infinity keeps
-      // correctness as the default and makes aggressive GC an opt-in.
+      // Disable idle eviction by default; maxSize bounds the pool through LRU
+      // eviction. Callers can opt into time-based eviction with maxAge.
       maxAge: config.maxAge ?? Number.POSITIVE_INFINITY,
       gcInterval: config.gcInterval ?? 60000, // 1 minute
       useWeakRefs: config.useWeakRefs ?? true,
     };
     this.runtime = config.runtime ?? globalRuntime;
 
-    // Store the model registry reference
     if (!modelRegistry) {
       throw new AbloValidationError(
         'InstanceCache requires ModelRegistry for production-safe model name lookup',
@@ -381,21 +364,16 @@ export class InstanceCache {
     return model.getModelName() === modelName ? (model as T) : undefined;
   }
 
-  /**
-   * Add model with deduplication support
-   */
   add(model: Model, scope: ModelScope = ModelScope.live, deltaInfo?: DeltaInfo): void {
     const id = model.id;
     const modelType = model.getModelName();
     const addKey = `${modelType}:${id}`;
 
 
-    // Ensure type index exists for this model type
     if (!this.typeIndex.has(modelType)) {
       this.typeIndex.set(modelType, observable.set<string>());
     }
 
-    // Check if model already exists to prevent duplicates
     const existingEntry = this.entries.get(id);
     if (existingEntry?.model && !existingEntry.model.disposed) {
       // Model already exists and is valid, update its scope if needed
@@ -409,19 +387,16 @@ export class InstanceCache {
       return;
     }
 
-    // Check rapid additions (within 50ms) for better deduplication
     const lastAdded = this.recentAdditions.get(addKey);
     if (lastAdded && Date.now() - lastAdded < 50) {
       this.metrics.duplicatesSkipped++;
       return;
     }
 
-    // Check delta history for duplicate processing
     if (deltaInfo?.syncId) {
       const history = this.deltaHistory.get(addKey);
 
       if (history) {
-        // Skip if we've already processed a newer or equal sync ID
         if (history.lastSyncId >= deltaInfo.syncId) {
           this.metrics.duplicatesSkipped++;
           return;
@@ -441,7 +416,6 @@ export class InstanceCache {
         }
       }
 
-      // Update delta history
       this.deltaHistory.set(addKey, {
         lastAction: deltaInfo.action ?? 'U',
         lastSyncId: deltaInfo.syncId,
@@ -449,7 +423,6 @@ export class InstanceCache {
       });
     }
 
-    // Track this addition
     const addedAt = Date.now();
     this.recentAdditions.set(addKey, addedAt);
     this.earliestRecentAddition = Math.min(this.earliestRecentAddition, addedAt);
@@ -480,9 +453,7 @@ export class InstanceCache {
       this.addToTypeIndex(id, model.getModelName());
       this.metrics.additions++;
     });
-    // No cache to invalidate — typeIndex + entries are directly observable
 
-    // Notify views of the addition
     this.notifySubscribers(model);
     this.viewRegistry.notifyAdded(modelType, model);
   }
@@ -503,7 +474,6 @@ export class InstanceCache {
         existingModel.updateFromData(model.toJSON());
       }
 
-      // Update scope if different
       if (existingEntry.scope !== scope) {
         runInAction(() => {
           this.entries.set(id, { ...existingEntry, scope });
@@ -512,7 +482,6 @@ export class InstanceCache {
       }
 
       this.notifySubscribers(existingModel);
-      // Notify views of the update
       this.viewRegistry.notifyUpdated(existingModel.getModelName(), existingModel);
     } else {
       // Model doesn't exist - add it (add() already notifies views)
@@ -545,12 +514,10 @@ export class InstanceCache {
       const id = model.id;
       const modelType = model.getModelName();
 
-      // Ensure type index exists
       if (!this.typeIndex.has(modelType)) {
         this.typeIndex.set(modelType, observable.set<string>());
       }
 
-      // Skip if model already exists and is valid
       const existingEntry = this.entries.get(id);
       if (existingEntry?.model && !existingEntry.model.disposed) {
         if (existingEntry.scope !== scope) {
@@ -573,26 +540,14 @@ export class InstanceCache {
 
       this.entries.set(id, entry);
       this.addToTypeIndex(id, modelType);
-      // Populate the foreign-key indexes. The single-item `add()` path
-      // does this; `addBatch()` used to skip it, which meant every
-      // block / ledger cell / message that came in through a bulk
-      // loader (`ensureReportBlocks`, `prefetchSectionBlocks`, bootstrap
-      // hydration) was in the pool but invisible to `hasMany` lookups
-      // — `section.blocks` returned `[]` until the user clicked a block
-      // and something else ran a non-batch `add` that happened to
-      // populate the FK index as a side effect. The UX symptom was
-      // "sections show empty until you click on one." Adding this one
-      // line closes the gap.
       this.addToForeignKeyIndex(id, model, modelType);
       this.metrics.additions++;
       addedCount++;
 
       this.notifySubscribers(model);
-      // Notify views of the addition
       this.viewRegistry.notifyAdded(modelType, model);
     }
 
-    // No cache to invalidate — typeIndex + entries are directly observable
 
     return addedCount;
   }
@@ -617,7 +572,6 @@ export class InstanceCache {
           this.touchAccess(id, Date.now());
         }
         this.notifySubscribers(existingEntry.model);
-        // Notify views of the update
         this.viewRegistry.notifyUpdated(existingEntry.model.getModelName(), existingEntry.model);
       } else {
         // Delegate to inline add logic (same as addBatch internals)
@@ -637,12 +591,10 @@ export class InstanceCache {
         this.addToTypeIndex(id, modelType);
         this.metrics.additions++;
         this.notifySubscribers(model);
-        // Notify views of the addition
         this.viewRegistry.notifyAdded(modelType, model);
       }
     }
 
-    // No cache to invalidate — typeIndex + entries are directly observable
   }
 
   /**
@@ -683,7 +635,6 @@ export class InstanceCache {
       removedCount++;
     }
 
-    // No cache to invalidate — typeIndex + entries are directly observable
 
     return removedCount;
   }
@@ -981,7 +932,6 @@ export class InstanceCache {
       // Don't return existing, create new model (will use composite key for storage)
     }
 
-    // Log model creation attempt
     this.runtime.modelDebugLogger?.logCreation(modelName, data, Constructor);
 
     try {
@@ -1025,6 +975,7 @@ export class InstanceCache {
    *                                   after bootstrap/rehydration
    */
   clear(options: { preserveObserved?: boolean } = {}): void {
+    this.resetGeneration++;
     const preserveObserved = options.preserveObserved ?? false;
     const preservedIds: string[] = [];
     const preservedEntries: [string, ModelEntry][] = [];
@@ -1032,7 +983,6 @@ export class InstanceCache {
     for (const [id, entry] of this.entries) {
       const model = entry.model ?? entry.weakRef?.deref();
 
-      // Check if this model should be preserved (has active React observers)
       if (
         preserveObserved &&
         model &&
@@ -1062,7 +1012,6 @@ export class InstanceCache {
     runInAction(() => {
       this.entries.clear();
       this.typeIndex.clear();
-      // Clear foreign key index data (preserves config/structure, just empties the value maps)
       for (const index of this.foreignKeyIndexes.values()) {
         index.clear();
       }
@@ -1092,7 +1041,6 @@ export class InstanceCache {
     for (const [id, time] of preservedAccessTimes) {
       this.touchAccess(id, time);
     }
-    // No cache to invalidate — typeIndex + entries are directly observable
   }
 
   has(id: string): boolean {
@@ -1199,7 +1147,6 @@ export class InstanceCache {
       let skippedObserved = 0;
 
       for (const [id, entry] of this.entries) {
-        // Check if model has expired based on last access time
         const lastAccessed = this.accessTimes.get(id) ?? 0;
         if (now - lastAccessed > this.config.maxAge) {
           // Do not GC a model that has observed collections — disposing one
@@ -1334,11 +1281,7 @@ export class InstanceCache {
 
       for (const id of staleAccessKeys) this.accessTimes.delete(id);
 
-      // Safety net for an entry that never received an access stamp: it is
-      // invisible to the recency map, so fall back to the entry scan the old
-      // implementation always paid. Every add path stamps `accessTimes`, so
-      // this loop finds nothing and costs nothing in the normal case (it only
-      // runs at all when the recency map came up short).
+      // Entries without access stamps are invisible to the recency map.
       if (toEvict.length < count) {
         for (const [id, entry] of this.entries) {
           if (toEvict.length >= count) break;
@@ -1416,7 +1359,6 @@ export class InstanceCache {
     }
   }
 
-  // ========== FOREIGN KEY INDEX ==========
 
   /**
    * Register a foreign key field for indexing on a model type.
@@ -1431,7 +1373,6 @@ export class InstanceCache {
       fields.push(fieldName);
       this.foreignKeyConfig.set(modelName, fields);
     }
-    // Initialize the index map
     const indexKey = `${modelName}:${fieldName}`;
     if (!this.foreignKeyIndexes.has(indexKey)) {
       this.foreignKeyIndexes.set(indexKey, observable.map<string, Set<string>>());
@@ -1466,15 +1407,8 @@ export class InstanceCache {
   getByForeignKey(modelName: string, fieldName: string, fieldValue: string): Model[] {
     const indexKey = `${modelName}:${fieldName}`;
     const index = this.foreignKeyIndexes.get(indexKey);
-    // Both empty-path early-returns below are normal states, not errors:
-    // a model with no FK index yet (not populated), or an index with no
-    // entry for this specific parent id (entity genuinely has no
-    // children). These used to `console.warn` diagnostic dumps on every
-    // call, which turned into hundreds of log lines per second during
-    // cursor hover / rapid re-renders on a busy page. If a caller
-    // needs visibility into "why is this empty," wire an opt-in
-    // `logger.debug` at the specific call site rather than re-adding
-    // a blanket warn here.
+    // A missing FK index or parent entry is normal: the model may not be indexed,
+    // or the parent may have no children.
     if (!index) return [];
 
     const ids = index.get(fieldValue);
@@ -1499,10 +1433,6 @@ export class InstanceCache {
       }
     }
     if (droppedNoEntry || droppedScope || droppedDisposed) {
-      // Debug-level: happens on every render when a foreign-key index
-      // has dangling refs (legacy orphan deltas, pending CREATE
-      // transactions, etc.). Noisy at warn level, useful during
-      // investigation.
       this.runtime.logger.debug('[InstanceCache.getByForeignKey] ROWS DROPPED', {
         modelName,
         fieldName,
@@ -1517,15 +1447,7 @@ export class InstanceCache {
     return result;
   }
 
-  /**
-   * Add a model to foreign key indexes (called from addToTypeIndex path)
-   */
   private addToForeignKeyIndex(id: string, model: Model, modelName: string): void {
-    // Silent no-ops for "no config / non-string value / missing index"
-    // — all three are legitimate states (non-indexed model, optional
-    // nullable FK, index not yet registered because the batch ran
-    // before schema registration completed). Diagnostic warns that
-    // used to live here spammed the console on every hot-path load.
     const fields = this.foreignKeyConfig.get(modelName);
     if (!fields) return;
 
@@ -1546,9 +1468,6 @@ export class InstanceCache {
     }
   }
 
-  /**
-   * Remove a model from foreign key indexes (called from removeFromTypeIndex path)
-   */
   private removeFromForeignKeyIndex(id: string, modelName?: string): void {
     if (!modelName) return;
     const fields = this.foreignKeyConfig.get(modelName);

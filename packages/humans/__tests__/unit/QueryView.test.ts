@@ -32,17 +32,11 @@ type ItemRecord = TestItem & Record<string, unknown>;
 type EntryRecord = TestEntry & Record<string, unknown>;
 type EntryLayerRecord = TestEntryLayer & Record<string, unknown>;
 
-// ---------------------------------------------------------------------------
-// Shared setup
-// ---------------------------------------------------------------------------
 
 function createPool(registry: ModelRegistry): ObjectPool {
   return new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
 }
 
-// ---------------------------------------------------------------------------
-// A. QueryView initial scan
-// ---------------------------------------------------------------------------
 
 describe('QueryView initial scan', () => {
   let pool: ObjectPool;
@@ -152,9 +146,6 @@ describe('QueryView initial scan', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// B. Incremental add
-// ---------------------------------------------------------------------------
 
 describe('QueryView incremental add', () => {
   let pool: ObjectPool;
@@ -228,16 +219,12 @@ describe('QueryView incremental add', () => {
     });
     expect(view.results).toHaveLength(3);
 
-    // Add a model that would sort first — it enters the window, last one drops out
     pool.add(createEntryFixture({ order: 0 }));
     expect(view.results).toHaveLength(3);
     expect(view.results[0]?.order).toBe(0);
   });
 });
 
-// ---------------------------------------------------------------------------
-// C. Incremental update
-// ---------------------------------------------------------------------------
 
 describe('QueryView incremental update', () => {
   let pool: ObjectPool;
@@ -324,7 +311,6 @@ describe('QueryView incremental update', () => {
     });
     expect(view.results).toHaveLength(1);
 
-    // Update title (not filtered/sorted on)
     const updated = new TestItem({ ...item, title: 'Updated' });
     updated.id = item.id;
     pool.upsert(updated, ModelScope.live);
@@ -334,9 +320,6 @@ describe('QueryView incremental update', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// D. Incremental remove
-// ---------------------------------------------------------------------------
 
 describe('QueryView incremental remove', () => {
   let pool: ObjectPool;
@@ -391,9 +374,6 @@ describe('QueryView incremental remove', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// E. ViewRegistry
-// ---------------------------------------------------------------------------
 
 describe('ViewRegistry', () => {
   let pool: ObjectPool;
@@ -457,9 +437,6 @@ describe('ViewRegistry', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// F. ObjectPool integration
-// ---------------------------------------------------------------------------
 
 describe('QueryView ObjectPool integration', () => {
   let pool: ObjectPool;
@@ -526,9 +503,6 @@ describe('QueryView ObjectPool integration', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// G. Edge cases
-// ---------------------------------------------------------------------------
 
 describe('QueryView edge cases', () => {
   let pool: ObjectPool;

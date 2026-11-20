@@ -16,7 +16,6 @@
  *   };
  */
 
-// ── Relation options ──────────────────────────────────────────────────────
 
 /**
  * Options for `relation.belongsTo`. Each defaults to `false`, so every
@@ -98,7 +97,6 @@ export interface BelongsToOptions {
   readonly fk?: boolean;
 }
 
-// ── Relation type brands ──────────────────────────────────────────────────
 
 declare const __relationType: unique symbol;
 declare const __relationTarget: unique symbol;
@@ -138,7 +136,6 @@ export interface RelationDef<
   readonly [__relationTarget]: Target;
   readonly [__relationField]: Field;
 
-  /** Runtime metadata */
   readonly type: Type;
   readonly target: Target;
   /**
@@ -171,7 +168,6 @@ export interface RelationDef<
   readonly _orderBy?: string;
 }
 
-// ── Internal relation builder ─────────────────────────────────────────────
 
 class RelationBuilder<
   Type extends RelationType,
@@ -213,7 +209,6 @@ class RelationBuilder<
   }
 }
 
-// ── Public relation factories ─────────────────────────────────────────────
 
 export const relation = {
   /**

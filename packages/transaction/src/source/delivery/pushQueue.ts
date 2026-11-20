@@ -102,7 +102,6 @@ export interface PushQueueOptions {
   readonly endpoint: string;
   /** The API key used to sign each delivery. */
   readonly apiKey: string;
-  /** Where queued items are persisted. */
   readonly storage: PushQueueStorage;
   /**
    * Override the retry delays. Defaults to {@link STANDARD_WEBHOOKS_RETRY_SCHEDULE}.

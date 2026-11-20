@@ -115,9 +115,7 @@ export interface SourceConnectorOptions {
   readonly jitter?: number;
   /** Advisory client id sent in the `register` frame for server-side logs. */
   readonly client?: string;
-  /** Pluggable clock (tests). */
   readonly now?: () => number;
-  /** Observe connection lifecycle transitions. */
   readonly onStatus?: (status: ConnectorStatus) => void;
   /** Observe non-fatal errors (decode failures, handler throws, socket errors). */
   readonly onError?: (error: unknown) => void;

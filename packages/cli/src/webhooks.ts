@@ -58,7 +58,6 @@ function positional(args: readonly string[]): string | undefined {
     const a = args[i];
     if (a === undefined) continue; // unreachable: i is bounded by args.length
     if (a.startsWith('-')) {
-      // Skip a value-bearing flag's value (unless it's `--flag=value`).
       const next = args[i + 1];
       if (!a.includes('=') && next && !next.startsWith('-')) i++;
       continue;

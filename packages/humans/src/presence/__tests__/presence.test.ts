@@ -51,6 +51,7 @@ describe('reactive presence', () => {
   });
 
   it('reacts to core presence reads before attachment and after navigation and disconnect', () => {
+    jest.useFakeTimers();
     const presence = createPresence();
     const events = transport();
     const snapshots: number[] = [];
@@ -74,9 +75,12 @@ describe('reactive presence', () => {
       revision: 3, activities: [activity('read-3', 'Documents', 'doc-1')], tombstones: [],
     });
     events.emit('disconnected');
+    expect(snapshots).toEqual([1, 0, 1]);
+    jest.advanceTimersByTime(5_000);
     expect(snapshots).toEqual([1, 0, 1, 0]);
     stop();
     presence.dispose();
+    jest.useRealTimers();
   });
 
   it('feeds authoritative claim activities into the existing claim reader', () => {

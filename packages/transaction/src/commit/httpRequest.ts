@@ -78,17 +78,17 @@ export function normalizeCommitOperations(
 }
 
 /**
- * The source accepted the write and its replication echo did not arrive in
- * time. `accepted: true` is the load-bearing detail: the row may well be
+ * The source accepted the write but confirmation or read visibility lagged.
+ * `accepted: true` is the load-bearing detail: the row may well be
  * written, so this is a confirmation timeout and never a reason to write again.
  */
 export function replicationLagTimeout(
-  request: ExactHttpCommitRequest,
-  response: CommitReceiptWire,
+  request: Pick<ExactHttpCommitRequest, 'idempotencyKey'>,
+  response: Pick<CommitReceiptWire, 'correlationId'>,
   requestTimeoutMs: number,
 ): AbloConnectionError {
   return new AbloConnectionError(
-    `The source accepted commit ${request.idempotencyKey}, but its replication echo did not arrive within ${requestTimeoutMs}ms.`,
+    `The source accepted commit ${request.idempotencyKey}, but confirmation did not complete within ${requestTimeoutMs}ms.`,
     {
       code: 'replication_lag_timeout',
       httpStatus: 504,

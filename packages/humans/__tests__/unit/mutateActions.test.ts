@@ -16,7 +16,6 @@ import { createMutateActions } from '../../src/local/mutators/mutateActions';
 import { ViewRegistry } from '../../src/local/views/ViewRegistry';
 import { createTestContext } from '../../src/local/testing';
 
-// ── Test schema ────────────────────────────────────────────────────────
 
 const testSchema = defineSchema({
   items: model(
@@ -30,7 +29,6 @@ const testSchema = defineSchema({
     { typename: 'Item' }),
 });
 
-// ── Test model class — registered for createFromData lookups ──────────
 
 class TestItem extends Model {
   title!: string;
@@ -51,7 +49,6 @@ class TestItem extends Model {
   }
 }
 
-// ── Minimal SyncStoreContract wrapping a real ObjectPool ──────────────
 
 interface TestStore extends SyncStoreContract {
   saveCalls: Model[];
@@ -115,7 +112,6 @@ function createStore(pool: ObjectPool): TestStore {
   return store;
 }
 
-// ── Setup ──────────────────────────────────────────────────────────────
 
 let pool: ObjectPool;
 let registry: ModelRegistry;
@@ -137,7 +133,6 @@ afterEach(() => {
   cleanupCtx();
 });
 
-// ── Tests ──────────────────────────────────────────────────────────────
 
 describe('useMutate.create', () => {
   it('creates a model with auto-generated id, timestamps, and orgId', async () => {

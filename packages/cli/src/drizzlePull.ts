@@ -144,7 +144,6 @@ export async function buildSchemaSourceFromDrizzle(opts: {
   };
 }
 
-// ── CLI ─────────────────────────────────────────────────────────────────────
 
 interface DrizzlePullArgs {
   schema: string | null;
@@ -182,7 +181,6 @@ export function parseDrizzlePullArgs(argv: readonly string[]): DrizzlePullArgs {
   return { schema, out, importPath, force };
 }
 
-/** Load a (possibly TypeScript) Drizzle module from disk via jiti. */
 async function loadModule(path: string): Promise<Record<string, unknown>> {
   // jiti transpiles TS on the fly, so we can import the customer's schema.ts
   // directly. Imported lazily so the rest of the CLI doesn't pay for it.

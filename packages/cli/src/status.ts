@@ -276,8 +276,6 @@ export async function status(args: string[] = []): Promise<void> {
     }`
   );
 
-  // Old credential-store slots remain visible only when populated, explicitly
-  // labeled as legacy. Current runtime branch keys live in ABLO_API_KEY.
   for (const { key: m, label } of [
     { key: 'sandbox', label: 'legacy child' },
     { key: 'production', label: 'legacy root' },
@@ -315,9 +313,6 @@ export async function status(args: string[] = []): Promise<void> {
     }`
   );
 
-  // Directly under the push line, because that is the line it qualifies: this
-  // is the state where the push returns 403, and the 403 used to be the first
-  // notice of it.
   const capability = credentialCapability(runtimeKey.key);
   if (capability.note) console.log(`    ${pc.dim(capability.note)}`);
 

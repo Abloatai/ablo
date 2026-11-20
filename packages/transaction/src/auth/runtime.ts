@@ -230,7 +230,6 @@ export async function exchangeApiKey(
   return parseCapabilityMintResponse(await response.json());
 }
 
-// ─────────────────────────────────────────────────────────────────────
 
 interface MintUserSessionBase {
   /** Your secret API key (an `sk_` key). Minting a session is a server-side
@@ -407,7 +406,6 @@ export async function mintUserSessionKey(
   return parseEphemeralKeyResponse(await response.json());
 }
 
-// ─────────────────────────────────────────────────────────────────────
 
 export interface ResolveIdentityRequest {
   readonly baseUrl: string;
@@ -481,7 +479,6 @@ export async function resolveIdentity(
   return parseIdentityResolveResponse(await response.json());
 }
 
-// ─────────────────────────────────────────────────────────────────────
 
 /**
  * Keeps a capability token fresh so a long-lived client never disconnects when
@@ -523,10 +520,8 @@ export interface RefreshSchedulerOptions {
    */
   readonly refresh: () => Promise<{ expiresAtMs: number }>;
 
-  /** Called on every successful refresh. */
   readonly onRefreshed?: (info: { expiresAtMs: number }) => void;
 
-  /** Called on every refresh failure. */
   readonly onError?: (error: Error) => void;
 
   /**
@@ -547,7 +542,6 @@ export interface RefreshSchedulerOptions {
   /** Time source. Override in tests; defaults to `Date.now`. */
   readonly now?: () => number;
 
-  /** Timer pair. Override in tests. */
   readonly setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   readonly clearTimer?: (handle: ReturnType<typeof setTimeout>) => void;
 }

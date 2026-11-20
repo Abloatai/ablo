@@ -33,7 +33,6 @@ interface FetchCalls {
   readonly mock: { readonly calls: readonly (readonly unknown[])[] };
 }
 
-/** Parse the pagination-relevant params of each fetched URL. */
 function requestedParams(
   mock: FetchCalls,
 ): { models: string | null; lastSyncId: string | null; limit: string | null; cursor: string | null }[] {
@@ -107,7 +106,6 @@ describe('BootstrapFetcher chunked cold start', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [params] = requestedParams(fetchMock);
-    // No paging on the warm path: neither limit nor cursor is sent.
     expect(params).toEqual({
       models: 'Collection,Entry,EntryDetail',
       lastSyncId: '115',

@@ -128,7 +128,6 @@ class Logger {
 
     const message = `GraphQL: ${operation}${modelInfo} took ${duration}ms${variableInfo}${statusInfo}${errorInfo}`;
 
-    // Filter out internal fields from details for cleaner logs
     const cleanDetails = details
       ? {
           ...details,
@@ -153,7 +152,6 @@ class Logger {
   }
 }
 
-// Export singleton instance
 export const logger = new Logger();
 
 // Backwards compatibility exports for gradual migration

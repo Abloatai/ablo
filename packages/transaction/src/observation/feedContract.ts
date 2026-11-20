@@ -52,9 +52,7 @@ export const logQuerySchema = z.object({
   after: z.string().optional(),
   /** Entries per page. Clamped server-side; the default is a short tail. */
   limit: z.string().optional(),
-  /** Only this model's entries. */
   model: z.string().optional(),
-  /** Only this kind of change. */
   op: logOpSchema.optional(),
   /** Only entries at or after this ISO 8601 timestamp. */
   since: z.string().optional(),

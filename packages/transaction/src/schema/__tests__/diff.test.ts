@@ -23,7 +23,6 @@ import {
   type MigrationStep,
 } from '../diff.js';
 
-// ── Fixture helpers ────────────────────────────────────────────────────────────
 
 function fld(
   type: FieldType,
@@ -53,7 +52,6 @@ function sch(models: Record<string, ModelJSON>): SchemaJSON {
   return { v: 3, models, identityRoles: [] };
 }
 
-// ── Model-level diffs ───────────────────────────────────────────────────────────
 
 describe('diffSchema — models', () => {
   it('first push (prev = null) creates every model, no per-field steps', () => {
@@ -124,7 +122,6 @@ describe('diffSchema — models', () => {
   });
 });
 
-// ── Field-level diffs ────────────────────────────────────────────────────────────
 
 describe('diffSchema — fields', () => {
   const base = (fields: Record<string, FieldMeta>) => sch({ t: mdl(fields, 't') });
@@ -252,7 +249,6 @@ describe('diffSchema — fields', () => {
   });
 });
 
-// ── Ordering (expand → contract) ─────────────────────────────────────────────────
 
 describe('diffSchema — ordering', () => {
   it('orders creates → renames → field changes → drops', () => {
@@ -267,16 +263,15 @@ describe('diffSchema — ordering', () => {
     const steps = diffSchema(prev, next, { models: [{ from: 'item', to: 'todo' }] });
     const kinds = steps.map((s) => s.kind);
     expect(kinds).toStrictEqual([
-      'create_model', // fresh
+      'create_model',
       'rename_model', // item → todo
       'add_field', // todo.extra
       'drop_field', // todo.old
-      'drop_model', // gone
+      'drop_model',
     ]);
   });
 });
 
-// ── Cast safety matrix ────────────────────────────────────────────────────────────
 
 describe('classifyCast', () => {
   it('is safe for same type', () => {
@@ -311,7 +306,6 @@ describe('classifyCast', () => {
   });
 });
 
-// ── Destructive classification (Prisma two-tier) ──────────────────────────────────
 
 describe('classifyMigration', () => {
   const base = (fields: Record<string, FieldMeta>) => sch({ t: mdl(fields, 't') });

@@ -96,7 +96,6 @@ export interface QueryBatchResult {
   results: unknown[];
   /** Per-result-slot evidence for the primary rows in that slot. */
   evidence?: readonly (readonly QueryReadEvidence[])[];
-  /** Per-slot failures that previously looked identical to an empty result. */
   errors?: readonly {
     index: number;
     model: string;

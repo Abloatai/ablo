@@ -16,10 +16,6 @@ import { model } from '@abloatai/transaction/schema/model';
 import { field } from '@abloatai/transaction/schema/field';
 import { drizzleDataSource, type DrizzleLike, type DrizzleExecuteResult } from '../adapters/drizzle.js';
 
-// A schema where field names DIVERGE from columns three ways:
-//   - operatorId      → operator_id      (default camelToSnake rule)
-//   - legacyName      → display_label    (explicit `field.from()` override)
-//   - organizationId  → organization_id  (base tenancy column)
 const schema = defineSchema({
   item: model({
     title: field.string(),
@@ -28,7 +24,6 @@ const schema = defineSchema({
   }),
 });
 
-/** Render an `sql`` object to its final parametrized SQL text (real dialect). */
 const dialect = new PgDialect();
 const renderSql = (query: SQL): string => dialect.sqlToQuery(query).sql;
 
@@ -188,7 +183,6 @@ describe('drizzleDataSource', () => {
 
     const insert = db.sqls.find((s) => s.startsWith('INSERT INTO "item"'));
     expect(insert).toBeDefined();
-    // Default rule: operatorId → operator_id. Explicit override: legacyName → display_label.
     expect(insert).toContain('"operator_id"');
     expect(insert).toContain('"display_label"');
     expect(insert).not.toContain('"operatorId"');
@@ -232,7 +226,6 @@ describe('drizzleDataSource', () => {
     const db = new FakeDrizzle([[{ id: 't1', title: 'A', operator_id: 'op1', display_label: 'L' }]]);
     const adapter = drizzleDataSource(db, schema);
     const rows = await adapter.read({ kind: 'load', model: 'item', id: 't1' });
-    // operator_id → operatorId (default), display_label → legacyName (override).
     expect(rows[0]).toEqual({ id: 't1', title: 'A', operatorId: 'op1', legacyName: 'L' });
   });
 

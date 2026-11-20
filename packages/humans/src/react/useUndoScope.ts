@@ -97,7 +97,6 @@ export function useUndoScope(
   // can wire a mobx observable or custom event bus on top.
   const [, setTick] = useState(0);
 
-  // Reset tick when scope identity changes (new store / new orgId).
   useEffect(() => {
     setTick(0);
   }, [scope]);

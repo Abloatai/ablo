@@ -1,25 +1,4 @@
-/**
- * Every member of the locator survives every hop that carries a claim — and
- * the three spellings of the entity half say the same thing.
- *
- * This is a gate on the property, not on the syntax that last broke it. The
- * locator used to be copied member by member at more than twenty sites, so
- * widening it reached none of them: `fields` was added to the schema and to the
- * conflict rule, and the request body and the server's claim construction both
- * dropped it, which made a set-scoped claim silently hold the whole row.
- *
- * The cases enumerate `targetRefSchema`'s own keys rather than a written-out
- * list, so a member added to the locator is covered here the moment it exists —
- * nobody has to remember to extend this file, which is the failure mode it
- * exists to catch.
- *
- * Two hops the first version of this file missed, both of which then broke:
- * CONSTRUCTION — the schemas were gated while `claim()` still spelled its
- * handle out by hand, so `fields` died between the caller and the socket with
- * every parse test passing; and the WAIT LINE, whose target was a hand-written
- * copy of the same locator and could not hold `fields` at all. Both are covered
- * below.
- */
+/** Every locator member must survive every hop that carries a claim. */
 
 import {
   targetRefSchema,
@@ -182,12 +161,8 @@ describe('the locator survives the hops that build a frame, not only the ones th
   it.each(LOCATOR_MEMBERS)(
     'the model surface\'s spelling reaches the socket carrying %s',
     (member) => {
-      // What `ablo.<model>.claim.create({ target })` does: a target spelled in
-      // the model vocabulary crosses to the claim stream through the two
-      // projections. It used to cross member by member, which is where a field
-      // set died between the caller and the wire. The reactive engine cannot be
-      // assembled without a connection, so the hop is exercised here at the
-      // stream it calls.
+      // Exercise this hop at the stream boundary because assembling the reactive
+      // engine requires a connection.
       const modelSpelled = {
         ...modelTarget(ENTITY),
         ...subTarget({ [member]: SAMPLE[member] }),

@@ -10,9 +10,6 @@ import { Model } from '../../Model.js';
 import { ModelRegistry } from '../../ModelRegistry.js';
 import { PropertyType, LoadStrategy } from '@abloatai/transaction/types';
 
-// ─────────────────────────────────────────────
-// Test Model Classes
-// ─────────────────────────────────────────────
 
 export class TestWorkspace extends Model {
   name = '';
@@ -122,9 +119,6 @@ export class TestEntryLayer extends Model {
   }
 }
 
-// ─────────────────────────────────────────────
-// Model Registration Helper
-// ─────────────────────────────────────────────
 
 /**
  * Maps each test model to its creation priority, matching the order the
@@ -146,7 +140,6 @@ export const TEST_MODEL_PRIORITIES = new Map<string, number>([
 export function registerTestModels(registry: ModelRegistry): void {
   registry.startBatch();
 
-  // Register model classes
   registry.registerModel('Workspace', TestWorkspace, { loadStrategy: LoadStrategy.instant });
   registry.registerModel('Item', TestItem, { loadStrategy: LoadStrategy.instant });
   registry.registerModel('Comment', TestComment, { loadStrategy: LoadStrategy.instant });
@@ -154,7 +147,6 @@ export function registerTestModels(registry: ModelRegistry): void {
   registry.registerModel('Entry', TestEntry, { loadStrategy: LoadStrategy.instant });
   registry.registerModel('EntryDetail', TestEntryLayer, { loadStrategy: LoadStrategy.instant });
 
-  // Register properties
   registry.registerProperty('Workspace', 'name', { type: PropertyType.property });
   registry.registerProperty('Workspace', 'description', { type: PropertyType.property, optional: true });
   registry.registerProperty('Workspace', 'organizationId', { type: PropertyType.property });
@@ -182,7 +174,6 @@ export function registerTestModels(registry: ModelRegistry): void {
   registry.registerProperty('EntryDetail', 'content', { type: PropertyType.property });
   registry.registerProperty('EntryDetail', 'organizationId', { type: PropertyType.property });
 
-  // Register back-references for cascade-aware transaction handling
   registry.registerBackReference('Item', { parentModel: 'Workspace', foreignKey: 'workspaceId', cascadeDelete: true });
   registry.registerBackReference('Comment', { parentModel: 'Item', foreignKey: 'itemId', cascadeDelete: true });
   registry.registerBackReference('Entry', { parentModel: 'Collection', foreignKey: 'collectionId', cascadeDelete: true });
@@ -191,9 +182,6 @@ export function registerTestModels(registry: ModelRegistry): void {
   registry.endBatch();
 }
 
-// ─────────────────────────────────────────────
-// Test SyncEngineConfig factory
-// ─────────────────────────────────────────────
 
 /**
  * Builds a sync engine configuration pre-loaded with the test models'
@@ -225,13 +213,9 @@ export function createTestConfig(): {
   };
 }
 
-// ─────────────────────────────────────────────
-// Fixture factories
-// ─────────────────────────────────────────────
 
 let fixtureCounter = 0;
 
-/** Reset the counter (call in beforeEach for deterministic IDs) */
 export function resetFixtureCounter(): void {
   fixtureCounter = 0;
 }

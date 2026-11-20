@@ -23,7 +23,6 @@ import { z } from 'zod';
  * control plane and the reconstructed copy behaves identically.
  */
 
-// ── Sync-group wire form (branded) ──────────────────────────────────────────
 
 /**
  * The branded wire form of a sync group: `${kind}:${id}`. Branded so a raw
@@ -91,7 +90,6 @@ export function isSyncGroupInput(value: unknown): value is SyncGroupInput {
   return syncGroupInputSchema.safeParse(value).success;
 }
 
-// ── Identity anchors (closed vocabulary) ────────────────────────────────────
 
 /**
  * The sync-group kinds the authentication provider mints directly onto an
@@ -115,7 +113,6 @@ export function identityAnchor(kind: IdentityAnchorKind, id: string): SyncGroup 
   return syncGroup(kind, id);
 }
 
-// ── Role source ─────────────────────────────────────────────────────────────
 
 /** Validates how a role pulls ids out of a context (identity or record). */
 export const roleSourceSchema = z.object({
@@ -141,7 +138,6 @@ export type IdentityContext = RoleContext;
 /** The record shape an {@link EntityRole} reads from. */
 export type EntityContext = RoleContext;
 
-// ── Role (kind + source — no template string) ───────────────────────────────
 
 /**
  * A sync-group role: a typed `kind` plus the field that supplies the id. The
@@ -226,7 +222,6 @@ export const groupsInputSchema = z.object({
 });
 export type GroupsInput = z.infer<typeof groupsInputSchema>;
 
-// ── Factories ───────────────────────────────────────────────────────────────
 
 function makeRole(spec: {
   readonly kind: string;
@@ -258,7 +253,6 @@ export function entityRole(spec: {
   return makeRole(spec);
 }
 
-// ── Evaluation ──────────────────────────────────────────────────────────────
 
 /**
  * Evaluate a {@link RoleSource} against a context. Absent or falsy fields yield

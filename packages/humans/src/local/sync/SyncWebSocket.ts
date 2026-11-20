@@ -96,8 +96,6 @@ export interface GroupRemovedPayload {
  */
 export type SyncWebSocketOptions = WsTransportOptions;
 
-// ---------------------------------------------------------------------------
-// Consumers pass their own event types as the TCollaboration generic parameter.
 
 export class SyncWebSocket<
   TCollaboration extends EventMap<TCollaboration> = DefaultCollaborationEvents
@@ -317,9 +315,6 @@ export class SyncWebSocket<
     this.emit('catchup_complete', payload);
   }
 
-  /**
-   * Stop the periodic catchup interval
-   */
   private stopCatchupInterval(): void {
     if (this.catchupInterval) {
       clearInterval(this.catchupInterval);
@@ -338,23 +333,14 @@ export class SyncWebSocket<
   // Cursor accessors — thin delegates; the state and semantics live in
   // SyncCursor.
 
-  /**
-   * Update last sync ID (for persistence)
-   */
   setLastSyncId(syncId: number): void {
     this.cursor.setLastSyncId(syncId);
   }
 
-  /**
-   * Update sync cursor (for incremental sync)
-   */
   setSyncCursor(cursor: string | null): void {
     this.cursor.setSyncCursor(cursor);
   }
 
-  /**
-   * Get current sync cursor
-   */
   getSyncCursor(): string | null {
     return this.cursor.getSyncCursor();
   }
@@ -512,7 +498,6 @@ export class SyncWebSocket<
       return;
     }
 
-    // Process incremental deltas
     if (rawDeltas) {
       // Process all deltas from sync response - store handles idempotency.
       // Same receive-boundary validation + normalization as handleDelta —
@@ -580,9 +565,6 @@ export class SyncWebSocket<
     this.emit('catchup_end', { exchangeId, currentSyncId, chunks });
   }
 
-  /**
-   * Handle bootstrap response from server
-   */
   protected override handleBootstrapResponse(payload: unknown): void {
     // Emit the bootstrap data for processing. (A `version` field from older
     // servers is ignored; the version vector is no longer used.) The typeof

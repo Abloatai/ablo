@@ -118,7 +118,7 @@ describe('MutationQueue commit lane', () => {
 
   it('dedupes same clientTxId in-session: executor called once, both waiters resolve', async () => {
     void queue.enqueueCommit('tx-dup', [OP()]);
-    void queue.enqueueCommit('tx-dup', [OP()]); // dropped
+    void queue.enqueueCommit('tx-dup', [OP()]);
 
     const [r1, r2] = await Promise.all([
       queue.waitForCommitReceipt('tx-dup'),

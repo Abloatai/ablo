@@ -53,7 +53,6 @@ type _WsListIsBareArray = Expect<
   Equal<Awaited<ReturnType<ModelOperations<ItemRow, ItemRow>['list']>>, ItemRow[]>
 >;
 
-// ── Canned rows served at the materializer hydration boundary ───────────────
 
 const CANNED_ROWS: readonly ItemRow[] = [
   { id: 't1', title: 'hello' },
@@ -119,7 +118,6 @@ function buildWsProxy(): ModelOperations<ItemRow, ItemRow> {
   );
 }
 
-// ── Runtime pins ────────────────────────────────────────────────────────────
 
 describe('CONTRACT: read/list transport parity', () => {
   describe('WebSocket proxy surface — bare row, no envelope', () => {

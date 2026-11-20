@@ -59,7 +59,6 @@ import { z } from 'zod';
 import type { Schema, InferModel, InferModelNames } from './schema.js';
 import { AbloValidationError } from '../errors.js';
 
-// ── Query definition types ────────────────────────────────────────────────
 
 /**
  * A single query definition: a zod input shape, the schema key of the
@@ -106,7 +105,6 @@ interface QuerySpec<
   readonly returns: TReturns;
 }
 
-// ── query() factory ───────────────────────────────────────────────────────
 
 /**
  * Define a query.
@@ -134,7 +132,6 @@ export function query<
   };
 }
 
-// ── Queries record + type inference ───────────────────────────────────────
 
 /**
  * A record of query names → query definitions, parameterized by a
@@ -200,7 +197,6 @@ export type InferQueryResult<
     : never
   : never;
 
-// ── defineQueries() factory ───────────────────────────────────────────────
 
 /**
  * Define a typed query set against a schema.

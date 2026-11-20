@@ -8,7 +8,8 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "test:browser": "playwright test",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "ABLO_API_KEY=sk_local_reference_smoke DEMO_PASSWORD=local-smoke playwright test startup.spec.ts"
+    "test:smoke": "ABLO_API_KEY=sk_local_reference_smoke DEMO_PASSWORD=local-smoke playwright test startup.spec.ts",
+    "test:acceptance": "npm --prefix ../.. run test:reference --workspace=@ablo/engine-journeys"
   },
   "dependencies": {
     "@abloatai/ablo": "file:../../packages/ablo",

@@ -272,6 +272,45 @@ describe("Ablo({ transport: 'http' }) facade shape", () => {
 });
 
 describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => {
+  it.each(['visible', 'missing', 'stalled', 'forbidden'] as const)(
+    'keeps one accepted create while its readback is %s', async mode => {
+      let writes=0, reads=0;
+      const client=Ablo({schema,apiKey:'sk_test_create_visibility',baseURL:'https://api.example.test',
+        transport:'http',timeoutMs:mode === 'visible' ? 2000 : 100,
+        fetch:async (input,init) => {
+          const path=new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).pathname;
+          if (init?.method === 'POST' && path === '/api/v1/models/items') {
+            writes++;
+            return jsonResponse(confirmedCommitReceiptResponse({clientTxId:'visibility-create',lastSyncId:7}));
+          }
+          if (path === '/api/v1/models/items/item-visible') {
+            reads++;
+            if (mode === 'forbidden') return jsonResponse({code:'capability_scope_denied',message:'Read denied'},403);
+            if (mode === 'stalled') return new Promise<Response>((_resolve,reject) => {
+              const aborted=() => reject(init?.signal?.reason);
+              if (init?.signal?.aborted) aborted();
+              else init?.signal?.addEventListener('abort',aborted,{once:true});
+            });
+            return jsonResponse(modelReadResponse({model:'items',id:'item-visible',stamp:reads>1 ? 7 : 0,
+              data:mode === 'visible' && reads>1 ? {id:'item-visible',title:'Created',status:'todo'} : null}));
+          }
+          throw new Error(`unexpected request ${path}`);
+        }});
+      const created=client.items.create({id:'item-visible',idempotencyKey:'visibility-create',data:{title:'Created',status:'todo'}});
+      if (mode === 'visible') {
+        await expect(created).resolves.toMatchObject({id:'item-visible',title:'Created'});
+        expect(reads).toBe(2);
+      } else if (mode === 'forbidden') {
+        await expect(created).rejects.toMatchObject({code:'capability_scope_denied'});
+        expect(reads).toBe(1);
+      } else {
+        await expect(created).rejects.toMatchObject({code:'replication_lag_timeout',
+          details:{accepted:true,clientTxId:'visibility-create',timeoutMs:100}});
+        expect(reads).toBe(1);
+      }
+      expect(writes).toBe(1);
+    });
+
   const makeViaAblo = () =>
     Ablo({
       schema,
@@ -1480,15 +1519,22 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    // A beat every 2s cannot keep a 1s lease: it would always arrive too late.
-    await expect(
-      c.items.claim('item-1', { ttl: '1s', heartbeat: { every: '2s' } }),
-    ).rejects.toMatchObject({ code: 'invalid_options', param: 'heartbeat' });
-    // A zero-length lease is refused as a string, the same as the number 0.
-    await expect(c.items.claim('item-1', { ttl: '0s' })).rejects.toMatchObject({
-      code: 'duration_invalid',
-    });
-    expect(claimRequestSchema.safeParse({ ttl: '0s' }).success).toBe(false);
+    // Equal, slower, and short-lease default cadences all arrive too late.
+    for (const heartbeat of [true, '1s', '2s', { every: '2s' }] as const) {
+      await expect(
+        c.items.claim('item-1', { ttl: '1s', heartbeat }),
+      ).rejects.toMatchObject({ code: 'invalid_options', param: 'heartbeat' });
+      await expect(
+        c.items.claim({ id: 'item-1', ttl: '1s', heartbeat }),
+      ).rejects.toMatchObject({ code: 'invalid_options', param: 'heartbeat' });
+    }
+    // Zero-length leases are refused in every supported unit.
+    for (const ttl of ['0s', '0ms', '00h', '0.0m'] as const) {
+      await expect(c.items.claim('item-1', { ttl })).rejects.toMatchObject({
+        code: 'duration_invalid',
+      });
+      expect(claimRequestSchema.safeParse({ ttl }).success).toBe(false);
+    }
     expect(claimRequestSchema.safeParse({ ttl: 0 }).success).toBe(false);
     expect(calls).toEqual([]);
   });
@@ -1716,14 +1762,6 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
   });
 });
 
-/**
- * A collection read is a page and a filter, and both used to be lossy on this
- * transport: the filter was rebuilt by walking the caller's object and skipping
- * any value that turned out to be an object, and the page state was parsed off
- * the envelope and then dropped. Between them, a caller could ask for three
- * statuses out of five hundred rows and receive twenty unfiltered ones with
- * nothing in the result saying so.
- */
 describe('collection row evidence', () => {
   const listed = (evidence: unknown = [{id: 'item-1', stamp: 80}]) => ({
     ...modelListResponse({model: 'items', data: [{id: 'item-1', title: 'Listed', status: 'todo'}]}),

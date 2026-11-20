@@ -85,7 +85,7 @@ describe('schemaToOpenApi', () => {
     expect(props.title?.type).toBe('string');
     expect(props.status?.enum).toEqual(['todo', 'doing', 'done']);
     const required = items.required as string[];
-    expect(required).toContain('title'); // required
+    expect(required).toContain('title');
     expect(required).not.toContain('notes'); // .optional() → not required
   });
 });

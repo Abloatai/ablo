@@ -64,6 +64,63 @@ export function toPlanTier(plan: string | null | undefined): PlanTier {
   return planTierSchema.catch('free').parse(raw);
 }
 
+/** Stripe's subscription statuses, as stored in `stripe_subscription.status`.
+ *  https://docs.stripe.com/billing/subscriptions/overview#subscription-statuses */
+export const subscriptionStatusSchema = z.enum([
+  'incomplete',
+  'incomplete_expired',
+  'trialing',
+  'active',
+  'past_due',
+  'canceled',
+  'unpaid',
+  'paused',
+]);
+export type SubscriptionStatus = z.infer<typeof subscriptionStatusSchema>;
+
+/**
+ * Which subscription statuses keep a paid or contract tier. This is the one
+ * definition. Auth's session and the engine's tier resolution both derive from
+ * it, and the engine reads it from the exported pricing.json.
+ *
+ * `past_due` stays entitled. On `send_invoice` (Enterprise net terms), Stripe
+ * marks an invoice `past_due` the moment its due date passes. On card billing,
+ * Stripe marks it `past_due` while it retries. Stripe's dunning settings end
+ * that phase by moving the subscription to `unpaid` or `canceled`.
+ *
+ * `unpaid` stays entitled for `graceDays` after the status changed, measured
+ * from `stripe_subscription.status_changed_at`. A database trigger writes that
+ * column, so every writer is covered.
+ */
+export const subscriptionEntitlementSchema = z.object({
+  entitledStatuses: z.array(subscriptionStatusSchema).min(1),
+  graceStatuses: z.array(subscriptionStatusSchema),
+  graceDays: z.number().int().nonnegative(),
+});
+export const SUBSCRIPTION_ENTITLEMENT = subscriptionEntitlementSchema.parse({
+  entitledStatuses: ['active', 'trialing', 'past_due'],
+  graceStatuses: ['unpaid'],
+  graceDays: 14,
+});
+
+const DAY_MS = 86_400_000;
+
+/** Whether a subscription in `status`, which entered that status at
+ *  `statusChangedAt`, still grants its plan at `now`. An unknown change time
+ *  never grants a grace window. */
+export function isSubscriptionEntitled(
+  status: string,
+  statusChangedAt: Date | null,
+  now: Date,
+): boolean {
+  const parsed = subscriptionStatusSchema.safeParse(status);
+  if (!parsed.success) return false;
+  const { entitledStatuses, graceStatuses, graceDays } = SUBSCRIPTION_ENTITLEMENT;
+  if (entitledStatuses.includes(parsed.data)) return true;
+  if (!graceStatuses.includes(parsed.data) || !statusChangedAt) return false;
+  return now.getTime() - statusChangedAt.getTime() < graceDays * DAY_MS;
+}
+
 /**
  * The request-time axes: `ops` is metered and `connections` is capped. Audit
  * storage is sampled periodically, so it does not map from a request event.

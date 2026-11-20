@@ -407,7 +407,6 @@ export const modelOperationActionSchema = z.enum([
 ]);
 export type ModelOperationAction = z.infer<typeof modelOperationActionSchema>;
 
-/** Convert a storage operation verb into the canonical lowercase commit action. */
 export function normalizeStorageOperationAction(value: string): ModelOperationAction {
   return modelOperationActionSchema.parse(value.toLowerCase());
 }

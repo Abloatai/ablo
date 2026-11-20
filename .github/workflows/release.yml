@@ -9,6 +9,7 @@ permissions:
   id-token: write
 jobs:
   verify-and-publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       # Public ingestion token, distinct from npm provenance credentials. The CLI

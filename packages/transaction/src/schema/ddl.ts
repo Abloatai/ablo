@@ -64,7 +64,6 @@ export interface MigrationPlan {
   readonly concurrent?: readonly string[];
 }
 
-// ── Identifier safety ────────────────────────────────────────────────────────
 
 /** Postgres unquoted-identifier-safe slug: lowercase `[a-z0-9_]`, ≤50 chars. */
 function slug(raw: string): string {
@@ -101,7 +100,6 @@ export function q(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
 
-// ── Field type mapping ───────────────────────────────────────────────────────
 
 export function sqlType(fieldType: ModelJSON['fields'][string]['type']): string {
   switch (fieldType) {
@@ -140,7 +138,6 @@ function subjectPredicate(model: ModelJSON, rule: SubjectRule): string {
   );
 }
 
-// ── Foreign keys (relation-driven, sync-safe) ────────────────────────────────
 
 /**
  * A Postgres-identifier-safe constraint name ≤63 bytes. When the natural
@@ -268,7 +265,6 @@ function foreignKeyStatements(
   return { statements, concurrent };
 }
 
-// ── Provisioning (additive, idempotent) ─────────────────────────────────────
 
 /**
  * Builds the additive, idempotent provisioning plan for an app. Pure — it does
@@ -381,7 +377,6 @@ export function generateProvisionPlan(
   return { appSchema, statements, concurrent };
 }
 
-// ── Migration (destructive-aware, diff-driven) ──────────────────────────────
 
 function enumCheckStatements(table: string, col: string, qt: string, values: readonly string[]): string[] {
   const cname = `${table}_${col}_enum`;

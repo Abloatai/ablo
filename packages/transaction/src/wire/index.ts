@@ -70,9 +70,6 @@ export {
   commitMessageSchema,
 } from './frames.js';
 
-// Protocol versioning: the single integer the client and server compare to
-// confirm they can speak to each other, plus the WebSocket close code used to
-// reject a mismatch. See protocolVersion.ts for the changelog and deploy rules.
 export {
   PROTOCOL_VERSION,
   MIN_SUPPORTED_PROTOCOL_VERSION,

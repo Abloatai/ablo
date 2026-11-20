@@ -179,7 +179,6 @@ export interface QueuedMutation {
   confirmation?: Promise<void>;
 }
 
-/** Merge per-write premises into the one batch-level read set sent on wire. */
 export function collectQueuedReads(
   transactions: readonly QueuedMutation[],
 ): MutationOptions['reads'] | undefined {
@@ -298,12 +297,6 @@ export function applyWriteOptions<T extends object>(
   return operation;
 }
 
-/**
- * The structural shape used to inspect transport-layer errors. It covers the
- * GraphQL-style and HTTP-style error shapes the mutation executor can surface,
- * and is kept intentionally narrow so it does not claim fields the runtime may
- * not supply.
- */
 export interface TransportError {
   message?: string;
   code?: string | number;

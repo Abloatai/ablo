@@ -154,8 +154,6 @@ describe('resolveBaseURL', () => {
   });
 
   it('accepts all four schemes and canonicalizes to the http family (WHATWG model)', () => {
-    // The socket layer derives ws/wss back from the canonical http/https form;
-    // fetch consumers use it as-is. A ws:// baseURL previously wedged startup.
     expect(normalizeAbloBaseUrl('ws://localhost:8181')).toBe('http://localhost:8181');
     expect(normalizeAbloBaseUrl('wss://sync.customer.example')).toBe(
       'https://sync.customer.example',
@@ -296,9 +294,6 @@ describe('resolveBootstrapBaseUrl', () => {
   });
 
   it('appends the /api route segment when an override omits it', () => {
-    // Hosted customers who set a custom base URL without `/api` used to land on
-    // `…/v1/capabilities` (404 → exchange_failed). The override branch now
-    // guarantees the suffix, matching the derive branch and the server mount.
     expect(
       resolveBootstrapBaseUrl({
         url: 'wss://ignored.example',

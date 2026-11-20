@@ -222,7 +222,6 @@ interface AbloCore<S extends SchemaRecord> {
    */
   readonly presence: ReactivePresence;
 
-  /** The underlying schema */
   readonly schema: Schema<S>;
 
   /**
@@ -254,7 +253,6 @@ interface AbloCore<S extends SchemaRecord> {
     handler: (...args: CoreSyncEventMap[K]) => void,
   ): () => void;
 
-  // ── Internal accessors for framework integration ─────────────────
 
   /**
    * The internal store. It implements {@link SyncStoreContract} — pass it to

@@ -40,14 +40,12 @@ export class DeltaConfirmationTracker {
   // Retry configuration for delta confirmation, using exponential backoff.
   // Maximum retries before requesting a full reconciliation.
   private static readonly DELTA_MAX_RETRIES = 5;
-  // Upper bound on the backoff timeout.
   private static readonly DELTA_MAX_TIMEOUT_MS = 120_000;
 
   // Pending confirmation timeouts for transactions awaiting their delta. On
   // timeout the tracker retries with backoff rather than rolling back.
   private deltaConfirmationTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
-  // Track retry attempts per transaction for exponential backoff
   private deltaConfirmationRetries = new Map<string, number>();
   private disposed = false;
 
@@ -77,11 +75,6 @@ export class DeltaConfirmationTracker {
     this.ctx.position.noteAck(lastSyncId);
   }
 
-  /**
-   * Confirms every awaiting transaction whose sync-id threshold this delta
-   * meets or exceeds.
-   * @param syncId - The sync id of the received delta.
-   */
   onDeltaReceived(syncId: number, correlationId?: string): void {
     // The cursor advances where the delta is applied (the store calls
     // position.advanceApplied / advancePersisted); this hook only resolves
@@ -177,7 +170,6 @@ export class DeltaConfirmationTracker {
         return; // Already confirmed or failed
       }
 
-      // If disconnected, re-schedule with same timeout (no backoff while offline)
       if (!this.ctx.isConnected()) {
         // Self-healing: re-schedule the confirmation wait while offline, no
         // consumer action needed → debug.
@@ -250,7 +242,6 @@ export class DeltaConfirmationTracker {
           syncIdNeeded: currentTx.syncIdNeededForCompletion,
         });
 
-        // Emit the persist event; the client performs the write to local storage.
         this.ctx.emit('transaction:persist_awaiting', {
           txId: tx.id,
           model: tx.modelName,

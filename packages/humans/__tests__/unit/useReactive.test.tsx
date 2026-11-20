@@ -204,4 +204,36 @@ describe('useReactive', () => {
     expect(view.getByText('Selection failed')).toBeTruthy();
   });
 
+  it('reuses the snapshot on re-renders instead of re-running a stable selector', () => {
+    const store = observable({ items: [1, 2, 3], unrelated: 0 });
+    const compute = jest.fn(() => store.items.slice());
+    const observed = jest.fn();
+    const stopWatching = onBecomeObserved(store, 'items', observed);
+    const { result, rerender } = renderHook(() => useReactive(compute));
+    const first = result.current;
+    const afterMount = compute.mock.calls.length;
+    for (let i = 0; i < 20; i++) rerender();
+    // Re-renders read the reaction-maintained cache: no selector runs, no re-subscription.
+    expect(compute).toHaveBeenCalledTimes(afterMount);
+    expect(observed).toHaveBeenCalledTimes(1);
+    expect(result.current).toBe(first);
+    act(() => { runInAction(() => { store.items.push(4); }); });
+    expect(result.current).toEqual([1, 2, 3, 4]);
+    const afterChange = compute.mock.calls.length;
+    for (let i = 0; i < 20; i++) rerender();
+    expect(compute).toHaveBeenCalledTimes(afterChange);
+    stopWatching();
+  });
+
+  it('recomputes after an external notification the reaction cannot see', () => {
+    const external = { value: 'a' };
+    const listeners = new Set<() => void>();
+    const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+    const compute = () => external.value;
+    const { result } = renderHook(() => useReactive(compute, { subscribe }));
+    expect(result.current).toBe('a');
+    act(() => { external.value = 'b'; for (const listener of listeners) listener(); });
+    expect(result.current).toBe('b');
+  });
+
 });

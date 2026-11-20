@@ -289,16 +289,10 @@ export type SyncWebSocketEventMap<
   TCollaboration extends EventMap<TCollaboration> = DefaultCollaborationEvents
 > = CoreSyncEventMap & TCollaboration;
 
-// ---------------------------------------------------------------------------
-// Consumers pass their own event types as the TCollaboration generic parameter.
 
 export class WsTransport<
   TCollaboration extends EventMap<TCollaboration> = DefaultCollaborationEvents
 > extends EventEmitter {
-  /**
-   * Subscribe to events with automatic cleanup.
-   * Returns unsubscribe function for clean disposal.
-   */
   subscribe<K extends keyof SyncWebSocketEventMap<TCollaboration>>(
     event: K,
     handler: (...args: SyncWebSocketEventMap<TCollaboration>[K]) => void
@@ -307,7 +301,6 @@ export class WsTransport<
     return () => this.off(event as string, handler as (...args: unknown[]) => void);
   }
 
-  /** Subscribe to application events with optional authenticated attribution. */
   subscribeCollaboration<K extends string & keyof TCollaboration>(
     event: K,
     handler: (...args: [...TCollaboration[K], context?: CollaborationEventContext]) => void,
@@ -543,7 +536,6 @@ export class WsTransport<
       else if (change.kind === 'remove') previous.queue.delete(change.id);
       else for (const id of change.ids) previous.queue.delete(id);
       previous.revision = patch.revision;
-      // Only callers of the legacy full-line event pay to materialize it.
       if (this.listenerCount('claim_queue') > 0) {
         const queue = [...previous.queue.values()].map((entry, position) => ({ ...entry, position }));
         this.emit('claim_queue', { target: patch.target, queue, revision: patch.revision });
@@ -736,7 +728,6 @@ export class WsTransport<
       params.set('kind', this.options.kind);
     }
 
-    // Add sync groups if provided
     this.options.syncGroups.forEach((group) => {
       params.append('syncGroups', group);
     });
@@ -795,9 +786,6 @@ export class WsTransport<
     }
   }
 
-  /**
-   * Setup WebSocket event handlers
-   */
   private setupEventHandlers(): void {
     // Capture the socket this call wires. Every handler below guards on
     // `this.ws === socket` (onclose additionally tolerates a nulled field —
@@ -1025,12 +1013,8 @@ export class WsTransport<
     };
   }
 
-  /**
-   * Send message to server
-   */
   send(message: any): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
-      // Only log at debug level when offline - this is expected behavior, not an error
       if (this.onlineStatus.isOnline()) {
         this.observability.breadcrumb(
           'WebSocket not connected, cannot send message',
@@ -1046,7 +1030,6 @@ export class WsTransport<
     try {
       this.ws.send(JSON.stringify(message));
     } catch (error) {
-      // Only log as error if we're online - offline send failures are expected
       if (this.onlineStatus.isOnline()) {
         this.observability.captureWebSocketError({
           context: 'send-message',
@@ -1098,7 +1081,6 @@ export class WsTransport<
     this.send({ type: 'ack', payload: { lastSyncId } });
   }
 
-  /** Send one strict, bounded read-activity command. */
   sendPresenceCommand(command: PresenceCommand): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       throw this.notConnectedError('presence_command');
@@ -1320,9 +1302,6 @@ export class WsTransport<
       ?? this.options.capabilityToken;
   };
 
-  /**
-   * Schedule reconnection with exponential backoff
-   */
   private scheduleReconnect(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -1358,7 +1337,6 @@ export class WsTransport<
     const jitter = baseDelay * (0.85 + Math.random() * 0.3);
     const delay = Math.round(jitter);
 
-    // Emit reconnecting event so UI can show reconnection status
     this.emit('reconnecting', { attempt: this.reconnectAttempts + 1, delay });
 
     this.reconnectTimer = setTimeout(() => {
@@ -1421,9 +1399,6 @@ export class WsTransport<
     }
   }
 
-  /**
-   * Get connection state
-   */
   isConnected(): boolean {
     return this.presenceSessionEstablishedForSocket
       && this.ws?.readyState === WebSocket.OPEN;

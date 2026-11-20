@@ -1,16 +1,4 @@
-/**
- * `resolveParticipantIdentity` branch tests. Three branches map to
- * three auth paths:
- *   1. Hosted-cloud — apiKey present → `exchangeApiKey` round-trip
- *      + refresh scheduler set up.
- *   2. Self-derived — capability token but no organizationId/user.id
- *      → `resolveIdentity` round-trip.
- *   3. Legacy explicit — organizationId + user.id (or agentId)
- *      present → no server call.
- *
- * Mocks the two server-touching helpers so tests stay network-free
- * while still exercising the dispatch logic.
- */
+/** Participant identity and authentication-path dispatch tests. */
 
 import { Ablo } from '../../../Ablo.js';
 import { BaseSyncedStore } from '../../BaseSyncedStore.js';

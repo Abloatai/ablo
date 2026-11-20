@@ -313,7 +313,6 @@ export interface ClaimWaitOptions {
 // emitted as a sync delta.
 export interface Claim<T = Record<string, unknown>, M = ResolveClaimMeta> {
   readonly object: 'claim';
-  /** This claim's id. */
   readonly id: string;
   /**
    * The claim's lifecycle state. `active` is the holder — the lock; `queued` is
@@ -321,7 +320,6 @@ export interface Claim<T = Record<string, unknown>, M = ResolveClaimMeta> {
    * from a presence frame, where a present entry is `active` by construction.
    */
   readonly status?: ClaimStatus;
-  /** What is being coordinated. */
   readonly target: ClaimTarget<M>;
   /**
    * Peer-visible description of the work being done — the same field on every

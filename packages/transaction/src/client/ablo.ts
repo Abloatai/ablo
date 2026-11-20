@@ -68,7 +68,6 @@ export function Ablo<const S extends SchemaRecord>(
 // path, not a second definition.
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace Ablo {
-  // ── Entity pointers (flat — input shapes used everywhere) ─────────
   export type ClaimTarget = _Streams.ClaimTarget;
   export type PresenceTarget = _Streams.PresenceTarget;
   export type Duration = _Streams.Duration;
@@ -76,7 +75,6 @@ export namespace Ablo {
   export type PresenceSession = import('../presence/contract.js').PresenceSession;
   export type PresenceActivity = import('../presence/contract.js').PresenceActivity;
 
-  // ── Coordination (flat — the surface a contending caller reads) ───
   export type Claim = _Streams.Claim;
   export type ClaimHeartbeat = _Streams.ClaimHeartbeat;
   export type ClaimHeartbeatOptions = _Streams.ClaimHeartbeatOptions;
@@ -92,7 +90,6 @@ export namespace Ablo {
     export type LeaseOptions = _Streams.ClaimLeaseOptions;
   }
 
-  // ── Schema (type + sub-namespace via declaration merge) ───────────
   export type Schema<S extends _SchemaTypes.SchemaRecord = _SchemaTypes.SchemaRecord> =
     _SchemaTypes.Schema<S>;
   /**

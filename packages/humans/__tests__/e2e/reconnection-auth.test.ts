@@ -62,7 +62,6 @@ describeE2E('E2E: Reconnection & Auth', () => {
       // First connection
       const ws1 = await connectWS(USER_ID, ORG_ID);
 
-      // Create a item while connected
       const itemBefore = uuid();
       await batchAck([{
         type: 'CREATE', model: 'item', id: itemBefore,
@@ -71,18 +70,15 @@ describeE2E('E2E: Reconnection & Auth', () => {
 
       await new Promise((r) => setTimeout(r, 1000));
 
-      // Disconnect
       ws1.close();
       await new Promise((r) => setTimeout(r, 500));
 
-      // Create a item while disconnected
       const itemDuring = uuid();
       await batchAck([{
         type: 'CREATE', model: 'item', id: itemDuring,
         input: { title: 'During disconnect', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
-      // Reconnect
       const ws2 = await connectWS(USER_ID, ORG_ID);
       const deltasAfterReconnect = new Set<string>();
       ws2.on('message', (data: Buffer) => {
@@ -94,7 +90,6 @@ describeE2E('E2E: Reconnection & Auth', () => {
         } catch { /* ignore */ }
       });
 
-      // Create another item after reconnect
       const itemAfter = uuid();
       await batchAck([{
         type: 'CREATE', model: 'item', id: itemAfter,
@@ -103,7 +98,6 @@ describeE2E('E2E: Reconnection & Auth', () => {
 
       await new Promise((r) => setTimeout(r, 2000));
 
-      // Should receive the post-reconnect delta
       expect(deltasAfterReconnect.has(itemAfter)).toBe(true);
 
       ws2.close();
@@ -115,19 +109,16 @@ describeE2E('E2E: Reconnection & Auth', () => {
       const res = await fetch(GRAPHQL_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // No X-User-Id or X-Organization-Id
         body: JSON.stringify({
           query: `mutation { batchAck(operations: [{type: CREATE, model: "item", id: "no-auth"}]) { lastSyncId } }`,
         }),
       });
 
-      // Should be 401 Unauthorized
       expect(res.status).toBe(401);
     });
 
     it('should reject bootstrap without auth headers', async () => {
       const res = await fetch(`${SERVER_URL}/api/sync/bootstrap`, {
-        // No auth headers
       });
 
       expect(res.status).toBe(401);

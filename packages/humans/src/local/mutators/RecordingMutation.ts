@@ -73,7 +73,6 @@ export function createRecordingMutation<S extends Schema>(
   };
 }
 
-// ── Per-key wrapper ────────────────────────────────────────────────────────
 
 function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string>(
   modelKey: string,
@@ -112,10 +111,6 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
   type Patch = { id: string } & Partial<InferUpdate<S, K>>;
 
   return {
-    // Overloaded — single row or array. The recorder dispatches the
-    // matching forward/inverse op shape (`create`/`createMany`,
-    // `update`/`updateMany`, `delete`/`deleteMany`) so the persisted
-    // undo entry is symmetric with what was originally invoked.
     create: (async (
       data: InferCreate<S, K> | InferCreate<S, K>[],
     ) => {

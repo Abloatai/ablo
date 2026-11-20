@@ -6,9 +6,6 @@
  * doubles against the public contracts (see `MutationExecutor` on `./core`).
  */
 
-// ─────────────────────────────────────────────
-// Mocks
-// ─────────────────────────────────────────────
 
 export { MockMutationExecutor } from './mocks/MockMutationExecutor.js';
 export type { CapturedMutation, MockMutationExecutorOptions } from './mocks/MockMutationExecutor.js';
@@ -26,9 +23,6 @@ export {
 } from './mocks/MockSyncContext.js';
 export type { TestContextOptions, TestContextResult } from './mocks/MockSyncContext.js';
 
-// ─────────────────────────────────────────────
-// Fixtures: Models
-// ─────────────────────────────────────────────
 
 export {
   TestWorkspace,
@@ -49,9 +43,6 @@ export {
   createEntryLayerFixture,
 } from './fixtures/models.js';
 
-// ─────────────────────────────────────────────
-// Fixtures: Deltas
-// ─────────────────────────────────────────────
 
 export {
   createDelta,
@@ -69,9 +60,6 @@ export {
   resetDeltaCounter,
 } from './fixtures/deltas.js';
 
-// ─────────────────────────────────────────────
-// Fixtures: Bootstrap
-// ─────────────────────────────────────────────
 
 export {
   createFullBootstrapResponse,
@@ -80,9 +68,6 @@ export {
 } from './fixtures/bootstrap.js';
 export type { BootstrapModelData, BootstrapResponse } from './fixtures/bootstrap.js';
 
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
 
 export {
   createTestHarness,

@@ -27,7 +27,6 @@
 import { z } from 'zod';
 import { AbloValidationError } from '../errors.js';
 
-// ── Helpers ───────────────────────────────────────────────────────────────
 
 /** Distinguish a Zod schema from a plain object shape (ZodRawShape). */
 function isZodSchema(value: unknown): value is z.ZodType {
@@ -39,7 +38,6 @@ function isZodSchema(value: unknown): value is z.ZodType {
   );
 }
 
-// ── Metadata types ────────────────────────────────────────────────────────
 
 /**
  * The sync-engine metadata describing one field, available at runtime through a
@@ -319,7 +317,6 @@ export const field = {
   },
 } as const;
 
-// ── Function form ────────────────────────────────────────────────────────
 
 /** Marks a Zod schema as indexed so lookups on it use a database index. This is the
  *  standalone-function form of the `.indexed()` chain method. */

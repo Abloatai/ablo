@@ -44,7 +44,18 @@ export const DEFAULT_CLAIM_TTL_MS = 60_000;
  * class of disagreement impossible: there is now one pattern, emitted into the
  * contract, and one parser behind it.
  */
-export const claimTtlSchema = durationSchema;
+// Node expiry timers overflow beyond this window; Rust enforces the same bound.
+export const claimTtlSchema = durationSchema.refine(
+  ttl => {
+    try {
+      const ms = parseDurationMs(ttl);
+      return ms > 0 && ms <= 2_147_483_647;
+    } catch {
+      return false;
+    }
+  },
+  { message: 'claim ttl must be positive and must not exceed 2147483647ms' },
+);
 
 /**
  * A wire TTL as milliseconds — the single reading of the grammar above.
@@ -366,7 +377,6 @@ export const claimReorderRequestSchema = z.object({
 });
 export type ClaimReorderRequest = z.infer<typeof claimReorderRequestSchema>;
 
-/** The reorder reply. */
 export const claimReorderReplySchema = z.object({
   object: z.literal('claim_reorder'),
   reordered: z.boolean(),

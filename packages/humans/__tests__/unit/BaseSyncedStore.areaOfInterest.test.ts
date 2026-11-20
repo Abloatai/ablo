@@ -79,7 +79,7 @@ describe('BaseSyncedStore — area-of-interest forwarding', () => {
     const transport = new FakeTransport();
     const shell = makeShell(makeManager(transport));
 
-    await shell.enterScope('collection:a'); // call #1
+    await shell.enterScope('collection:a');
     await shell.leaveScope('collection:a'); // warm → no new call
 
     expect(transport.calls).toHaveLength(1);
@@ -90,7 +90,7 @@ describe('BaseSyncedStore — area-of-interest forwarding', () => {
     const manager = makeManager(transport);
     const shell = makeShell(manager);
 
-    await shell.enterScope('collection:a'); // call #1
+    await shell.enterScope('collection:a');
     await shell.pinScope('collection:a');
     await shell.leaveScope('collection:a'); // pinned → still subscribed
 

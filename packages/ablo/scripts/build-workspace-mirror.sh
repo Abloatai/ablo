@@ -60,6 +60,8 @@ copy_tree() {
     done
 }
 
+copy_tree ".public-ablo/repository" "."
+
 for package_name in "${PACKAGES[@]}"; do
   copy_tree "packages/$package_name" "packages/$package_name"
 done
@@ -103,7 +105,9 @@ cat > "$OUTPUT_DIR/package.json" <<'EOF'
     "hono": "4.13.16",
     "@hono/node-server": "2.1.3",
     "glob@>=9": "14.0.3",
-    "minimatch@>=9": "11.0.4"
+    "minimatch@>=9": "11.0.4",
+    "eslint": {"minimatch": "11.0.4"},
+    "@eslint/config-array": {"minimatch": "11.0.4"}
   },
   "scripts": {
     "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@ablo/error-reporting && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo && npm run build --workspace=@ablo/resource-adapter",
@@ -144,6 +148,7 @@ permissions:
   id-token: write
 jobs:
   verify-and-publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       # Public ingestion token, distinct from npm provenance credentials. The CLI

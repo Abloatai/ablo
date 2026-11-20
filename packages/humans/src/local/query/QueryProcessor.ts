@@ -39,7 +39,6 @@ interface QueryCache {
   set(key: string, data: unknown): void;
   invalidate(modelType?: string): void;
   clear(): void;
-  /** Number of entries currently cached. */
   readonly size: number;
 }
 
@@ -64,7 +63,6 @@ class BasicQueryCache implements QueryCache {
   set(key: string, data: unknown): void {
     this.cache.set(key, data);
 
-    // Extract model type from cache key (format: "operation:ModelType:options")
     const modelType = this.extractModelType(key);
     if (modelType) {
       if (!this.modelTypeIndex.has(modelType)) {
@@ -92,10 +90,6 @@ class BasicQueryCache implements QueryCache {
     this.modelTypeIndex.clear();
   }
 
-  /**
-   * Extract model type from cache key
-   * Cache key format: "operation:ModelType:options"
-   */
   private extractModelType(key: string): string | null {
     // A missing second segment reads as undefined, so `?? null` yields null.
     return key.split(':')[1] ?? null;
@@ -119,15 +113,11 @@ export class QueryProcessor {
     this.cache = new BasicQueryCache();
   }
 
-  /**
-   * Process query with filtering, sorting, and pagination
-   */
   processQuery<T extends Model>(
     models: T[],
     modelName: string,
     options: QueryOptions<T> = {}
   ): QueryResult<T> {
-    // Generate cache key
     const cacheKey = this.generateCacheKey('query', modelName, options);
 
     // Check string-based cache (non-predicate queries only)
@@ -138,17 +128,14 @@ export class QueryProcessor {
       }
     }
 
-    // Apply predicate filter
     let filtered = options.predicate ? models.filter(options.predicate) : models;
 
-    // Sort models
     if (options.orderBy) {
       filtered = this.sortModels(filtered, options.orderBy, options.order);
     }
 
     const total = filtered.length;
 
-    // Apply pagination
     const offset = options.offset || 0;
     const limit = options.limit || filtered.length;
     const data = filtered.slice(offset, offset + limit);
@@ -176,7 +163,6 @@ export class QueryProcessor {
       this.predicateResultCache.set(cacheKey, { ids, result });
     }
 
-    // For non-predicate queries: use the string-based cache.
     if (!options.predicate && this.enableCache) {
       this.cache.set(cacheKey, result);
     }
@@ -184,9 +170,6 @@ export class QueryProcessor {
     return result;
   }
 
-  /**
-   * Sort models by field
-   */
   private sortModels<T extends Model>(
     models: T[],
     field: keyof T,
@@ -205,9 +188,6 @@ export class QueryProcessor {
     });
   }
 
-  /**
-   * Find first matching model with predicate
-   */
   findFirst<T extends Model>(
     models: Generator<T, void, unknown>,
     predicate: (model: T) => boolean
@@ -284,17 +264,11 @@ export class QueryProcessor {
     }
   }
 
-  /**
-   * Clear all cache
-   */
   clearCache(): void {
     this.cache.clear();
     this.predicateResultCache.clear();
   }
 
-  /**
-   * Get cache stats for debugging
-   */
   getCacheStats(): { size: number; enabled: boolean } {
     return {
       size: this.cache.size,

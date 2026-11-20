@@ -45,7 +45,6 @@ function normalizeEntityRoles(
 import { LoadStrategy, DEFAULT_LOAD_STRATEGY } from './loadStrategy.js';
 export { LoadStrategy, DEFAULT_LOAD_STRATEGY, loadsAtBootstrap } from './loadStrategy.js';
 
-// ── Model definition types ────────────────────────────────────────────────
 
 /** A record of relation definitions */
 export type RelationRecord = Record<string, RelationDef>;
@@ -80,7 +79,6 @@ export interface GrantsRef {
   scope: string;
 }
 
-/** Options for model() */
 export interface ModelOptions {
   /**
    * Edges from this model to others, keyed by the accessor name they create. The
@@ -305,7 +303,6 @@ export interface ModelDef<
 > {
   /** The Zod object schema for this model's fields */
   readonly schema: z.ZodObject<Shape>;
-  /** The raw shape (for type inference) */
   readonly shape: Shape;
   /**
    * Runtime metadata for each field, keyed by field name.
@@ -318,13 +315,9 @@ export interface ModelDef<
    * that needs to introspect the schema without parsing Zod internals.
    */
   readonly fields: Record<string, FieldMeta>;
-  /** Relations to other models */
   readonly relations: R;
-  /** Load strategy */
   readonly load: LoadStrategy;
-  /** Max records to bootstrap */
   readonly bootstrapLimit?: number;
-  /** Sort order for bootstrap */
   readonly bootstrapOrderBy?: string;
   /**
    * The wire type name (`__typename`) for this model. When left unset in
@@ -364,7 +357,6 @@ export interface ModelDef<
   readonly requiredFields?: readonly string[];
 }
 
-// ── Model factory ─────────────────────────────────────────────────────────
 
 /**
  * Defines a model from a Zod shape and its options. The row type is inferred from

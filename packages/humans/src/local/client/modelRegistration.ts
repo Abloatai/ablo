@@ -13,7 +13,6 @@ import type { ModelRegistry } from '../ModelRegistry.js';
 import { DEFER_MODEL_OBSERVABILITY, Model } from '../Model.js';
 import { PropertyType } from '@abloatai/transaction/types';
 
-// ── Auto model registration from schema ───────────────────────────────────
 
 export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry): void {
   registry.startBatch();
@@ -25,7 +24,6 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
     // Schema key (camelCase plural) is only for the consumer-facing proxy API.
     const modelName = modelDef.typename ?? schemaKey;
 
-    // Collect JSON sub-property fields to generate ${field}Json getters
     const jsonSubFields: { fieldName: string; subSchema: z.ZodObject<z.ZodRawShape> }[] = [];
 
     for (const [fieldName, zodType] of Object.entries(modelDef.shape)) {
@@ -89,7 +87,6 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
       }
     }
 
-    // Register fields as properties (from Zod shape).
     for (const [fieldName, rawZodType] of Object.entries(modelDef.shape)) {
       const zodType = rawZodType as z.ZodType;
       const isOptional = zodType.isOptional();
@@ -114,7 +111,6 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
       });
     }
 
-    // Register relations
     for (const [relName, relDef] of Object.entries(modelDef.relations)) {
       if (relDef.type === 'belongsTo') {
         registry.registerReference(modelName, relName, {
@@ -168,7 +164,6 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
   registry.endBatch();
 }
 
-// ── JSON sub-property helpers ─────────────────────────────────────────────
 
 /**
  * Unwrap a Zod schema through .optional(), .nullable(), .default(),
@@ -211,7 +206,6 @@ function isZodObject(schema: z.ZodType): schema is z.ZodObject<z.ZodRawShape> {
   return schema instanceof z.ZodObject;
 }
 
-/** Create a Model subclass for a schema-defined model */
 function createDynamicModelClass(
   modelName: string,
   jsonSubFields: { fieldName: string; subSchema: z.ZodObject<z.ZodRawShape> }[],
@@ -305,7 +299,6 @@ function createDynamicModelClass(
         const cache = this[cacheKey] as { raw: unknown; parsed: unknown } | undefined;
         if (cache && cache.raw === raw) return cache.parsed;
 
-        // Parse: handle string (from DB/wire), object (already parsed), null/undefined
         let input: unknown;
         try {
           if (typeof raw === 'string') {

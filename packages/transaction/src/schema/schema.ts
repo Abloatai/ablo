@@ -214,7 +214,6 @@ export interface DefineSchemaOptions {
   readonly sessionSettings?: SessionSettings;
 }
 
-// ── Schema definition ─────────────────────────────────────────────────────
 
 /** A record of model names → model definitions */
 export type SchemaRecord = Record<string, ModelDef>;
@@ -274,7 +273,6 @@ export interface BaseModelMethods {
 
 /** The schema object returned by defineSchema() */
 export interface Schema<S extends SchemaRecord = SchemaRecord> {
-  /** The raw model definitions */
   readonly models: S;
 
   /**
@@ -349,7 +347,6 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
   readonly omittedModels?: readonly string[];
 }
 
-// ── Type inference (powered by Zod) ───────────────────────────────────────
 
 /**
  * Infer the full model type from a schema.
@@ -444,7 +441,6 @@ export type InferRelations<S extends Schema, R extends RelationRecord> =
           : never;
       };
 
-// ── Reactive rows ──────────────────────────────────────────────────────────
 
 /**
  * The row shape a reactive read returns: the model's data fields, base fields,
@@ -538,12 +534,8 @@ export type InferUpdate<S extends Schema, ModelName extends keyof S['models']> =
           : z.input<Shape[K]> }
     : never;
 
-/**
- * Extract all model names from a schema.
- */
 export type InferModelNames<S extends Schema> = keyof S['models'] & string;
 
-// ── CRUD value types ──────────────────────────────────────────────────────
 
 /**
  * The value type for inserting a new row. Same shape as {@link InferCreate}:
@@ -599,7 +591,6 @@ export type UpdateValue<S extends Schema, ModelName extends keyof S['models']> =
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export interface DeleteId<S extends Schema, ModelName extends keyof S['models']> { id: string }
 
-// ── Factory ───────────────────────────────────────────────────────────────
 
 /**
  * Define a sync engine schema.

@@ -7,7 +7,6 @@
 
 import type { Logger } from '@abloatai/transaction/logger';
 
-// ── Default console logger ────────────────────────────────────────────────
 
 /**
  * Level threshold for the default console logger.

@@ -91,7 +91,6 @@ describe('NetworkMonitor', () => {
 
       expect(events).not.toContain('visibility_online');
 
-      // Reset
       (navigator as { onLine: boolean }).onLine = true;
     });
   });

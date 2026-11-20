@@ -415,20 +415,6 @@ function versionParts(part) {
   return [major ?? 0, minor ?? 0];
 }
 
-/**
- * The changelog category shown next to each entry's date, derived from the step
- * this version took over the one below it.
- *
- * It used to read the section body for Changesets' `### Minor Changes` heading.
- * That heading is never there to find: `finalize-release-notes.mjs` replaces the
- * generated body with the hand-written note before this generator runs, and the
- * note's headings are sentences. So both branches were unreachable and all
- * eighteen pages published as `Fixes`, feature releases included.
- *
- * The version headings are the surviving evidence of the bump, and this file
- * already walks them, so the category is read from the same data rather than
- * from prose that has to remember to say it.
- */
 function changelogCategory(part, previousPart) {
   const [major, minor] = versionParts(part);
   // The oldest entry has nothing below it; measure it from the empty version.

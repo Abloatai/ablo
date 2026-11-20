@@ -51,6 +51,7 @@ function setup(
   readFloor: () => number,
   database: Pick<Database, 'getStore'> = { getStore: () => new InMemoryObjectStore('Item', 'Item') },
   pendingDeletes?: ReadonlySet<string>,
+  connection = { live: true, credential: 'test' },
 ) {
   const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
   registry.registerModel('Item', ItemModel, { loadStrategy: LoadStrategy.lazy });
@@ -64,6 +65,8 @@ function setup(
       items: model({ title: z.string().optional() }, { typename: 'Item', load: 'lazy' }),
     }),
     baseUrl: 'http://sync.test/api',
+    isConnected: () => connection.live,
+    getAuthToken: () => connection.credential,
     isDeletePending: (id) => pendingDeletes?.has(id) ?? false,
     position: {
       get readFloor() {
@@ -97,6 +100,100 @@ describe('OnDemandLoader — network rows meet the pool by log position', () => 
   });
   afterEach(() => {
     clearActiveRegistry();
+  });
+
+  it('retains detached exact evidence without substituting the global read floor', async () => {
+    const { pool, loader } = setup(() => 100);
+    serverAnswers({ id: 'r1', title: 'confirmed' }, 12);
+    await loader.fetch('items', { type: 'complete' });
+    const row = pool.get<ItemModel>('r1');
+    if (!row) throw new Error('expected hydrated row');
+    const snapshot = loader.getReadSnapshot(row);
+    if (!snapshot) throw new Error('expected retained snapshot');
+    expect(snapshot).toEqual({ data: { __typename: 'Item', id: 'r1', title: 'confirmed' }, stamp: 12 });
+    (snapshot.data as { title: string }).title = 'caller edit';
+    expect(loader.getReadSnapshot(row)?.data).toMatchObject({ title: 'confirmed' });
+    pool.watermarks.advance(row, 101);
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+  });
+
+  it('falls back when an untracked local edit cannot be serialized', async () => {
+    const { pool, loader } = setup(() => 0);
+    serverAnswers({ id: 'r1', title: 'confirmed' }, 12);
+    await loader.fetch('items', { type: 'complete' });
+    const row = pool.get<ItemModel>('r1');
+    if (!row) throw new Error('expected hydrated row');
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    Reflect.set(row, 'title', cycle);
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+  });
+
+  it('does not certify bootstrap rows, stale responses, or optimistic edits', async () => {
+    const { pool, loader } = setup(() => 5);
+    const row = seedFromDelta(pool, 'r1', 'newer');
+    pool.watermarks.advance(row, 10);
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+    serverAnswers({ id: 'r1', title: 'older' }, 5);
+    await loader.fetch('items', { type: 'complete' });
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+    serverAnswers({ id: 'r1', title: 'confirmed' }, 10);
+    await loader.fetch('items', { type: 'complete' });
+    expect(loader.getReadSnapshot(row)).toBeDefined();
+    row.title = 'optimistic';
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+  });
+
+  it('falls back after a credential change, disconnect, deletion or pool eviction', async () => {
+    const pendingDeletes = new Set<string>();
+    const connection = { live: true, credential: 'first' };
+    const { pool, loader } = setup(() => 0, undefined, pendingDeletes, connection);
+    serverAnswers({ id: 'r1', title: 'confirmed' }, 12);
+    await loader.fetch('items', { type: 'complete' });
+    const row = pool.get<ItemModel>('r1');
+    if (!row) throw new Error('expected hydrated row');
+    expect(loader.getReadSnapshot(row)).toBeDefined();
+    connection.credential = 'second';
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+    connection.credential = 'first';
+    connection.live = false;
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+    connection.live = true;
+    pendingDeletes.add(row.id);
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+    pendingDeletes.clear();
+    pool.remove(row.id);
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+  });
+
+  it('discards proof across a pool reset even when React retains the same model', async () => {
+    const { pool, loader } = setup(() => 0);
+    serverAnswers({ id: 'r1', title: 'confirmed' }, 12);
+    await loader.fetch('items', { type: 'complete' });
+    const row = pool.get<ItemModel>('r1');
+    if (!row) throw new Error('expected hydrated row');
+    expect(loader.getReadSnapshot(row)).toBeDefined();
+    jest.spyOn(row, 'hasObservedCollections').mockReturnValue(true);
+    pool.clear({ preserveObserved: true });
+    expect(pool.get('r1')).toBe(row);
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+  });
+
+  it('invalidates retained evidence and refuses an in-flight answer from the previous connection', async () => {
+    const { pool, loader } = setup(() => 0);
+    serverAnswers({ id: 'r1', title: 'confirmed' }, 12);
+    await loader.fetch('items', { type: 'complete' });
+    const row = pool.get<ItemModel>('r1');
+    if (!row) throw new Error('expected hydrated row');
+    expect(loader.getReadSnapshot(row)).toBeDefined();
+    loader.invalidate();
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
+    postQueryMock.mockImplementationOnce(() => {
+      loader.invalidate();
+      return Promise.resolve({ results: [[{ id: 'r1', title: 'late' }]], evidence: [[{ id: 'r1', stamp: 13 }]] });
+    });
+    await loader.fetch('items', { type: 'complete' });
+    expect(loader.getReadSnapshot(row)).toBeUndefined();
   });
 
   it('applies a server row the pool holds no position for, even when the local updatedAt is later', async () => {

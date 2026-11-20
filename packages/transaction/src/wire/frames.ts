@@ -19,7 +19,6 @@ import {
 } from '../coordination/schema.js';
 import type { MutationResultMessageWire } from '../commit/contract.js';
 
-// ── Client → Server ────────────────────────────────────────────────────────
 
 /**
  * A single operation within a commit batch and its authoritative runtime
@@ -62,7 +61,6 @@ export const commitMessageSchema = z.object({
 });
 export type CommitMessage = z.infer<typeof commitMessageSchema>;
 
-// ── Server → Client ──────────────────────────────────────────────────────
 
 /**
  * The server's acknowledgement of a {@link CommitMessage}. Runtime shape and

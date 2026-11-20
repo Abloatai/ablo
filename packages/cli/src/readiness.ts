@@ -346,7 +346,7 @@ export function blockers(input: {
   if (!input.hasKey) {
     found.push({
       problem: 'no API key',
-      fix: 'run `ablo login`, or set ABLO_API_KEY',
+      fix: 'run `ablo dev`, or set ABLO_API_KEY',
     });
     return found;
   }

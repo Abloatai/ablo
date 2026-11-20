@@ -116,7 +116,6 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
 
       expect(syncId).toBeGreaterThan(0);
 
-      // All 5 should exist
       await new Promise((r) => setTimeout(r, 300));
       const data = await bootstrap();
       const items = (data.models as Record<string, unknown[]>)?.Item;
@@ -131,14 +130,12 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
 
   describe('WebSocket reconnect after gap', () => {
     it('should receive deltas for mutations made during disconnect', async () => {
-      // Connect WS
       const ws1 = await connectWS();
 
       // Note the current state
       const snap = await bootstrap();
       const beforeId = snap.lastSyncId as number;
 
-      // Disconnect
       ws1.close();
       await new Promise((r) => setTimeout(r, 300));
 
@@ -149,7 +146,6 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
         input: { title: 'During disconnect', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
-      // Reconnect
       const ws2 = await connectWS();
       const deltasAfter = new Set<string>();
       ws2.on('message', (data: Buffer) => {
@@ -183,7 +179,6 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
 
   describe('conflict scenarios', () => {
     it('should handle update to entity that was updated by another user during offline', async () => {
-      // Create a item
       const itemId = uuid();
       await batchAck([{
         type: 'CREATE', model: 'item', id: itemId,
@@ -218,14 +213,12 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
     });
 
     it('should handle update to entity that was deleted during offline', async () => {
-      // Create a item
       const itemId = uuid();
       await batchAck([{
         type: 'CREATE', model: 'item', id: itemId,
         input: { title: 'Will be deleted', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
-      // Delete it (simulating another user's action during offline)
       await batchAck([{ type: 'DELETE', model: 'item', id: itemId }]);
 
       // User comes online, tries to update the deleted entity

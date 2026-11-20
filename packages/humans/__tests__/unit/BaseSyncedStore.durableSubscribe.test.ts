@@ -183,8 +183,6 @@ describe('BaseSyncedStore.subscribe — durable across inner-socket churn', () =
     deliverCursorFrame(first, 1);
     expect(handler).toHaveBeenCalledTimes(1);
 
-    // Reconnect: a fresh socket replaces the old one inside the same
-    // connection object — the only rebuild that exists.
     ws.disconnect();
     const second = openInnerSocket(ws);
     expect(second).not.toBe(first);

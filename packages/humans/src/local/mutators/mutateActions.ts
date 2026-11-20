@@ -87,7 +87,6 @@ export function createMutateActions<
     return model;
   };
 
-  // Apply a patch onto an existing pool model. Returns the model.
   const applyPatch = (patch: UpdatePatch<S, K>, now: Date): Model => {
     const { id, ...changes } = patch;
     const model = store.pool.get(id);

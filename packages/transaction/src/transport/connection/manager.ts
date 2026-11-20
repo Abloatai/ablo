@@ -49,7 +49,6 @@ import {
   type TransportObservability,
 } from '../../observability.js';
 
-// ─── State ────────────────────────────────────────────────────────────────
 
 export type ConnectionState =
   | 'connected'
@@ -86,7 +85,6 @@ export type ConnectionEvent =
   | { type: 'BOOTSTRAP_FAILED_SESSION' }
   | { type: 'MANUAL_RETRY' };
 
-// ─── Callbacks ────────────────────────────────────────────────────────────
 
 export interface ConnectionCallbacks {
   /** Run bootstrap + WebSocket reconnect. Returns the outcome. */
@@ -147,7 +145,6 @@ export interface ConnectionManagerOptions {
   observability?: TransportObservability;
 }
 
-// ─── Tunables ─────────────────────────────────────────────────────────────
 
 const DEFAULT_BACKOFF = {
   BASE_MS: 2_000,
@@ -164,7 +161,6 @@ const MAX_STUCK_CYCLES_BEFORE_RELOAD = 6;
  *  "successful" re-mint (clock skew, a mint returning an already-rejected key). */
 const MAX_CREDENTIAL_REFRESH_ATTEMPTS = 3;
 
-// ─── ConnectionManager ────────────────────────────────────────────────────
 
 export class ConnectionManager {
   // Connection state, mirrored to the consumer via `onStateChange`.
@@ -173,7 +169,6 @@ export class ConnectionManager {
   attempt = 0;
   lastProbeResult: ProbeResult | null = null;
 
-  // Private
   private callbacks: ConnectionCallbacks | null = null;
   private backoffTimer: ReturnType<typeof setTimeout> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -203,7 +198,6 @@ export class ConnectionManager {
     this.observability = options.observability ?? noopSocketObservability;
   }
 
-  // ── Lifecycle ────────────────────────────────────────────────────────
 
   start(callbacks: ConnectionCallbacks): void {
     this.callbacks = callbacks;
@@ -225,7 +219,6 @@ export class ConnectionManager {
     this.logger.info('[ConnectionManager] Disposed');
   }
 
-  // ── Send events ──────────────────────────────────────────────────────
 
   send(event: ConnectionEvent): void {
     if (this.disposed) return;
@@ -265,7 +258,6 @@ export class ConnectionManager {
     this.onEnterState(nextState, event);
   }
 
-  // ── Pure transition ──────────────────────────────────────────────────
 
   private transition(state: ConnectionState, event: ConnectionEvent): ConnectionState | null {
     switch (state) {
@@ -445,14 +437,13 @@ export class ConnectionManager {
         }
 
       case 'session_expired':
-        return null; // terminal
+        return null;
 
       default:
         return null;
     }
   }
 
-  // ── Side effects per state ───────────────────────────────────────────
 
   private onEnterState(state: ConnectionState, event: ConnectionEvent): void {
     switch (state) {
@@ -528,7 +519,6 @@ export class ConnectionManager {
     }
   }
 
-  // ── Async operations ─────────────────────────────────────────────────
 
   /**
    * FSM effects are fire-and-forget by design (`onEnterState` is sync). Each
@@ -671,7 +661,6 @@ export class ConnectionManager {
     }
   }
 
-  // ── Backoff ──────────────────────────────────────────────────────────
 
   private scheduleBackoff(): void {
     this.clearBackoffTimer();
@@ -720,7 +709,6 @@ export class ConnectionManager {
     }, delay);
   }
 
-  // ── Browser listeners ────────────────────────────────────────────────
 
   private setupBrowserListeners(): void {
     if (typeof window === 'undefined') return;
@@ -763,7 +751,6 @@ export class ConnectionManager {
     }
   }
 
-  // ── Watchdog ─────────────────────────────────────────────────────────
 
   private startWatchdog(): void {
     if (typeof window === 'undefined') return;
@@ -820,7 +807,6 @@ export class ConnectionManager {
     }, WATCHDOG_INTERVAL_MS);
   }
 
-  // ── UI-friendly views ─────────────────────────────────────────────────
 
   get isConnected(): boolean { return this.state === 'connected'; }
   get isOffline(): boolean { return this.state === 'offline' || this.state === 'waiting_for_network'; }
@@ -847,7 +833,6 @@ export class ConnectionManager {
     return `${Math.floor(hours / 24)}d ago`;
   }
 
-  // ── Timer helpers ─────────────────────────────────────────────────────
 
   private clearBackoffTimer(): void {
     if (this.backoffTimer) {

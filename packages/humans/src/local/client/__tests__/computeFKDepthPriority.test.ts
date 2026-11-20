@@ -261,9 +261,6 @@ describe('computeFKDepthPriority', () => {
     });
 
     const p = priorities(schema);
-    // The three-node SCC {Layout, Collection, EntryLayout} gets a single
-    // priority — which fixes the bug. Previously Collection=20 and
-    // Layout=30, putting children before parents.
     const layoutP = p.get('Layout')!;
     const collectionP = p.get('Collection')!;
     const entryLayoutP = p.get('EntryLayout')!;
@@ -276,7 +273,6 @@ describe('computeFKDepthPriority', () => {
     expect(p.get('EntryDetail')!).toBeGreaterThan(p.get('Entry')!);
   });
 
-  // ── defer: true escape hatch ──────────────────────────────────────────
 
   it('defer:true on a 2-cycle edge breaks the SCC into a chain', () => {
     // Same A↔B cycle as the earlier test, but `b → a` is now `defer:true`.
