@@ -94,7 +94,7 @@
   "dependencies": {
     "@abloatai/transaction": "0.67.4",
     "events": "^3.3.0",
-    "mobx": "^6.13.7",
+    "mobx": "^7.1.7",
     "uuid": "^14.0.0",
     "zod": "^4.4.3"
   },
