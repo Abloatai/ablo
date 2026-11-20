@@ -13,6 +13,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/publishing/verify-npm-versions.sh"
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MONOREPO_ROOT="$(cd "$PKG_DIR/../.." && pwd)"
 MIRROR_DIR="${MIRROR_DIR:-$MONOREPO_ROOT/../ablo-mirror}"
@@ -100,40 +101,6 @@ release_run_for_commit() {
   local mirror_sha="$1"
   gh run list -R "$MIRROR_REPO" --workflow=release.yml \
     --commit "$mirror_sha" -L1 --json databaseId -q '.[0].databaseId'
-}
-
-verify_npm_versions() {
-  local version="$1"
-  local package_name
-  local published
-  local download_dir
-  local downloaded
-  for package_name in "${PUBLIC_PACKAGES[@]}"; do
-    published=""
-    downloaded=false
-    download_dir="$(mktemp -d)"
-    for attempt in 1 2 3 4 5 6; do
-      published="$(npm view "$package_name@$version" version 2>/dev/null || true)"
-      # Registry metadata can precede the tarball. A fresh cache forces the
-      # actual download; npm also checks the registry's integrity digest.
-      if [[ "$published" = "$version" ]] && npm pack "$package_name@$version" \
-        --ignore-scripts --prefer-online --cache "$download_dir/cache" \
-        --pack-destination "$download_dir" >"$download_dir/download.log" 2>&1; then
-        downloaded=true
-        break
-      fi
-      echo "    waiting for $package_name@$version metadata and tarball ($attempt/6)"
-      sleep 5
-    done
-    if [[ "$downloaded" != true ]]; then
-      [[ ! -f "$download_dir/download.log" ]] || cat "$download_dir/download.log" >&2
-      rm -rf "$download_dir"
-      echo "error: $package_name@$version was not downloadable from npm" >&2
-      exit 1
-    fi
-    rm -rf "$download_dir"
-    echo ">>> verified $package_name@$version metadata, tarball, and integrity"
-  done
 }
 
 prepare_release() {
@@ -302,7 +269,7 @@ publish_release() {
   fi
 
   echo ">>> publish 4/5: verifying npm and creating the GitHub Release"
-  verify_npm_versions "$version"
+  verify_npm_versions "$version" "${PUBLIC_PACKAGES[@]}"
   bash "$SCRIPT_DIR/publish-release.sh" "$version" "$mirror_sha"
 
   echo ">>> publish 5/5: pushing the monorepo release commit"
@@ -399,7 +366,7 @@ publish_local() {
   fi
 
   echo ">>> publish-local 4/5: creating the GitHub Release"
-  verify_npm_versions "$version"
+  verify_npm_versions "$version" "${PUBLIC_PACKAGES[@]}"
   bash "$SCRIPT_DIR/publish-release.sh" "$version" "$mirror_sha"
 
   echo ">>> publish-local 5/5: pushing the monorepo release commit"

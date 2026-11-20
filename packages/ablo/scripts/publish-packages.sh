@@ -144,25 +144,10 @@ for package_name in "${PACKAGE_ORDER[@]}"; do
 done
 
 # ── Verify ──────────────────────────────────────────────────────────────
-# The registry read path is CDN-cached, so the package published last is the one
-# most likely to read back as the previous version. A single read here reports a
-# false failure on a release that actually succeeded.
+source "$(dirname "${BASH_SOURCE[0]}")/publishing/verify-npm-versions.sh"
 echo ""
 echo ">>> verifying npm"
-for name in "${PUBLIC_NAMES[@]}"; do
-  published=""
-  for attempt in 1 2 3 4 5 6; do
-    published="$(npm view "$name@$VERSION" version 2>/dev/null || true)"
-    [ "$published" = "$VERSION" ] && break
-    echo "    $name=${published:-<missing>}, waiting for $VERSION ($attempt/6)"
-    sleep 5
-  done
-  if [ "$published" != "$VERSION" ]; then
-    echo "error: $name did not reach $VERSION on npm" >&2
-    exit 1
-  fi
-  echo "    $name $VERSION"
-done
+verify_npm_versions "$VERSION" "${PUBLIC_NAMES[@]}"
 
 echo ""
 echo ">>> published @abloatai/ablo@$VERSION"
