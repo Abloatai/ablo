@@ -16,7 +16,7 @@
  * IS the loss notification.
  */
 
-import { AbloClaimedError } from '../errors.js';
+import { AbloClaimedError, AbloValidationError } from '../errors.js';
 import type {
   ClaimHeartbeat,
   ClaimHeartbeatOptions,
@@ -102,6 +102,26 @@ export function heartbeatCadenceMs(
 ): number {
   if (heartbeat !== true) return toMs(heartbeat);
   return Math.max(Math.floor(ttlMs / 3), 1_000);
+}
+
+/**
+ * Refuses an auto-heartbeat that cannot keep its lease: a beat that does not
+ * land before the TTL runs out finds the lease already gone. The HTTP
+ * transport calls this before requesting the claim, so no lease is taken.
+ */
+export function assertHeartbeatFitsLease(
+  ttlMs: number,
+  options: { readonly heartbeat?: true | Duration | ClaimHeartbeatPlan },
+): void {
+  const plan = resolveHeartbeatPlan(options);
+  if (!plan.loop) return;
+  const cadenceMs = heartbeatCadenceMs(ttlMs, plan.cadence);
+  if (cadenceMs > 0 && cadenceMs < ttlMs) return;
+  throw new AbloValidationError(
+    `A heartbeat every ${cadenceMs}ms cannot keep a ${ttlMs}ms lease alive. ` +
+      'Beat more often than the ttl, or lengthen the ttl.',
+    { code: 'invalid_options', param: 'heartbeat' },
+  );
 }
 
 export interface ClaimHeartbeatLoopOptions {
