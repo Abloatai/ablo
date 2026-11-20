@@ -789,6 +789,10 @@ export function createModelOperations<T, C, U = C>(
       );
     }
     const { id, ...options } = params;
+    const ttlMs =
+      options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
+    const plan = resolveHeartbeatPlan(options);
+    const intervalMs = plan.loop ? heartbeatCadenceMs(ttlMs, plan.cadence) : undefined;
     const contention = resolveClaimContentionOptions(options);
     const failFast = !contention.wait;
 
@@ -886,8 +890,6 @@ export function createModelOperations<T, C, U = C>(
       ...selfNarrowed,
       ...(selfMeta !== undefined ? { meta: declaredMeta(selfMeta) } : {}),
     };
-    const ttlMs =
-      options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
     const expiresAt = Date.now() + ttlMs;
     const active: ActiveClaim = {
       entityId: id,
@@ -905,10 +907,6 @@ export function createModelOperations<T, C, U = C>(
       ...targetNarrowed,
       ...(targetMeta !== undefined ? { meta: declaredMeta(targetMeta) } : {}),
     };
-    // One reading of the heartbeat options — cadence and callbacks from
-    // whichever spelling the caller used (plan object, shorthand, or the
-    // deprecated flat callbacks).
-    const plan = resolveHeartbeatPlan(options);
     // A beat resolves with the server's extended expiry; keep the local
     // self-claim estimate in step so `claim.state` renders the real window,
     // and surface every answer through the plan's `onBeat` (pressure signal).
@@ -934,10 +932,10 @@ export function createModelOperations<T, C, U = C>(
 
     // Opt-in auto-heartbeat: the loop beats until release, and a definitive
     // loss stops it and surfaces through the plan's `onLost`.
-    const stopHeartbeatLoop = plan.loop
+    const stopHeartbeatLoop = intervalMs !== undefined
       ? startClaimHeartbeatLoop({
           beat: () => heartbeat(),
-          intervalMs: heartbeatCadenceMs(ttlMs, plan.cadence),
+          intervalMs,
           ...(plan.onLost ? { onLost: plan.onLost } : {}),
         })
       : undefined;
@@ -988,6 +986,10 @@ export function createModelOperations<T, C, U = C>(
         { code: 'model_claim_not_configured' },
       );
     }
+    const ttlMs =
+      options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
+    const plan = resolveHeartbeatPlan(options);
+    const intervalMs = plan.loop ? heartbeatCadenceMs(ttlMs, plan.cadence) : undefined;
     const contention = resolveClaimContentionOptions(options);
     const failFast = !contention.wait;
 
@@ -1039,8 +1041,6 @@ export function createModelOperations<T, C, U = C>(
       id,
       ...subTarget(options, schemaKey),
     };
-    const ttlMs =
-      options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
     const expiresAt = Date.now() + ttlMs;
     const active: ActiveClaim = {
       entityId: id,
@@ -1056,9 +1056,6 @@ export function createModelOperations<T, C, U = C>(
       id,
       ...subTarget(options, schemaKey),
     };
-    // One reading of the heartbeat options — cadence and callbacks from
-    // whichever spelling the caller used.
-    const plan = resolveHeartbeatPlan(options);
     // A beat resolves with the server's extended expiry; keep the local
     // self-claim estimate in step so `claim.state` renders the real window.
     const heartbeat = async (
@@ -1081,10 +1078,10 @@ export function createModelOperations<T, C, U = C>(
       return beat;
     };
 
-    const stopHeartbeatLoop = plan.loop
+    const stopHeartbeatLoop = intervalMs !== undefined
       ? startClaimHeartbeatLoop({
           beat: () => heartbeat(),
-          intervalMs: heartbeatCadenceMs(ttlMs, plan.cadence),
+          intervalMs,
           ...(plan.onLost ? { onLost: plan.onLost } : {}),
         })
       : undefined;

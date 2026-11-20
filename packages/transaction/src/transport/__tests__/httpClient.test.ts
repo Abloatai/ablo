@@ -16,6 +16,7 @@
  * access can't accidentally hit one).
  */
 import { Ablo } from '../../client/ablo.js';
+import { createHttpTransport } from '../http/transport.js';
 import { defineSchema, model, selectModels, z } from '../../schema/index.js';
 import { AbloError, AbloNotFoundError, CapabilityError } from '../../errors.js';
 import { CLAIM_CONTINUATION_HEADER } from '../../claims/httpContinuation.js';
@@ -1537,6 +1538,14 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     }
     expect(claimRequestSchema.safeParse({ ttl: 0 }).success).toBe(false);
     expect(calls).toEqual([]);
+  });
+
+  it('rejects an invalid heartbeat before dispatching a claim over a socket', async () => {
+    const dispatchClaim = jest.fn(async () => { throw new Error('unexpected claim'); });
+    const client = createHttpTransport({ apiKey: 'sk_test_claim', dispatchClaim });
+    await expect(client.model('items').claim('item-1', { heartbeat: '0s' }))
+      .rejects.toMatchObject({ code: 'duration_invalid' });
+    expect(dispatchClaim).not.toHaveBeenCalled();
   });
 
   it('claims.heartbeatAll beats every held lease in one round trip', async () => {

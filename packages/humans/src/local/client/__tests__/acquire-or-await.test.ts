@@ -143,6 +143,19 @@ function activeClaim(heldBy: string): Claim {
 }
 
 describe('ModelOperations.claim', () => {
+  it.each(['row', 'key'])('rejects invalid heartbeat timing before acquiring a %s claim', async kind => {
+    const collab = fakeCollaboration();
+    const { proxy } = makeProxy(collab, 't1');
+    const heartbeat = { every: '0s' } as const;
+    const claim = kind === 'row'
+      ? proxy.claim({ id: 't1', heartbeat })
+      : proxy.claim('t1', { heartbeat });
+
+    await expect(claim).rejects.toMatchObject({ code: 'duration_invalid' });
+    expect(collab.createClaim).not.toHaveBeenCalled();
+    expect(proxy.claim.state({ id: 't1' })).toBeNull();
+  });
+
   it('re-reads after the grant even when the target was free', async () => {
     const collab = fakeCollaboration({ state: jest.fn(() => null) });
     const { proxy, fetchSpy } = makeProxy(collab, 't1');
