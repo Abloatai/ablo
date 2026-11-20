@@ -2,6 +2,14 @@
 
 ## 0.67.4
 
+### Brief disconnects retain presence
+
+Presence and observed claim state now remain visible for up to five seconds after a disconnect, avoiding flicker during brief reconnects. A reconnect cancels the pending clear; a connection that stays down clears the stale state after the grace period.
+
+### Accepted creates wait for their readable result
+
+HTTP `create` and batch-create calls now retry the read of an accepted row until it becomes visible or the request times out. Only the read is retried; the original write and idempotency key remain intact, and permission failures still stop immediately. A visibility timeout now returns `replication_lag_timeout` with `accepted: true`, rather than `commit_no_result` or not-found. Callers must account for an already accepted write when handling that error.
+
 ### Missing runtime credentials point to the right command
 
 CLI diagnostics now direct a signed-in developer to `ablo dev`, which mints the runtime credential, rather than sending them back through management-key login.

@@ -2,6 +2,10 @@
 
 ## 0.67.4
 
+### Accepted creates wait for their readable result
+
+HTTP `create` and batch-create calls now retry the read of an accepted row until it becomes visible or the request times out. Only the read is retried; the original write and idempotency key remain intact, and permission failures still stop immediately. A visibility timeout now returns `replication_lag_timeout` with `accepted: true`, rather than `commit_no_result` or not-found. Callers must account for an already accepted write when handling that error.
+
 ### Warm point reads retain their evidence
 
 Unchanged server snapshots retain their original row evidence on the same authenticated connection. Each decision receives a detached snapshot; changes and reconnects restore authoritative reads.

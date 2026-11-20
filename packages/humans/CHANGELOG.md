@@ -2,6 +2,10 @@
 
 ## 0.67.4
 
+### Brief disconnects retain presence
+
+Presence and observed claim state now remain visible for up to five seconds after a disconnect, avoiding flicker during brief reconnects. A reconnect cancels the pending clear; a connection that stays down clears the stale state after the grace period.
+
 ### React subscriptions retain unchanged snapshots
 
 Stable selectors keep their subscriptions and reuse unchanged snapshots across renders. Observable updates and external claim notifications still refresh the selection.
