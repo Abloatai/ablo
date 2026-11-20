@@ -1811,13 +1811,13 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       const params: ClaimParams<Fields> = rowFree
         ? { ...(opts ?? {}), id: idOrParams }
         : idOrParams;
+      const ttlMs = params.ttl !== undefined ? toMs(params.ttl) : DEFAULT_CLAIM_TTL_MS;
+      const plan = resolveHeartbeatPlan(params);
+      const intervalMs = plan.loop ? heartbeatCadenceMs(ttlMs, plan.cadence) : undefined;
       // A stateless lease ends at its ttl unless a beat renews it. A claim
       // dispatched over a socket is left to that transport's own renewal.
       if (!options.dispatchClaim) {
-        assertHeartbeatFitsLease(
-          params.ttl !== undefined ? toMs(params.ttl) : DEFAULT_CLAIM_TTL_MS,
-          params,
-        );
+        assertHeartbeatFitsLease(ttlMs, params);
       }
       let acquired: {
         id: string;
@@ -1849,10 +1849,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         id: params.id,
         description: claimDescription(params),
       });
-      // One reading of the heartbeat options — cadence and callbacks from
-      // whichever spelling the caller used (plan object, shorthand, or the
-      // deprecated flat callbacks).
-      const plan = resolveHeartbeatPlan(params);
       const heartbeat = async (
         beatOptions?: Duration | ClaimHeartbeatOptions
       ): Promise<ClaimHeartbeat> => {
@@ -1868,13 +1864,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // Opt-in auto-heartbeat — the background-worker cadence. The stateless
       // HTTP claim defaults to the server's acquire window when no TTL
       // was requested, so the default cadence lands at 20s beats.
-      const stopHeartbeatLoop = plan.loop
+      const stopHeartbeatLoop = intervalMs !== undefined
         ? startClaimHeartbeatLoop({
             beat: () => heartbeat(),
-            intervalMs: heartbeatCadenceMs(
-              params.ttl !== undefined ? toMs(params.ttl) : DEFAULT_CLAIM_TTL_MS,
-              plan.cadence
-            ),
+            intervalMs,
             ...(plan.onLost ? { onLost: plan.onLost } : {}),
           })
         : undefined;
