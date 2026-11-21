@@ -18,10 +18,14 @@
  */
 
 import { z } from 'zod';
+import { reaction } from 'mobx';
+import { equalSnapshots, snapshotValue } from '../../../react/snapshot.js';
 import { Ablo, type InternalAbloOptions } from '../../../Ablo.js';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import { relation } from '@abloatai/transaction/schema/relation';
+import { Database } from '../../Database.js';
+import { InMemoryObjectStore } from '../../adapters/inMemoryStorage.js';
 import * as queryClient from '../../query/client.js';
 
 jest.mock('../../query/client.js', () => ({
@@ -88,6 +92,92 @@ function hangingNetwork(): Promise<never> {
 describe('OnDemandLoader — local-first lazy + durable expand', () => {
   beforeEach(() => {
     postQueryMock.mockReset();
+  });
+
+  it.each([
+    { count: 16, refresh: false }, { count: 64, refresh: false },
+    { count: 16, refresh: true }, { count: 64, refresh: true },
+  ])('publishes an expanded response once ($count parents, refresh: $refresh)', async ({ count, refresh }) => {
+    const ablo = makeAblo();
+    const rows = Array.from({ length: count }, (_, index) => ({
+      id: `s${index}`, collectionId: 'initial',
+      layers: [{ id: `l${index}`, entryId: `s${index}`, type: 'text', zIndex: 0 }],
+    }));
+    let stop: () => void = () => undefined;
+    try {
+      if (refresh) {
+        postQueryMock.mockResolvedValueOnce({ results: [rows] });
+        await ablo.entries.list({ type: 'complete', expand: ['layers'] });
+      }
+      const select = jest.fn(() => snapshotValue({
+        entries: ablo.entries.local.list().map(({ id, collectionId }) => ({ id, collectionId })),
+        layers: ablo.entryDetails.local.list().map(({ id, zIndex }) => ({ id, zIndex })),
+      }));
+      const previous = select();
+      const publish = jest.fn();
+      stop = reaction(select, publish, { equals: equalSnapshots });
+      select.mockClear();
+      const updated = rows.map((row) => ({
+        ...row, collectionId: 'updated', layers: row.layers.map((layer) => ({ ...layer, zIndex: 1 })),
+      }));
+      postQueryMock.mockResolvedValueOnce({ results: [updated] });
+
+      await ablo.entries.list({ type: 'complete', expand: ['layers'] });
+
+      expect(select).toHaveBeenCalledTimes(1);
+      expect(publish).toHaveBeenCalledTimes(1);
+      const next = publish.mock.calls[0][0];
+      expect(next).toEqual({
+        entries: updated.map(({ id, collectionId }) => ({ id, collectionId })),
+        layers: updated.flatMap(({ layers }) => layers.map(({ id, zIndex }) => ({ id, zIndex }))),
+      });
+      expect(Object.isFrozen(next.entries)).toBe(true);
+      expect(next.layers.every(Object.isFrozen)).toBe(true);
+      expect(previous.entries).toEqual(refresh ? rows.map(({ id, collectionId }) => ({ id, collectionId })) : []);
+      expect(previous.layers).toEqual(refresh ? rows.flatMap(({ layers }) => layers.map(({ id, zIndex }) => ({ id, zIndex }))) : []);
+    } finally {
+      stop();
+      await ablo.dispose();
+    }
+  });
+
+  it.each([false, true])('publishes before child storage completes and awaits its result (failure: %s)', async (fail) => {
+    const ablo = makeAblo();
+    const parentStore = new InMemoryObjectStore('Entry', 'Entry');
+    const childStore = new InMemoryObjectStore('EntryDetail', 'EntryDetail');
+    const lookup = jest.spyOn(Database.prototype, 'getStore').mockImplementation((name) =>
+      name === 'Entry' ? parentStore : name === 'EntryDetail' ? childStore : undefined,
+    );
+    let finish!: () => void;
+    const writing = new Promise<void>((resolve) => { finish = resolve; });
+    let started!: () => void;
+    const startedWriting = new Promise<void>((resolve) => { started = resolve; });
+    jest.spyOn(childStore, 'put').mockImplementationOnce(async () => {
+      started();
+      await writing;
+      if (fail) throw new Error('child storage full');
+    });
+    try {
+      postQueryMock.mockResolvedValueOnce({ results: [[{
+        id: 's1', collectionId: 'd1',
+        layers: [{ id: 'l1', entryId: 's1', type: 'text', zIndex: 0 }],
+      }]] });
+      let settled = false;
+      const read = ablo.entries.list({ type: 'complete', expand: ['layers'] })
+        .finally(() => { settled = true; });
+      await startedWriting;
+      expect(ablo.entries.local.get('s1')?.collectionId).toBe('d1');
+      expect(ablo.entryDetails.local.get('l1')?.type).toBe('text');
+      expect(await parentStore.get('s1')).toMatchObject({ collectionId: 'd1' });
+      expect(settled).toBe(false);
+      finish();
+      if (fail) await expect(read).rejects.toThrow('child storage full');
+      else await expect(read).resolves.toHaveLength(1);
+    } finally {
+      finish();
+      lookup.mockRestore();
+      await ablo.dispose();
+    }
   });
 
   it('persists expand children to their own store and re-serves them locally', async () => {

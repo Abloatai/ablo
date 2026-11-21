@@ -435,12 +435,15 @@ export class OnDemandLoader {
     const credential = this.authTokenProvider?.() ?? null;
     this.activeReadDeletes.add(deleted);
     try {
-      const network = await this.queryNetwork(modelName, clauses, options, deleted);
+      const network = await this.queryNetwork(modelName, clauses, options);
       const networkRows = network.rows;
       const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
       const acceptedRows: unknown[] = [];
       // Publish the page together so reactive selectors snapshot it once.
-      const networkModels = runInAction(() => {
+      const { networkModels, expandedRows } = runInAction(() => {
+        const expandedRows = options?.expand?.length
+          ? this.hydrateExpanded(modelName, networkRows, options.expand, network.position, deleted)
+          : [];
         const networkModels = networkRows
           // Strict: a row the server returned whose type name this client never
           // registered is a genuine schema collision (the pushed schema differs
@@ -482,13 +485,14 @@ export class OnDemandLoader {
         if (networkModels.length > 0) {
           this.opts.objectPool.addBatch(networkModels, ModelScope.live);
         }
-        return networkModels;
+        return { networkModels, expandedRows };
       });
 
-      if (networkModels.length > 0) {
-        // Persist only accepted snapshots: a stale response must not roll disk back.
-        await this.persistToIdb(modelName, acceptedRows);
-      }
+      // Enqueue accepted snapshots together, outside the publication action.
+      await Promise.all([
+        ...expandedRows.map(({ modelName, rows }) => this.persistToIdb(modelName, rows)),
+        this.persistToIdb(modelName, acceptedRows),
+      ]);
 
       return networkModels;
     } finally {
@@ -711,7 +715,6 @@ export class OnDemandLoader {
     modelName: string,
     clauses: readonly WhereClause[],
     options: FetchOptions<unknown> | undefined,
-    deleted: ReadonlySet<string>,
   ): Promise<{
     rows: unknown[];
     evidence: readonly { id: string; stamp: number }[];
@@ -758,17 +761,6 @@ export class OnDemandLoader {
       return row;
     });
 
-    // Expand: server returns related entities nested under each row
-    // (`row.blocks = [{...}, ...]`). Walk the nested shape, stamp the
-    // typename from the schema's relation metadata (the server bakes
-    // `__typename` into the JSONB but the postgres.camel driver
-    // mangles it to `_Typename` mid-flight, so client-side stamping
-    // is the only reliable path), hydrate each related row into its
-    // own typed pool, then leave the nested arrays in place on the
-    // primary row.
-    if (options?.expand && options.expand.length > 0) {
-      await this.hydrateExpanded(modelName, normalized, options.expand, position, deleted);
-    }
     return { rows: normalized, evidence, position };
   }
 
@@ -779,14 +771,14 @@ export class OnDemandLoader {
    * `__typename` field gets mangled by `postgres.camel` (`__typename`
    * → `_Typename`), so the SDK can't trust whatever string lands.
    */
-  private async hydrateExpanded(
+  private hydrateExpanded(
     parentModelName: string,
     rows: unknown[],
     relationNames: readonly string[],
     position: number,
     deleted: ReadonlySet<string>,
-  ): Promise<void> {
-    const writes: Promise<void>[] = [];
+  ): { modelName: string; rows: unknown[] }[] {
+    const accepted: { modelName: string; rows: unknown[] }[] = [];
     const parentDef = this.getModelDef(parentModelName);
     // Nested rows carry no evidence of their own; the read floor at issue
     // time is what they provably reflect. A floor of zero says nothing.
@@ -818,11 +810,11 @@ export class OnDemandLoader {
         // this, expand-fetched relations live only inside the parent's row
         // and are lost to a lazy child query after a cold start.
         if (stampedItems.length > 0 && targetKey) {
-          writes.push(this.persistToIdb(targetKey, stampedItems));
+          accepted.push({ modelName: targetKey, rows: stampedItems });
         }
       }
     }
-    await Promise.all(writes);
+    return accepted;
   }
 
   private async persistToIdb(modelName: string, rows: unknown[]): Promise<void> {
