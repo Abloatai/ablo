@@ -16,6 +16,8 @@
  */
 
 import { z } from 'zod';
+import { makeObservable, observable, reaction } from 'mobx';
+import { equalSnapshots, snapshotValue } from '../../../react/snapshot.js';
 import { ModelRegistry, setActiveRegistry, clearActiveRegistry } from '../../ModelRegistry.js';
 import { InstanceCache } from '../../InstanceCache.js';
 import { Model } from '../../Model.js';
@@ -115,6 +117,39 @@ describe('OnDemandLoader — network rows meet the pool by log position', () => 
     expect(loader.getReadSnapshot(row)?.data).toMatchObject({ title: 'confirmed' });
     pool.watermarks.advance(row, 101);
     expect(loader.getReadSnapshot(row)).toBeUndefined();
+  });
+
+  it.each([16, 64])('publishes one reactive snapshot when refreshing %i resident rows', async (count) => {
+    const { pool, loader } = setup(() => 0);
+    const rows = Array.from({ length: count }, (_, index) => ({
+      id: `r${index}`, title: `updated ${index}`,
+    }));
+    const residents = rows.map(({ id }) => seedFromDelta(pool, id, 'cached'));
+    for (const resident of residents) makeObservable(resident, { title: observable });
+    const select = jest.fn(() => snapshotValue(residents.map(({ id, title }) => ({ id, title }))));
+    const previous = select();
+    const publish = jest.fn();
+    const stop = reaction(select, publish, { equals: equalSnapshots });
+    select.mockClear();
+
+    try {
+      postQueryMock.mockResolvedValueOnce({
+        results: [rows],
+        evidence: [rows.map(({ id }) => ({ id, stamp: 12 }))],
+      });
+      await loader.fetch('items', { type: 'complete' });
+
+      expect(select).toHaveBeenCalledTimes(1);
+      expect(publish).toHaveBeenCalledTimes(1);
+      const next = publish.mock.calls[0][0];
+      expect(next).toEqual(rows);
+      expect(Object.isFrozen(next)).toBe(true);
+      expect(next.every(Object.isFrozen)).toBe(true);
+      expect(previous).toEqual(rows.map(({ id }) => ({ id, title: 'cached' })));
+      expect(residents.map((row) => pool.watermarks.of(row))).toEqual(rows.map(() => 12));
+    } finally {
+      stop();
+    }
   });
 
   it('falls back when an untracked local edit cannot be serialized', async () => {

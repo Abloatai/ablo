@@ -28,6 +28,7 @@
  * orders nothing.
  */
 
+import { runInAction } from 'mobx';
 import type { InstanceCache } from '../InstanceCache.js';
 import { ModelScope } from '../InstanceCache.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
@@ -434,53 +435,64 @@ export class OnDemandLoader {
     const credential = this.authTokenProvider?.() ?? null;
     this.activeReadDeletes.add(deleted);
     try {
-      const network = await this.queryNetwork(modelName, clauses, options, deleted);
+      const network = await this.queryNetwork(modelName, clauses, options);
       const networkRows = network.rows;
       const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
       const acceptedRows: unknown[] = [];
-      const networkModels = networkRows
-        // Strict: a row the server returned whose type name this client never
-        // registered is a genuine schema collision (the pushed schema differs
-        // from the local one). Throw here, naming the cause, rather than silently
-        // dropping the row and failing downstream as `entity_not_found`.
-        .map((raw) =>
-          this.hydrateOne(
-            raw,
-            { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
-            typename,
-            { strict: true, acceptedRows, deleted },
-          ),
-        )
-        .filter((m): m is Model => m !== null);
+      // Publish the page together so reactive selectors snapshot it once.
+      const { networkModels, expandedRows } = runInAction(() => {
+        const expandedRows = options?.expand?.length
+          ? this.hydrateExpanded(modelName, networkRows, options.expand, network.position, deleted)
+          : [];
+        const networkModels = networkRows
+          // Strict: a row the server returned whose type name this client never
+          // registered is a genuine schema collision (the pushed schema differs
+          // from the local one). Throw here, naming the cause, rather than silently
+          // dropping the row and failing downstream as `entity_not_found`.
+          .map((raw) =>
+            this.hydrateOne(
+              raw,
+              { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
+              typename,
+              { strict: true, acceptedRows, deleted },
+            ),
+          )
+          .filter((m): m is Model => m !== null);
 
-      const acceptedById = new Map(acceptedRows.map((row) => [(row as { id: string }).id, row]));
-      for (const model of networkModels) {
-        const stamp = evidenceById.get(model.id);
-        if (stamp === undefined) continue;
-        // The read's evidence, kept for the premise a guarded write may cite;
-        // and the position the pooled row now reflects, for freshness.
-        this.readEvidence.set(model, stamp);
-        this.opts.objectPool.watermarks.advance(model, stamp);
-        this.readSnapshots.delete(model);
-        const raw = acceptedById.get(model.id);
-        if (raw && generation === this.evidenceGeneration &&
-            poolGeneration === this.opts.objectPool.generation &&
-            credential === (this.authTokenProvider?.() ?? null) &&
-            Object.keys(model.getChanges()).length === 0) {
-          const data = JSON.stringify(raw);
-          if (this.rowSnapshot(model, raw as Record<string, unknown>) === data) {
-            this.readSnapshots.set(model, {
-              data, stamp, credential, poolGeneration, position: this.opts.objectPool.watermarks.of(model),
-            });
+        const acceptedById = new Map(acceptedRows.map((row) => [(row as { id: string }).id, row]));
+        for (const model of networkModels) {
+          const stamp = evidenceById.get(model.id);
+          if (stamp === undefined) continue;
+          // The read's evidence, kept for the premise a guarded write may cite;
+          // and the position the pooled row now reflects, for freshness.
+          this.readEvidence.set(model, stamp);
+          this.opts.objectPool.watermarks.advance(model, stamp);
+          this.readSnapshots.delete(model);
+          const raw = acceptedById.get(model.id);
+          if (raw && generation === this.evidenceGeneration &&
+              poolGeneration === this.opts.objectPool.generation &&
+              credential === (this.authTokenProvider?.() ?? null) &&
+              Object.keys(model.getChanges()).length === 0) {
+            const data = JSON.stringify(raw);
+            if (this.rowSnapshot(model, raw as Record<string, unknown>) === data) {
+              this.readSnapshots.set(model, {
+                data, stamp, credential, poolGeneration, position: this.opts.objectPool.watermarks.of(model),
+              });
+            }
           }
         }
-      }
 
-      if (networkModels.length > 0) {
-        this.opts.objectPool.addBatch(networkModels, ModelScope.live);
-        // Persist only accepted snapshots: a stale response must not roll disk back.
-        await this.persistToIdb(modelName, acceptedRows);
-      }
+        if (networkModels.length > 0) {
+          this.opts.objectPool.addBatch(networkModels, ModelScope.live);
+        }
+        return { networkModels, expandedRows };
+      });
+
+      // Enqueue accepted snapshots together, outside the publication action.
+      await Promise.all([
+        ...expandedRows.map(({ modelName, rows }) => this.persistToIdb(modelName, rows)),
+        this.persistToIdb(modelName, acceptedRows),
+      ]);
 
       return networkModels;
     } finally {
@@ -703,7 +715,6 @@ export class OnDemandLoader {
     modelName: string,
     clauses: readonly WhereClause[],
     options: FetchOptions<unknown> | undefined,
-    deleted: ReadonlySet<string>,
   ): Promise<{
     rows: unknown[];
     evidence: readonly { id: string; stamp: number }[];
@@ -750,17 +761,6 @@ export class OnDemandLoader {
       return row;
     });
 
-    // Expand: server returns related entities nested under each row
-    // (`row.blocks = [{...}, ...]`). Walk the nested shape, stamp the
-    // typename from the schema's relation metadata (the server bakes
-    // `__typename` into the JSONB but the postgres.camel driver
-    // mangles it to `_Typename` mid-flight, so client-side stamping
-    // is the only reliable path), hydrate each related row into its
-    // own typed pool, then leave the nested arrays in place on the
-    // primary row.
-    if (options?.expand && options.expand.length > 0) {
-      await this.hydrateExpanded(modelName, normalized, options.expand, position, deleted);
-    }
     return { rows: normalized, evidence, position };
   }
 
@@ -771,14 +771,14 @@ export class OnDemandLoader {
    * `__typename` field gets mangled by `postgres.camel` (`__typename`
    * → `_Typename`), so the SDK can't trust whatever string lands.
    */
-  private async hydrateExpanded(
+  private hydrateExpanded(
     parentModelName: string,
     rows: unknown[],
     relationNames: readonly string[],
     position: number,
     deleted: ReadonlySet<string>,
-  ): Promise<void> {
-    const writes: Promise<void>[] = [];
+  ): { modelName: string; rows: unknown[] }[] {
+    const accepted: { modelName: string; rows: unknown[] }[] = [];
     const parentDef = this.getModelDef(parentModelName);
     // Nested rows carry no evidence of their own; the read floor at issue
     // time is what they provably reflect. A floor of zero says nothing.
@@ -810,11 +810,11 @@ export class OnDemandLoader {
         // this, expand-fetched relations live only inside the parent's row
         // and are lost to a lazy child query after a cold start.
         if (stampedItems.length > 0 && targetKey) {
-          writes.push(this.persistToIdb(targetKey, stampedItems));
+          accepted.push({ modelName: targetKey, rows: stampedItems });
         }
       }
     }
-    await Promise.all(writes);
+    return accepted;
   }
 
   private async persistToIdb(modelName: string, rows: unknown[]): Promise<void> {
