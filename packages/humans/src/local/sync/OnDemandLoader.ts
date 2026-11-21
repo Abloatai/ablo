@@ -28,6 +28,7 @@
  * orders nothing.
  */
 
+import { runInAction } from 'mobx';
 import type { InstanceCache } from '../InstanceCache.js';
 import { ModelScope } from '../InstanceCache.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
@@ -438,46 +439,53 @@ export class OnDemandLoader {
       const networkRows = network.rows;
       const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
       const acceptedRows: unknown[] = [];
-      const networkModels = networkRows
-        // Strict: a row the server returned whose type name this client never
-        // registered is a genuine schema collision (the pushed schema differs
-        // from the local one). Throw here, naming the cause, rather than silently
-        // dropping the row and failing downstream as `entity_not_found`.
-        .map((raw) =>
-          this.hydrateOne(
-            raw,
-            { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
-            typename,
-            { strict: true, acceptedRows, deleted },
-          ),
-        )
-        .filter((m): m is Model => m !== null);
+      // Publish the page together so reactive selectors snapshot it once.
+      const networkModels = runInAction(() => {
+        const networkModels = networkRows
+          // Strict: a row the server returned whose type name this client never
+          // registered is a genuine schema collision (the pushed schema differs
+          // from the local one). Throw here, naming the cause, rather than silently
+          // dropping the row and failing downstream as `entity_not_found`.
+          .map((raw) =>
+            this.hydrateOne(
+              raw,
+              { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
+              typename,
+              { strict: true, acceptedRows, deleted },
+            ),
+          )
+          .filter((m): m is Model => m !== null);
 
-      const acceptedById = new Map(acceptedRows.map((row) => [(row as { id: string }).id, row]));
-      for (const model of networkModels) {
-        const stamp = evidenceById.get(model.id);
-        if (stamp === undefined) continue;
-        // The read's evidence, kept for the premise a guarded write may cite;
-        // and the position the pooled row now reflects, for freshness.
-        this.readEvidence.set(model, stamp);
-        this.opts.objectPool.watermarks.advance(model, stamp);
-        this.readSnapshots.delete(model);
-        const raw = acceptedById.get(model.id);
-        if (raw && generation === this.evidenceGeneration &&
-            poolGeneration === this.opts.objectPool.generation &&
-            credential === (this.authTokenProvider?.() ?? null) &&
-            Object.keys(model.getChanges()).length === 0) {
-          const data = JSON.stringify(raw);
-          if (this.rowSnapshot(model, raw as Record<string, unknown>) === data) {
-            this.readSnapshots.set(model, {
-              data, stamp, credential, poolGeneration, position: this.opts.objectPool.watermarks.of(model),
-            });
+        const acceptedById = new Map(acceptedRows.map((row) => [(row as { id: string }).id, row]));
+        for (const model of networkModels) {
+          const stamp = evidenceById.get(model.id);
+          if (stamp === undefined) continue;
+          // The read's evidence, kept for the premise a guarded write may cite;
+          // and the position the pooled row now reflects, for freshness.
+          this.readEvidence.set(model, stamp);
+          this.opts.objectPool.watermarks.advance(model, stamp);
+          this.readSnapshots.delete(model);
+          const raw = acceptedById.get(model.id);
+          if (raw && generation === this.evidenceGeneration &&
+              poolGeneration === this.opts.objectPool.generation &&
+              credential === (this.authTokenProvider?.() ?? null) &&
+              Object.keys(model.getChanges()).length === 0) {
+            const data = JSON.stringify(raw);
+            if (this.rowSnapshot(model, raw as Record<string, unknown>) === data) {
+              this.readSnapshots.set(model, {
+                data, stamp, credential, poolGeneration, position: this.opts.objectPool.watermarks.of(model),
+              });
+            }
           }
         }
-      }
+
+        if (networkModels.length > 0) {
+          this.opts.objectPool.addBatch(networkModels, ModelScope.live);
+        }
+        return networkModels;
+      });
 
       if (networkModels.length > 0) {
-        this.opts.objectPool.addBatch(networkModels, ModelScope.live);
         // Persist only accepted snapshots: a stale response must not roll disk back.
         await this.persistToIdb(modelName, acceptedRows);
       }
