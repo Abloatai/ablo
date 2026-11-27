@@ -8,14 +8,14 @@ SDK in an existing or new project.
 ## Start with the HTTP API
 
 For Go, Python, or another HTTP client, [sign up](https://abloatai.com/signup)
-and open **Connect database** in your project. New workspaces open this setup
-automatically.
+and open **Settings → Project → Manage database** for your project and branch.
 
 1. Connect a network-reachable PostgreSQL database and select its tables.
 2. Confirm whether the connected workspace owns every row or rows carry an
    Ablo organisation ID in a tenant column.
 3. Review and apply the scoped access setup and generated JSON contract.
-4. Save the API key, copy the curl or Go example, and verify the first request.
+4. Create an API key under **API keys**, then follow the [HTTP API guide](./api.md#http-api)
+   to make your first request.
 
 Automatic setup uses your owner credential temporarily. Ongoing access uses a
 separate scoped reader and writer; your migrations stay under your control.

@@ -68,6 +68,26 @@ function logEvent(id: number, recordId: string) {
 }
 
 describe('createTransactionClient', () => {
+  it('identifies the rejected cursor on single and batched list reads', async () => {
+    const error = { type: 'AbloValidationError', code: 'invalid_request', param: 'cursor', message: 'Invalid continuation' };
+    const methods: string[] = [];
+    const client = createTransactionClient({
+      schema, apiKey: 'sk_test', baseURL: 'https://api.example.test',
+      fetch: async (_input, init) => {
+        const method = init?.method ?? 'GET';
+        methods.push(method);
+        const slot = { status: 400, error };
+        return method === 'POST' ? json({ results: [slot, slot] }) : json(error, 400);
+      },
+    });
+    const read = (cursor: string) => expect(client.orders.list({ cursor })).rejects.toMatchObject({
+      type: 'AbloValidationError', code: 'invalid_request', param: 'cursor', httpStatus: 400,
+    });
+    await read('bad');
+    await Promise.all([read('bad'), read('another')]);
+    expect(methods).toEqual(['GET', 'POST']);
+  });
+
   it('composes the transaction seam with the existing typed HTTP resources', () => {
     const client = createTransactionClient({
       schema,

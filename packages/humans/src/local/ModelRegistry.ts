@@ -508,7 +508,16 @@ export class ModelRegistry {
       }
     }
 
-    const sorted = JSON.stringify(schema, Object.keys(schema).sort());
+    const canonical = Object.keys(schema)
+      .sort()
+      .map((modelName) => {
+        const props = schema[modelName]!;
+        const orderedProps = Object.keys(props)
+          .sort()
+          .map((propName) => [propName, props[propName]]);
+        return [modelName, orderedProps];
+      });
+    const sorted = JSON.stringify(canonical);
 
     this.schemaHash = this.simpleHash(sorted);
 

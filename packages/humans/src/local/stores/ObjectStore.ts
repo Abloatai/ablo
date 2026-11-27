@@ -118,6 +118,48 @@ export class ObjectStore implements ObjectStoreContract {
     });
   }
 
+  /**
+   * Batch insert or update multiple records in a single readwrite IndexedDB
+   * transaction (1 transaction instead of N during full bootstrap).
+   */
+  async putMany(records: readonly Record<string, unknown>[]): Promise<void> {
+    if (records.length === 0) return;
+    if (!this.checkDatabaseAvailable()) {
+      return Promise.reject(new Error('IndexedDB not available (closing or invalid)'));
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        const tx = this.db.transaction([this.storeName], 'readwrite', {
+          durability: this.writeDurability,
+        });
+        const store = tx.objectStore(this.storeName);
+        let settled = false;
+        const fail = (err: unknown) => {
+          if (settled) return;
+          settled = true;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        };
+
+        const onRequestError = (event: Event) => {
+          const req = event.target as IDBRequest | null;
+          fail(req?.error ?? new Error('IndexedDB request error'));
+        };
+
+        for (const data of records) {
+          const request = store.put(data);
+          request.onerror = onRequestError;
+        }
+
+        tx.oncomplete = () => { if (!settled) { settled = true; resolve(); } };
+        tx.onabort = () => { fail(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError')); };
+        tx.onerror = () => { fail(tx.error ?? new Error('IndexedDB transaction error')); };
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
   async get(id: string): Promise<Record<string, unknown> | undefined> {
     if (!this.checkDatabaseAvailable()) {
       return Promise.resolve(undefined);
@@ -147,26 +189,28 @@ export class ObjectStore implements ObjectStoreContract {
       return results;
     }
 
+    const uniqueIds = ids.length > 1 ? Array.from(new Set(ids)) : ids;
+
     return new Promise((resolve, reject) => {
       try {
         const tx = this.db.transaction([this.storeName], 'readonly');
         const store = tx.objectStore(this.storeName);
         let completed = 0;
 
-        for (const id of ids) {
+        for (const id of uniqueIds) {
           const request = store.get(id);
           request.onsuccess = () => {
             if (request.result) {
               results.set(id, request.result);
             }
             completed++;
-            if (completed === ids.length) {
+            if (completed === uniqueIds.length) {
               resolve(results);
             }
           };
           request.onerror = () => {
             completed++;
-            if (completed === ids.length) {
+            if (completed === uniqueIds.length) {
               resolve(results);
             }
           };
@@ -295,7 +339,10 @@ export class ObjectStore implements ObjectStoreContract {
         request.onsuccess = () => { resolve(request.result); };
         request.onerror = () => { reject(request.error); };
       } catch (error) {
-        resolve([]);
+        // Reject when the index does not exist (e.g. NotFoundError) so callers
+        // fall back to a full store scan instead of treating a missing index as
+        // zero matching rows.
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }

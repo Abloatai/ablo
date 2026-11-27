@@ -91,10 +91,13 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
       const zodType = rawZodType as z.ZodType;
       const isOptional = zodType.isOptional();
       // A field is indexed if it is the foreign key of a
-      // `belongsTo({ index: true })` relation. A `description === 'indexed'` tag
-      // also works, for consumers using the `field.*().indexed()` builder.
+      // `belongsTo({ index: true })` relation, marked with `indexed()` /
+      // `field.*().indexed()` in the schema (`modelDef.fields[f].isIndexed`),
+      // or carries the legacy `description === 'indexed'` tag.
       const isIndexed =
-        indexedFields.has(fieldName) || zodType.description === 'indexed';
+        indexedFields.has(fieldName) ||
+        modelDef.fields[fieldName]?.isIndexed === true ||
+        zodType.description === 'indexed';
       // JSON-typed fields (per the schema's wire-type tag) are opaque blobs —
       // chart specs, rich-text documents, style maps. Deep reactivity on them
       // would walk every nested property and create an atom per leaf, producing a

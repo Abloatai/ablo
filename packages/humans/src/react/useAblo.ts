@@ -92,10 +92,10 @@ export function useAblo<
   // These dependencies define when the seed belongs to a different row.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const seed = useMemo(() => ({ received: false }), [engine, modelClient, id]);
-  const subscribe = useCallback((notify: () => void) => {
-    if (!engine) return () => undefined;
-    return engine.claims.onChange(notify);
-  }, [engine]);
+  const subscribe = useMemo(() => {
+    if (!engine || isSelectorOnly) return undefined;
+    return (notify: () => void) => engine.claims.onChange(notify);
+  }, [engine, isSelectorOnly]);
   // Stable while its inputs are, so re-renders keep the existing subscription and
   // cached snapshot. An inline selector still starts a new observation per render.
   const compute = useCallback((): T | useAblo.Result<T> | undefined => {

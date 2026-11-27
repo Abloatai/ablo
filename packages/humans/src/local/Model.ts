@@ -191,12 +191,16 @@ export abstract class Model {
     // record on every bootstrap (the reports gallery sorted everything to
     // "edited just now"). Fall back to createdAt instead; only a genuinely
     // new local model (no dates at all) stamps the current time.
+    // Fast path: when updatedAt === createdAt (common on fresh rows), reuse
+    // the already-parsed epoch ms instead of parsing the ISO string twice.
     this.updatedAt = data.updatedAt
       ? data.updatedAt instanceof Date
         ? data.updatedAt
-        : new Date(data.updatedAt)
+        : data.updatedAt === data.createdAt
+          ? new Date(this.createdAt.getTime())
+          : new Date(data.updatedAt)
       : data.createdAt
-        ? new Date(this.createdAt)
+        ? new Date(this.createdAt.getTime())
         : new Date();
     this.syncStatus = data.syncStatus ?? 'pending';
   }
@@ -333,6 +337,19 @@ export abstract class Model {
   }
 
   clearChanges(): void {
+    if (
+      this.modifiedProperties.size === 0 &&
+      this._originalData === undefined &&
+      this._originalDataStale
+    ) {
+      return;
+    }
+    if (!this._observabilityReady) {
+      this.modifiedProperties.clear();
+      this._originalData = undefined;
+      this._originalDataStale = true;
+      return;
+    }
     runInAction(() => {
       this.modifiedProperties.clear();
       this._originalData = undefined;
@@ -673,18 +690,29 @@ export abstract class Model {
       });
     }
 
-    runInAction(() => {
-      const originalTracking = this.modifiedProperties;
-      this.modifiedProperties = new Map();
+    if (!this._observabilityReady) {
+      // Cold model: no MobX observables or observe() bridge are installed yet,
+      // so skip the per-update runInAction closure and temporary Map allocation.
       this._isHydrating = true;
       try {
-        // No `onWrite` → this call records nothing itself.
         this.assignFieldsFromData(data);
       } finally {
         this._isHydrating = false;
-        this.modifiedProperties = originalTracking;
       }
-    });
+    } else {
+      runInAction(() => {
+        const originalTracking = this.modifiedProperties;
+        this.modifiedProperties = new Map();
+        this._isHydrating = true;
+        try {
+          // No `onWrite` → this call records nothing itself.
+          this.assignFieldsFromData(data);
+        } finally {
+          this._isHydrating = false;
+          this.modifiedProperties = originalTracking;
+        }
+      });
+    }
 
     if (!this._isNew) {
       this._originalData = undefined;
@@ -795,7 +823,7 @@ export abstract class Model {
    * across model types) that reads fields by name string.
    */
   getField(name: string): unknown {
-    return Reflect.get(this, name);
+    return (this as Record<string, unknown>)[name];
   }
 
   equals(other: Model): boolean {

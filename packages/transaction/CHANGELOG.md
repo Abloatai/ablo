@@ -1,5 +1,15 @@
 # @abloatai/transaction
 
+## 0.67.6
+
+### HTTP errors identify the rejected parameter
+
+The transaction client exposes the rejected parameter as `error.param` when the server supplies it, for example when a pagination cursor is invalid.
+
+## 0.67.5
+
+This release accompanies the 0.67.5 SDK family. The HTTP API is unchanged.
+
 ## 0.67.4
 
 ### Accepted creates wait for their readable result

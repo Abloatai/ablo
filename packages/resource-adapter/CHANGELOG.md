@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.11
+
+The adapter uses transaction 0.67.6 to remain aligned with the SDK family.
+
+## 0.1.10
+
+The adapter uses transaction 0.67.5 to remain aligned with the SDK family.
+
 ## 0.1.9
 
 The adapter uses transaction 0.67.4 for the updated client validation and read-evidence behavior.

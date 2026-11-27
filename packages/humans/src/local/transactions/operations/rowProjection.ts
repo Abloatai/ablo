@@ -11,22 +11,47 @@ export function projectModelRow(model: Model, server: Record<string, unknown>, p
     model.markAsSynced();
     return model;
   }
-  const local = model.getChanges();
-  for (const tx of pending) {
-    if (tx.modelId !== model.id || tx.modelName !== model.getModelName() || tx.type !== 'update') continue;
-    for (const [field, value] of Object.entries(tx.data ?? {})) {
-      const relative = typeof value === 'object' && value !== null && ('$text' in value || '$increment' in value);
-      local[field] = relative ? Reflect.get(model, field) : value;
+
+  // Fast path: no pending transactions and no local dirty edits (the
+  // overwhelming majority of catch-up and live remote updates). Avoids
+  // allocating intermediate `local`, `getChanges()`, `Object.keys()`, and
+  // `{ ...server }` copies on every row.
+  if (pending.length === 0 && !model.hasChanges) {
+    model.updateFromData(projection ? { ...server, ...projection } : server);
+    model.clearChanges();
+    model.markAsSynced();
+    return model;
+  }
+
+  const local: Record<string, unknown> = {};
+  let hasLocal = false;
+  if (pending.length > 0) {
+    const modelId = model.id;
+    const modelName = model.getModelName();
+    for (const tx of pending) {
+      if (tx.modelId !== modelId || tx.modelName !== modelName || tx.type !== 'update') continue;
+      const txData = tx.data;
+      if (!txData) continue;
+      for (const [field, value] of Object.entries(txData)) {
+        const relative = typeof value === 'object' && value !== null && ('$text' in value || '$increment' in value);
+        local[field] = relative ? Reflect.get(model, field) : value;
+        hasLocal = true;
+      }
     }
   }
-  if (Object.keys(local).length > 0) {
-    const merged = { ...server, ...local, ...projection };
+  // Unstaged edits happened after the already-frozen queued writes.
+  if (model.hasChanges) {
+    Object.assign(local, model.getChanges());
+    hasLocal = true;
+  }
+  if (hasLocal) {
+    const merged = projection ? { ...server, ...local, ...projection } : { ...server, ...local };
     if (server.updatedAt || model.updatedAt) {
       merged.updatedAt = new Date(Math.max(toEpochMs(model.updatedAt), toEpochMs(server.updatedAt)));
     }
     model.updateFromData(merged);
   } else {
-    model.updateFromData({ ...server, ...projection });
+    model.updateFromData(projection ? { ...server, ...projection } : server);
     model.clearChanges();
     model.markAsSynced();
   }

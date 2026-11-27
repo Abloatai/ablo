@@ -188,6 +188,31 @@ export function startStoreLifecycle<S extends SchemaRecord>(
     }
 
     _readyPromise = (async () => {
+      // Warm `ablo_databases` in parallel with network auth on every startup.
+      // When `hydrateBeforeAuth` is opted in, also open the unique schema-matching
+      // local replica and hydrate instant models so warm reloads paint before
+      // credential minting and `/auth/identity` settle.
+      const optimisticHydration: Promise<void> = internalOptions.hydrateBeforeAuth
+        ? (async () => {
+            try {
+              const info = await components.database.openOptimistic?.({
+                projectId: internalOptions.projectId,
+                branchId: internalOptions.branchId,
+                participantKind: kind,
+              });
+              if (!info) return;
+              await syncClient.hydrateFromDatabase();
+              if (components.objectPool.size > 0) {
+                store.markOptimisticDataReady();
+              }
+            } catch (err) {
+              logger.debug('[sync-engine] optimistic pre-auth hydration skipped', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          })()
+        : (components.database.warmMetaDatabase?.().catch(() => undefined) ?? Promise.resolve());
+
       try {
         // Mint the first access credential before we connect, so the initial
         // WebSocket upgrade and bootstrap carry a valid bearer (no tokenless first
@@ -311,6 +336,10 @@ export function startStoreLifecycle<S extends SchemaRecord>(
           );
         }
 
+        // Wait for any in-flight optimistic pre-auth hydration to settle before
+        // `store.initialize()` verifies and promotes (or clears) the local replica.
+        await optimisticHydration;
+
         const gen = store.initialize({
           userId,
           organizationId: accountScope,
@@ -343,6 +372,12 @@ export function startStoreLifecycle<S extends SchemaRecord>(
 
         logger.info('Sync engine ready', { models: Object.keys(schema.models).length });
       } catch (err) {
+        // Ensure any speculative pre-auth local data is cleared before surfacing
+        // an auth/startup failure so unauthenticated sessions never retain rows.
+        await optimisticHydration;
+        if (components.database.isOptimisticOpen?.()) {
+          await store.clearOptimisticData().catch(() => undefined);
+        }
         // Coerce so the rejection a consumer awaiting `ready()` catches is
         // always an AbloError — connection setup is held to the same
         // never-leak-untagged contract as the model operations.

@@ -14,7 +14,6 @@ import { ModelOperationRuntime, projectModelRow, createModelChangePublisher } fr
 import type { TextOperation } from '@abloatai/transaction/commit';
 import { InstanceCache, ModelScope } from './InstanceCache.js';
 import { Model } from './Model.js';
-import type { ModelData } from '@abloatai/transaction/types/modelData';
 import type { AppliedChange } from '../plugin.js';
 import { deepEqual, snapshotJsonValue } from '@abloatai/transaction/utils/json';
 // ModelRegistry instance accessed via this.objectPool.registry
@@ -46,7 +45,6 @@ import { createReconnectDrain } from './transactions/reconnectDrain.js';
 import { DatabaseCommitOutboxStore } from './transactions/databaseCommitOutbox.js';
 import {
   type CompletedTransaction,
-  type EventHandler,
   type RehydrationStats,
   type SyncEvent,
   type SyncObserver,
@@ -119,7 +117,7 @@ export class SyncClient extends EventEmitter {
       read: (kind, target) => this.mutationQueue.waitForOperationAncestors(target.model, target.id, target.field).then(() => read(kind, target)),
       publish: (name, id, patch) => {
         const model = this.objectPool.peek(id);
-        if (!model || model.getModelName() !== name || this.isDisposed || model.disposed || this.pendingDeletes.has(id)) return;
+        if (model?.getModelName() !== name || this.isDisposed || model.disposed || this.pendingDeletes.has(id)) return;
         model.updateFromData(patch);
         this.notifyObservers({ type: 'update', modelType: name, model, modelId: id });
       },
@@ -541,11 +539,19 @@ export class SyncClient extends EventEmitter {
   private noteOwnWritePositions(tx: CompletedTransaction): void {
     const position = tx.lastSyncId ?? tx.syncIdNeededForCompletion;
     if (position === undefined) return;
-    const rowIds =
-      tx.operations !== undefined ? tx.operations.map((op) => op.id) : [tx.modelId];
-    for (const rowId of rowIds) {
-      const row = this.objectPool.peek(rowId);
-      if (row) this.objectPool.watermarks.advance(row, position);
+    const updates = tx.operations !== undefined
+      ? tx.operations.map((op) => ({ id: op.id, data: op.input }))
+      : [{ id: tx.modelId, data: tx.data }];
+    for (const { id, data } of updates) {
+      const row = this.objectPool.peek(id);
+      if (!row) continue;
+      // Relative text/counter inputs are operations, not confirmed field values.
+      const fields = this.runtime.getModelMetadata(row.getModelName())?.fields;
+      const confirmed = Object.fromEntries(Object.entries(data ?? {}).filter(([field, value]) =>
+        !fields?.[field]?.merge || typeof value !== 'object' || value === null ||
+        !('$text' in value || '$increment' in value),
+      ));
+      this.objectPool.watermarks.acknowledge(row, position, confirmed);
     }
   }
 
@@ -740,32 +746,54 @@ export class SyncClient extends EventEmitter {
       createMs: string;
     }[] = [];
 
+    let batchedRows: Map<string, Record<string, unknown>[]> | null = null;
+    if (typeof this.database.hydrateModelBatch === 'function') {
+      try {
+        batchedRows = await this.database.hydrateModelBatch(modelTypes);
+      } catch (batchError) {
+        this.runtime.observability.captureBootstrapFailure(batchError, { type: 'hydrate-batch' });
+      }
+    }
+    const afterBatchFetch = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
     for (const modelType of modelTypes) {
       const typeStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
       try {
-        const rawData = await this.database.hydrateModels(modelType);
-        const afterFetch = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const rawData = batchedRows
+          ? (batchedRows.get(modelType) ?? [])
+          : await this.database.hydrateModels(modelType);
+        const afterFetch = batchedRows
+          ? afterBatchFetch
+          : (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
         const modelsForType: Model[] = [];
         const recordsToHeal: { id: string; data: Record<string, unknown> }[] = [];
+        const ModelClass = this.objectPool.registry.getModelByName(modelType);
+        const meta = this.objectPool.registry.getMetadata(modelType);
+        const needsHealCheck = (meta?.autoFill?.length ?? 0) > 0 || (meta?.requiredFields?.length ?? 0) > 0;
 
         for (const data of rawData) {
-          let withType =
-            data && typeof data === 'object' && !data.__typename
-              ? { __typename: modelType, ...data }
-              : data;
+          let row = data;
 
           // Self-healing: Fix corrupted IndexedDB records missing essential fields
-          const healResult = this.healModelRecord(modelType, withType);
-          if (healResult === null) {
-            continue; // Record is corrupted beyond repair — skip
-          }
-          withType = healResult.data;
-          if (healResult.healed) {
-            recordsToHeal.push({ id: healResult.data.id as string, data: healResult.data });
+          if (needsHealCheck) {
+            const healResult = this.healModelRecord(modelType, row);
+            if (healResult === null) {
+              continue; // Record is corrupted beyond repair — skip
+            }
+            row = healResult.data;
+            if (healResult.healed) {
+              recordsToHeal.push({ id: healResult.data.id as string, data: healResult.data });
+            }
           }
 
-          const model = this.objectPool.createFromData(withType);
+          // Build cold models during startup hydration; InstanceCache activates
+          // MobX observability lazily on first read so unopened rows never block
+          // first paint.
+          const model = this.objectPool.createFromData(row, ModelClass, {
+            deferObservability: true,
+            modelName: modelType,
+          });
 
           if (model) {
             modelsForType.push(model);
@@ -872,59 +900,119 @@ export class SyncClient extends EventEmitter {
       return meta?.loadStrategy === LoadStrategy.instant;
     });
 
-    // ── Phase 1: Read from IndexedDB & create model instances (async I/O) ──
-    const allModels: Model[] = [];
-    const idbIdsByType = new Map<string, Set<string>>();
-    let healedCount = 0;
-    let skippedCount = 0;
+    // ── Phase 1: Read from IndexedDB (single batched readonly tx when available) ──
+    let batchedRows: Map<string, Record<string, unknown>[]> | null = null;
+    if (typeof this.database.hydrateModelBatch === 'function') {
+      try {
+        batchedRows = await this.database.hydrateModelBatch(modelTypes);
+      } catch (batchError) {
+        this.runtime.observability.captureBootstrapFailure(batchError, { type: 'rehydrate-batch' });
+      }
+    }
 
+    const fetchedByType = new Map<string, Record<string, unknown>[]>();
     for (const modelType of modelTypes) {
       try {
-        const rawData = await this.database.hydrateModels(modelType);
+        const rawData = batchedRows
+          ? (batchedRows.get(modelType) ?? [])
+          : await this.database.hydrateModels(modelType);
+        fetchedByType.set(modelType, rawData);
+      } catch (error) {
+        this.runtime.observability.captureBootstrapFailure(error, { type: `rehydrate-${modelType}` });
+      }
+    }
+
+    // ── Phase 2 & 3: Materialize, upsert, and reconcile ghosts in one MobX action ──
+    let addedCount = 0;
+    let updatedCount = 0;
+    let removedCount = 0;
+    let healedCount = 0;
+    let skippedCount = 0;
+    const ghostIds: string[] = [];
+
+    runInAction(() => {
+      const newModels: Model[] = [];
+      const updatedModels: Model[] = [];
+      const idbIdsByType = new Map<string, Set<string>>();
+      const poolInitiallyEmpty = this.objectPool.size === 0;
+      const needsResidentPass = this.objectPool.needsResidentUpdatePass();
+
+      for (const [modelType, rawData] of fetchedByType) {
         const idsForType = new Set<string>();
         idbIdsByType.set(modelType, idsForType);
 
+        const ModelClass = this.objectPool.registry.getModelByName(modelType);
+        const meta = this.objectPool.registry.getMetadata(modelType);
+        const needsHealCheck = (meta?.autoFill?.length ?? 0) > 0 || (meta?.requiredFields?.length ?? 0) > 0;
+
         for (const data of rawData) {
-          let withType =
-            data && typeof data === 'object' && !data.__typename
-              ? { __typename: modelType, ...data }
-              : data;
+          let row = data;
 
           // Self-healing
-          const healResult = this.healModelRecord(modelType, withType);
-          if (healResult === null) {
-            skippedCount++;
-            continue;
-          }
-          withType = healResult.data;
-          if (healResult.healed) {
-            healedCount++;
-            // Persist heal back to IndexedDB (fire-and-forget)
-            if (this.database) {
-              const id = healResult.data.id as string;
-              const healedData = healResult.data;
-              // void is safe: the handler's body is fully try/catch'd.
-              void Promise.resolve().then(async () => {
-                try {
-                  await this.database.putRecord(modelType, id, healedData);
-                } catch {
-                  // Non-critical — will heal again next time
-                }
-              });
+          if (needsHealCheck) {
+            const healResult = this.healModelRecord(modelType, row);
+            if (healResult === null) {
+              skippedCount++;
+              continue;
+            }
+            row = healResult.data;
+            if (healResult.healed) {
+              healedCount++;
+              // Persist heal back to IndexedDB (fire-and-forget)
+              if (this.database) {
+                const id = healResult.data.id as string;
+                const healedData = healResult.data;
+                // void is safe: the handler's body is fully try/catch'd.
+                void Promise.resolve().then(async () => {
+                  try {
+                    await this.database.putRecord(modelType, id, healedData);
+                  } catch {
+                    // Non-critical — will heal again next time
+                  }
+                });
+              }
             }
           }
 
           // Register ID before createFromData — prevents ghost removal
           // if createFromData fails for a record that exists in IDB
-          const recordId = (withType as Record<string, unknown>).id as string | undefined;
+          const recordId = row.id as string | undefined;
+          const duplicateInStore = recordId !== undefined && idsForType.has(recordId);
           if (recordId) {
             idsForType.add(recordId);
           }
 
+          const existing = !poolInitiallyEmpty && recordId ? this.objectPool.peek(recordId) : undefined;
+          if (existing?.getModelName() === modelType) {
+            try {
+              existing.updateFromData(row);
+              if (needsResidentPass) updatedModels.push(existing);
+              else updatedCount++;
+            } catch (error) {
+              this.runtime.observability.breadcrumb(
+                'Model update failed during rehydration',
+                'sync.bootstrap',
+                'warning',
+                {
+                  modelType,
+                  modelId: recordId?.slice(0, 8) ?? 'unknown',
+                  error: error instanceof Error ? error.message : String(error),
+                }
+              );
+              skippedCount++;
+            }
+            continue;
+          }
+
           try {
-            const model = this.objectPool.createFromData(withType);
+            const model = this.objectPool.createFromData(row, ModelClass, {
+              deferObservability: true,
+              modelName: modelType,
+              skipExistingCheck: true,
+            });
             if (model) {
-              allModels.push(model);
+              if (duplicateInStore) updatedModels.push(model);
+              else newModels.push(model);
             }
           } catch (error) {
             this.runtime.observability.breadcrumb(
@@ -940,39 +1028,33 @@ export class SyncClient extends EventEmitter {
             skippedCount++;
           }
         }
-      } catch (error) {
-        this.runtime.observability.captureBootstrapFailure(error, { type: `rehydrate-${modelType}` });
       }
-    }
 
-    // ── Phase 2: Upsert batch (single MobX action) ──
-    // createFromData already calls updateFromData() on existing models,
-    // so existing models are up-to-date. Upsert adds the new ones and
-    // updates scope for any that changed.
-    const beforeSize = this.objectPool.size;
-    this.objectPool.upsertBatch(allModels, ModelScope.live);
-    const addedCount = this.objectPool.size - beforeSize;
-    const updatedCount = allModels.length - addedCount;
+      const beforeSize = this.objectPool.size;
+      if (newModels.length > 0) this.objectPool.addBatch(newModels, ModelScope.live);
+      if (updatedModels.length > 0) this.objectPool.upsertBatch(updatedModels, ModelScope.live);
+      addedCount = this.objectPool.size - beforeSize;
+      updatedCount += newModels.length + updatedModels.length - addedCount;
 
-    // ── Phase 3: Reconcile ghost deletions (single MobX action) ──
-    // Only reconcile types that were rehydrated — never touch lazy-loaded types.
-    const ghostIds: string[] = [];
+      // Reconcile ghost deletions — only types that were rehydrated.
+      for (const modelType of modelTypes) {
+        const idbIds = idbIdsByType.get(modelType);
+        if (!idbIds) continue; // Type had an error during fetch — don't reconcile
 
-    for (const modelType of modelTypes) {
-      const idbIds = idbIdsByType.get(modelType);
-      if (!idbIds) continue; // Type had an error during fetch — don't reconcile
+        const poolIds = this.objectPool.getIdsByModelType(modelType);
+        if (!poolIds) continue;
 
-      const poolIds = this.objectPool.getIdsByModelType(modelType);
-      if (!poolIds) continue;
-
-      for (const poolId of poolIds) {
-        if (!idbIds.has(poolId)) {
-          ghostIds.push(poolId);
+        for (const poolId of poolIds) {
+          if (!idbIds.has(poolId)) {
+            ghostIds.push(poolId);
+          }
         }
       }
-    }
 
-    const removedCount = this.objectPool.removeBatch(ghostIds);
+      if (ghostIds.length > 0) {
+        removedCount = this.objectPool.removeBatch(ghostIds);
+      }
+    });
 
     // ── Phase 4: Stats & logging ──
     const totalEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -1243,15 +1325,32 @@ export class SyncClient extends EventEmitter {
    * local model has unsynced changes, so the two sides stay consistent.
    */
   resolveConflicts(localModel: Model, serverData: Record<string, unknown>): Model {
-    const projection = this.preparedOperationRows?.get(JSON.stringify([localModel.getModelName(), localModel.id]));
-    if (projection) return projectModelRow(localModel, serverData, this.mutationQueue.getOutstandingTransactions(), projection);
-    const materialized = { ...serverData };
-    if (serverData.deletedAt == null && serverData.archivedAt == null && serverData.isActive !== false) {
-      for (const field of this.modelOperations?.retainedFields(localModel.getModelName(), localModel.id) ?? []) {
-        materialized[field] = Reflect.get(localModel, field);
+    const pending =
+      this.mutationQueue.getOutstandingTransactionCount() > 0
+        ? this.mutationQueue.getOutstandingTransactions()
+        : [];
+    if (this.preparedOperationRows) {
+      const projection = this.preparedOperationRows.get(
+        JSON.stringify([localModel.getModelName(), localModel.id]),
+      );
+      if (projection) {
+        return projectModelRow(localModel, serverData, pending, projection);
       }
     }
-    const result = projectModelRow(localModel, materialized, this.mutationQueue.getOutstandingTransactions());
+    if (!this.modelOperations) {
+      return projectModelRow(localModel, serverData, pending);
+    }
+    let materialized = serverData;
+    if (serverData.deletedAt == null && serverData.archivedAt == null && serverData.isActive !== false) {
+      const retained = this.modelOperations.retainedFields(localModel.getModelName(), localModel.id);
+      if (retained.length > 0) {
+        materialized = { ...serverData };
+        for (const field of retained) {
+          materialized[field] = Reflect.get(localModel, field);
+        }
+      }
+    }
+    const result = projectModelRow(localModel, materialized, pending);
     if (serverData.deletedAt == null && serverData.archivedAt == null && serverData.isActive !== false) {
       this.reconcileModelOperations(localModel);
     }
@@ -1400,7 +1499,7 @@ export class SyncClient extends EventEmitter {
         transactionId,
         correlationId,
       );
-    } catch (e) {
+    } catch {
       this.runtime.observability.breadcrumb(
         'Failed to notify delta received',
         'sync.transaction',
@@ -1635,6 +1734,9 @@ export class SyncClient extends EventEmitter {
   projectDeltaBatchForPool(
     dbResults: readonly AppliedChange[],
   ): readonly AppliedChange[] {
+    if (dbResults.length === 0 || this.objectPool.hasCapacityFor(dbResults.length)) {
+      return dbResults;
+    }
     const idsBeingRemoved = new Set<string>();
     const freshAddTypes = new Set<string>();
     let freshAddCount = 0;
@@ -1677,28 +1779,32 @@ export class SyncClient extends EventEmitter {
     enrichRelations: (modelName: string, data: Record<string, unknown>) => Record<string, unknown>,
   ): void {
     const modelsToAdd: Model[] = [];
+    // Rows created earlier in this batch reach the pool only after the loop;
+    // a later update of the same row must replace the pending add, not miss it.
+    const pendingAddIndex = new Map<string, number>();
     const modelsToUpsert: Model[] = [];
     const idsToRemove: string[] = [];
     const idsToArchive: string[] = [];
 
-    // Pre-pass: collect every id slated for `remove` in this batch. The
-    // parent-delete flicker came from this exact pattern: a peer (or the
-    // user themself) deletes a parent with N children; the commit produces
-    // BOTH residual `update` deltas (from the optimistic edits that
-    // happened just before the delete) AND `remove` deltas. The
-    // `update` branch below would `createFromData` the row back into
-    // the pool when `existing` was already gone (optimistic remove
-    // happened), and the next loop iteration's `remove` would strip
-    // it again — net effect: pool transitions live → gone → live →
-    // gone in one tick, which the renderer catches mid-frame as a
-    // flicker. Filter ops on doomed ids before they touch the pool.
-    const idsBeingRemoved = new Set<string>();
+    // Pre-pass: collect every id slated for `remove` in this batch (lazily
+    // allocated so batches with no deletes skip the Set entirely).
+    let idsBeingRemoved: Set<string> | null = null;
     for (const r of dbResults) {
-      if (r.action === 'remove') idsBeingRemoved.add(r.modelId);
+      if (r.action === 'remove') {
+        idsBeingRemoved ??= new Set<string>();
+        idsBeingRemoved.add(r.modelId);
+      }
     }
 
-    for (const result of dbResults) {
+    // 1-entry cache for constructor lookup (most catch-up frames are homogeneous by type).
+    let cachedModelName = '';
+    let cachedModelClass: (new (data: Record<string, unknown>) => Model) | undefined;
+    const changedTypes = new Set<string>();
+    const needsResidentPass = this.objectPool.needsResidentUpdatePass();
+
+    for (let result of dbResults) {
       const { modelName, modelId, action, transactionId, syncId } = result;
+      changedTypes.add(modelName);
 
       // Fence reads begun after the optimistic delete, including peer deletes.
       if (action === 'remove') this.emit('sync:delete', modelId);
@@ -1706,22 +1812,21 @@ export class SyncClient extends EventEmitter {
       // Every delta names the log position the row now reflects — recorded
       // before echo detection, because an own echo is exactly a position the
       // pooled row has reached even though its fields are not re-applied.
+      // Resolved once via `peek` and reused in `add`/`update` below.
       const resident = this.objectPool.peek(modelId);
-      if (resident) this.objectPool.watermarks.advance(resident, syncId);
+      if (resident) {
+        if (result.data) {
+          const projected = this.objectPool.watermarks.project(resident, result.data, syncId);
+          if (projected !== result.data) result = { ...result, data: projected };
+        }
+        this.objectPool.watermarks.advance(resident, syncId);
+      }
 
       // Own lifecycle echoes must not resurrect optimistically deleted rows.
       // Update echoes still reconcile: reconnect catch-up may have replaced
       // the optimistic fields after staging consumed their dirty flags.
-      if (this.echoTracker.consumeEcho(transactionId)) {
+      if (transactionId !== undefined && this.echoTracker.consumeEcho(transactionId)) {
         if (action === 'remove') this.pendingDeletes.delete(modelId);
-        // A direct assignment can re-enter change tracking while this
-        // optimistic write is in flight. Leaving the acknowledged field dirty
-        // makes conflict resolution preserve it over the next collaborator
-        // delta, so peers appear desynchronized until refresh.
-        //
-        // Re-baseline only values this echo actually confirms. If the user has
-        // edited the same field again since the write was sent, its current
-        // dirty value differs from the echo and remains queued.
         if (resident && result.data) {
           const acknowledgedFields: string[] = [];
           for (const [field, change] of resident.modifiedProperties) {
@@ -1733,9 +1838,10 @@ export class SyncClient extends EventEmitter {
             }
           }
           resident.consumeModifiedFields(acknowledgedFields);
-          if (action === 'update' && !resident.disposed && !idsBeingRemoved.has(modelId)) {
+          if (action === 'update' && !resident.disposed && !idsBeingRemoved?.has(modelId)) {
             enrichRelations(modelName, result.data);
-            modelsToUpsert.push(this.resolveConflicts(resident, result.data));
+            const resolved = this.resolveConflicts(resident, result.data);
+            if (needsResidentPass) modelsToUpsert.push(resolved);
           }
           resident.markAsSynced();
         }
@@ -1743,42 +1849,57 @@ export class SyncClient extends EventEmitter {
       }
 
       // If a later op in this batch will remove this id, skip earlier
-      // add/update ops on it. Server FK ordering can produce
-      // U(child)+D(child) when an optimistic edit and a delete both
-      // commit in the same window; only the final state matters.
-      if ((action === 'add' || action === 'update') && idsBeingRemoved.has(modelId)) {
+      // add/update ops on it.
+      if ((action === 'add' || action === 'update') && idsBeingRemoved?.has(modelId)) {
         continue;
       }
 
       switch (action) {
         case 'add': {
-          // `peek`, not `get`: this loop is ingestion, not a consumer read.
-          // `get()` activates deferred MobX instrumentation, so reading
-          // through it here made the delta stream itself instrument every
-          // row it touched — the dominant term of apply cost for rows no
-          // consumer observes. Activation belongs to the consumer-facing
-          // reads (`get`, views, subscribers), which are unchanged.
-          const existing = this.objectPool.peek(modelId);
-          if (existing) {
-            existing.markAsSynced();
+          if (resident) {
+            resident.markAsSynced();
           } else if (result.data) {
-            const data = enrichRelations(modelName, { ...result.data, __typename: modelName });
-            const model = this.objectPool.createFromData(data, undefined, {
+            if (modelName !== cachedModelName) {
+              cachedModelName = modelName;
+              cachedModelClass = this.objectPool.registry.getModelByName(modelName);
+            }
+            const data = enrichRelations(modelName, result.data);
+            const model = this.objectPool.createFromData(data, cachedModelClass, {
               deferObservability: true,
+              modelName,
+              skipExistingCheck: true,
             });
             if (model) {
               this.objectPool.watermarks.advance(model, syncId);
-              modelsToAdd.push(model);
+              pendingAddIndex.set(modelId, modelsToAdd.push(model) - 1);
             }
           }
           break;
         }
         case 'update': {
-          const existing = this.objectPool.peek(modelId);
-          if (existing && !existing.disposed && result.data) {
+          if (resident && !resident.disposed && result.data) {
             enrichRelations(modelName, result.data);
-            const resolved = this.resolveConflicts(existing, result.data);
-            modelsToUpsert.push(resolved);
+            const resolved = this.resolveConflicts(resident, result.data);
+            if (needsResidentPass) modelsToUpsert.push(resolved);
+          } else if (!resident && result.data) {
+            const pending = pendingAddIndex.get(modelId);
+            if (pending !== undefined) {
+              if (modelName !== cachedModelName) {
+                cachedModelName = modelName;
+                cachedModelClass = this.objectPool.registry.getModelByName(modelName);
+              }
+              // The store merged this update into the full row; rebuild the add from it.
+              const data = enrichRelations(modelName, result.data);
+              const model = this.objectPool.createFromData(data, cachedModelClass, {
+                deferObservability: true,
+                modelName,
+                skipExistingCheck: true,
+              });
+              if (model) {
+                this.objectPool.watermarks.advance(model, syncId);
+                modelsToAdd[pending] = model;
+              }
+            }
           }
           // Trust the optimistic delete. A later bootstrap or resync can reconcile
           // if the server still considers the row alive.
@@ -1792,17 +1913,6 @@ export class SyncClient extends EventEmitter {
           idsToArchive.push(modelId);
           break;
         case 'verify':
-          // `verify` is `Database.processDeltaBatch`'s signal for a delta
-          // whose IDB store transaction FAILED. Pool isn't updated for
-          // this delta — by design, since the persisted view doesn't
-          // reflect it either — and the persistence-gated cursor in
-          // `BaseSyncedStore.flushPendingDeltas` will NOT ack past it,
-          // so the next 30s catch-up poll (or reconnect handshake) will
-          // re-fetch and re-apply. Logged here so silent IDB failures
-          // are observable instead of disappearing into a default switch
-          // fall-through.
-          // Self-healing: the next catch-up poll / reconnect re-fetches and
-          // re-applies this delta, so it's forensic, not consumer-actionable → debug.
           this.runtime.logger.debug('[SyncClient.applyDeltaBatchToPool] skipping pool op for unpersisted delta', {
             modelName,
             modelId: modelId.slice(0, 12),
@@ -1811,20 +1921,12 @@ export class SyncClient extends EventEmitter {
       }
     }
 
-    // Reveal the whole frame at one reaction boundary: the caller's single
-    // action covers the collection loop above and these batch pool writes, so
-    // dependents recompute exactly once regardless of how many models or
-    // operation kinds the frame touched, and the app never observes a
-    // partially applied frame.
+    // Reveal the whole frame at one reaction boundary.
     if (modelsToAdd.length > 0) this.objectPool.addBatch(modelsToAdd, ModelScope.live);
     if (modelsToUpsert.length > 0) this.objectPool.upsertBatch(modelsToUpsert, ModelScope.live);
     if (idsToRemove.length > 0) this.objectPool.removeBatch(idsToRemove);
     for (const id of idsToArchive) this.objectPool.updateScope(id, ModelScope.archived);
 
-    // Emit changed model types so QueryProcessor can auto-invalidate.
-    // Kept inside the action so any observable query-cache state it
-    // flips is part of the same atomic reveal.
-    const changedTypes = new Set(dbResults.map(r => r.modelName));
     if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
   }
 
@@ -1848,89 +1950,134 @@ export class SyncClient extends EventEmitter {
     if (!bootstrapData.models) {
       return { added: 0, updated: 0, removed: 0, skipped: 0, healed: 0 };
     }
+    const modelsRecord = bootstrapData.models;
     const snapshotPosition = bootstrapData.lastSyncId;
+    const isScoped = options?.scoped === true;
 
-    const allModels: Model[] = [];
-    const serverIdsByType = new Map<string, Set<string>>();
+    let addedCount = 0;
+    let updatedCount = 0;
+    let removedCount = 0;
     let healedCount = 0;
     let skippedCount = 0;
 
-    const failedTypes = new Set(bootstrapData.failedModels ?? []);
+    // Run the entire bootstrap materialization — model updates, bulk pool
+    // insertion, ghost removal, and `models:changed` emission — inside a single
+    // MobX action so observers recompute once rather than per updated row.
+    runInAction(() => {
+      const newModels: Model[] = [];
+      const updatedModels: Model[] = [];
+      const serverIdsByType = isScoped ? null : new Map<string, Set<string>>();
+      const failedTypes = bootstrapData.failedModels?.length
+        ? new Set(bootstrapData.failedModels)
+        : null;
+      const poolInitiallyEmpty = this.objectPool.size === 0;
+      const needsResidentPass = this.objectPool.needsResidentUpdatePass();
 
-    for (const [modelType, records] of Object.entries(bootstrapData.models)) {
-      if (failedTypes.has(modelType)) continue;
+      for (const [modelType, records] of Object.entries(modelsRecord)) {
+        if (failedTypes?.has(modelType)) continue;
 
-      const idsForType = new Set<string>();
-      serverIdsByType.set(modelType, idsForType);
+        const idsForType = new Set<string>();
+        serverIdsByType?.set(modelType, idsForType);
 
-      if (!Array.isArray(records) || records.length === 0) continue;
+        if (!Array.isArray(records) || records.length === 0) continue;
 
-      for (const rawRecord of records) {
-        if (!rawRecord || typeof rawRecord !== 'object') { skippedCount++; continue; }
+        const ModelClass = this.objectPool.registry.getModelByName(modelType);
+        const meta = this.objectPool.registry.getMetadata(modelType);
+        const needsHealCheck = (meta?.autoFill?.length ?? 0) > 0 || (meta?.requiredFields?.length ?? 0) > 0;
 
-        let data = rawRecord as Record<string, unknown>;
-        if (!data.__typename) data = { __typename: modelType, ...data };
-
-        const healResult = this.healModelRecord(modelType, data);
-        if (healResult === null) { skippedCount++; continue; }
-        data = healResult.data;
-        if (healResult.healed) healedCount++;
-
-        const recordId = data.id as string | undefined;
-        if (recordId) idsForType.add(recordId);
-
-        // Scoped backfill for the hydrate-on-enter path: a subset snapshot is
-        // taken at a server watermark. If a concurrent live delta already
-        // advanced this row past the snapshot, skip it. `createFromData`
-        // mutates the pooled model in place to keep instances alive, so this
-        // guard has to run before it; a guard at the upsert layer would be too
-        // late, because the row would already be clobbered.
-        if (options?.scoped && recordId) {
-          const existing = this.objectPool.peek(recordId);
-          if (existing && this.objectPool.watermarks.isAheadOf(existing, snapshotPosition)) {
+        for (const rawRecord of records) {
+          if (!rawRecord || typeof rawRecord !== 'object') {
             skippedCount++;
             continue;
           }
-        }
 
-        try {
-          const model = this.objectPool.createFromData(data);
-          if (model) {
-            this.objectPool.watermarks.advance(model, snapshotPosition);
-            allModels.push(model);
+          let data = rawRecord as Record<string, unknown>;
+          if (needsHealCheck) {
+            const healResult = this.healModelRecord(modelType, data);
+            if (healResult === null) {
+              skippedCount++;
+              continue;
+            }
+            data = healResult.data;
+            if (healResult.healed) healedCount++;
           }
-        } catch {
-          skippedCount++;
+
+          const recordId = data.id as string | undefined;
+          const duplicateInSnapshot = recordId !== undefined && idsForType.has(recordId);
+          if (recordId) idsForType.add(recordId);
+
+          // Check pool via `peek` (never `get`), keeping cold rows cold until
+          // a consumer actually reads them.
+          const existing = !poolInitiallyEmpty && recordId ? this.objectPool.peek(recordId) : undefined;
+          if (existing) {
+            if (isScoped && this.objectPool.watermarks.isAheadOf(existing, snapshotPosition)) {
+              skippedCount++;
+              continue;
+            }
+            if (existing.getModelName() === modelType) {
+              try {
+                existing.updateFromData(data);
+                this.objectPool.watermarks.advance(existing, snapshotPosition);
+                if (needsResidentPass) updatedModels.push(existing);
+                else updatedCount++;
+              } catch {
+                skippedCount++;
+              }
+              continue;
+            }
+          }
+
+          try {
+            // Defer MobX per-field instrumentation on bootstrap rows just like
+            // `hydrateFromDatabase` and `applyDeltaBatchToPool`: every consumer
+            // boundary (`get`, `getByType`, `getByForeignKey`, subscribers,
+            // views) activates rows lazily on first touch.
+            const model = this.objectPool.createFromData(data, ModelClass, {
+              deferObservability: true,
+              modelName: modelType,
+              skipExistingCheck: true,
+            });
+            if (model) {
+              this.objectPool.watermarks.advance(model, snapshotPosition);
+              if (duplicateInSnapshot) {
+                updatedModels.push(model);
+              } else {
+                newModels.push(model);
+              }
+            }
+          } catch {
+            skippedCount++;
+          }
         }
       }
-    }
 
-    // Upsert. The scoped stale-skip above already guarded the version, so a
-    // plain upsert is correct here for both paths.
-    const beforeSize = this.objectPool.size;
-    this.objectPool.upsertBatch(allModels, ModelScope.live);
-    const addedCount = this.objectPool.size - beforeSize;
-    const updatedCount = allModels.length - addedCount;
+      const beforeSize = this.objectPool.size;
+      if (newModels.length > 0) {
+        this.objectPool.addBatch(newModels, ModelScope.live);
+      }
+      if (updatedModels.length > 0) {
+        this.objectPool.upsertBatch(updatedModels, ModelScope.live);
+      }
+      addedCount = this.objectPool.size - beforeSize;
+      updatedCount += newModels.length + updatedModels.length - addedCount;
 
-    // Ghost removal: drop pool entities absent from the server snapshot. This
-    // is valid only for a full bootstrap, where the snapshot is authoritative
-    // for each returned type. A scoped subset snapshot must not remove rows of
-    // the same type that belong to other, unhydrated groups.
-    let removedCount = 0;
-    if (!options?.scoped) {
-      const ghostIds: string[] = [];
-      for (const [modelType, serverIds] of serverIdsByType) {
-        const poolIds = this.objectPool.getIdsByModelType(modelType);
-        if (!poolIds) continue;
-        for (const poolId of poolIds) {
-          if (!serverIds.has(poolId) && !protectedIds?.has(poolId)) ghostIds.push(poolId);
+      if (serverIdsByType) {
+        const ghostIds: string[] = [];
+        for (const [modelType, serverIds] of serverIdsByType) {
+          const poolIds = this.objectPool.getIdsByModelType(modelType);
+          if (!poolIds) continue;
+          for (const poolId of poolIds) {
+            if (!serverIds.has(poolId) && !protectedIds?.has(poolId)) ghostIds.push(poolId);
+          }
+        }
+        if (ghostIds.length > 0) {
+          removedCount = this.objectPool.removeBatch(ghostIds);
         }
       }
-      removedCount = this.objectPool.removeBatch(ghostIds);
-    }
 
-    const changedTypes = new Set(Object.keys(bootstrapData.models));
-    if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
+      const changedTypes = new Set(Object.keys(modelsRecord));
+      if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
+    });
 
     return { added: addedCount, updated: updatedCount, removed: removedCount, skipped: skippedCount, healed: healedCount };
   }

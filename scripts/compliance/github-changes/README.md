@@ -39,9 +39,8 @@ administrators and retain existing protections. The workflow must be installed
 before that requirement is enabled. Verify the actual live requirement after
 configuration changes; a checked-in workflow alone does not enforce merges.
 
-Vanta keeps a separate exception field. After a merge is ingested, copy the
-specific GitHub attestation and actual check outcomes into that PR's Vanta
-justification, refresh both code-change tests and verify their outcomes. Do not
-close the task until that receipt is recorded. The current Vanta connector has
-no justification-write tool, so this step uses the signed-in Vanta UI; the
-workflow does not pretend a GitHub comment automatically becomes Vanta evidence.
+GitHub is the release completion record. After merge, record the final main
+commit, actual check outcomes and deployment run links in Linear. Preserve
+failed and skipped outcomes accurately. Task completion depends on the required
+GitHub review, checks and deployment verification, not a separate Vanta receipt.
+Do not open Vanta or add manual Vanta justifications as a release-completion step.

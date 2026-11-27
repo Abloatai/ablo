@@ -79,6 +79,7 @@ export const PUBLIC_ABLO_OPTION_KEYS = [
   'projectId',
   'branchId',
   'persistence',
+  'hydrateBeforeAuth',
   'durableWrites',
   'commitOutbox',
   'commitOutboxScope',

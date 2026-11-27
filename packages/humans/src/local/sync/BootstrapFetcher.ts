@@ -230,6 +230,12 @@ export class BootstrapFetcher {
   private readonly flights = new Map<string, Promise<BootstrapData>>();
   /** Warn about schema drift at most once per helper. */
   private schemaDriftWarned = false;
+  /**
+   * Entities that returned 403 (unauthorized) or 404 (deleted) during on-demand
+   * self-heal. Memoized per helper lifetime (bounded to 2,000 entries) so
+   * repeated delta batches do not spam `/sync/entity/:model/:id`.
+   */
+  private readonly inaccessibleEntities = new Set<string>();
 
   /**
    * Abort every in-flight request in `lane` — or in every lane when none is
@@ -1064,10 +1070,16 @@ export class BootstrapFetcher {
 
   /**
    * Fetch a single entity by ID (on-demand self-healing).
-   * Returns `null` for 404 (entity deleted) — this is an expected state, not an error.
+   * Returns `null` for 404 (entity deleted) or 403 (entity outside current
+   * grants) — both are expected states during catchup, not errors, and are
+   * memoized to prevent repeated self-heal spam.
    * Throws for unexpected HTTP errors (5xx, network failures).
    */
   async fetchEntity(modelName: string, id: string): Promise<Record<string, unknown> | null> {
+    const cacheKey = `${modelName}:${id}`;
+    if (this.inaccessibleEntities.has(cacheKey)) {
+      return null;
+    }
     const url = `${this.options.baseUrl}/sync/entity/${modelName}/${id}`;
 
     // Uses the same `fetchTimeout` deadline as `performFetch`. A local
@@ -1099,7 +1111,9 @@ export class BootstrapFetcher {
       clearTimeout(timeoutId);
     }
 
-    if (response.status === 404) {
+    if (response.status === 404 || response.status === 403) {
+      if (this.inaccessibleEntities.size >= 2000) this.inaccessibleEntities.clear();
+      this.inaccessibleEntities.add(cacheKey);
       return null;
     }
 

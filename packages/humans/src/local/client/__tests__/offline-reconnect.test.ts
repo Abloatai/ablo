@@ -70,9 +70,10 @@ it.each(['before', 'after'])('reconciles ten offline patches with catch-up %s th
     );
     harness.networkMonitor.goOffline();
     sync.disconnect();
+    const writes: Promise<void>[] = [];
     for (let index = 0; index < 10; index++) {
-      void layers.update({ id: remote.id, data: { plainText: `edit ${index + 1}` } })
-        .catch((error: unknown) => failures.push(error));
+      writes.push(layers.update({ id: remote.id, data: { plainText: `edit ${index + 1}` } })
+        .then(() => undefined).catch((error: unknown) => { failures.push(error); }));
     }
     await waitForJournal(database, rows => rows.some(row => JSON.stringify(row).includes('edit 10')));
     expect(remote.plainText).toBe('before');
@@ -96,8 +97,16 @@ it.each(['before', 'after'])('reconciles ten offline patches with catch-up %s th
     harness.networkMonitor.goOnline();
     sync.markConnected();
     await sync.processPendingMutations();
-    if (catchupTiming === 'after') await apply([catchup]);
-    await apply(echoes);
+    await Promise.all(writes);
+    expect(sync.getMutationQueue().getOutstandingTransactions()).toHaveLength(0);
+    if (catchupTiming === 'after') {
+      await apply([catchup]);
+      expect(layers.local.get(remote.id)).toMatchObject({ plainText: 'edit 10', zIndex: 7 });
+    }
+    for (const echo of echoes) {
+      await apply([echo]);
+      expect(layers.local.get(remote.id)).toMatchObject({ plainText: 'edit 10', zIndex: 7 });
+    }
     await waitForJournal(database, rows => rows.length === 0);
     expect(sync.getMutationQueue().getStats()).toMatchObject({ pending: 0, failed: 0 });
     expect(failures).toEqual([]);

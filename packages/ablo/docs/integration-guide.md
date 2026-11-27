@@ -553,7 +553,7 @@ them.
 | `claim({ id, description?, ttl? })`    | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
 | `presence(id?)`                        | Read live human and agent sessions on a reactive client.                         |
 | `events.send(id, name, payload)`       | Send a transient row-scoped signal; disconnected sends are dropped.              |
-| `events.subscribe(id, name, handler)`  | Listen until its returned disposer is called; events are not replayed.            |
+| `events.subscribe(id, name, handler)`  | Listen until its returned disposer is called; events are not replayed or echoed to their sender. |
 
 Keep first integrations on the model methods above. Every mutation and
 server-read verb takes one options object; the synchronous `local.get(id)` stays

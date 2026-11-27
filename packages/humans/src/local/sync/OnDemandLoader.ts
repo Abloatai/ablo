@@ -28,9 +28,10 @@
  * orders nothing.
  */
 
+import { runInAction } from 'mobx';
 import type { InstanceCache } from '../InstanceCache.js';
 import { ModelScope } from '../InstanceCache.js';
-import { AbloValidationError } from '@abloatai/transaction/errors';
+import { AbloValidationError, translateHttpError } from '@abloatai/transaction/errors';
 import type { Database } from '../Database.js';
 import type { Model } from '../Model.js';
 import type { ModelRegistry, RegisteredModelClass } from '../ModelRegistry.js';
@@ -323,8 +324,9 @@ export class OnDemandLoader {
     // stops an already-open view from re-querying on every navigation when no
     // new deltas have arrived.
     if (!explicitComplete && this.hydratedKeys.has(queryKey)) {
-      return applyLimit(
+      return applyOrderAndLimit(
         await this.readLocal(modelName, typename, ModelClass, clauses, hasExpand, expand),
+        options?.orderBy,
         options?.limit,
       );
     }
@@ -347,7 +349,7 @@ export class OnDemandLoader {
         () => { suppressed = true; });
       if (local.length > 0 || suppressed) {
         this.scheduleHydratingFetch(queryKey, modelName, typename, clauses, options);
-        return applyLimit(local, options?.limit);
+        return applyOrderAndLimit(local, options?.orderBy, options?.limit);
       }
     }
 
@@ -356,14 +358,15 @@ export class OnDemandLoader {
     const networkModels = await this.fetchFromNetwork(modelName, typename, clauses, options);
     this.hydratedKeys.add(queryKey);
     // An empty authoritative answer is absence, not permission to serve stale rows.
-    return applyLimit(networkModels, options?.limit);
+    return applyOrderAndLimit(networkModels, options?.orderBy, options?.limit);
   }
 
   /**
-   * Read a query's rows from local storage only — pool first, then IndexedDB
-   * on a pool miss (cold start after reload, or LRU eviction), hydrating the
-   * pool from IDB as a side effect. Resolves requested `expand` relations from
-   * their own local stores too. Never touches the network.
+   * Read a query's rows from local storage — merging the in-memory pool over
+   * IndexedDB so a single live fan-out row in the pool never hides cached rows
+   * on disk. Hydrates missing IDB rows into the pool as a side effect and
+   * resolves requested `expand` relations from their own local stores. Never
+   * touches the network.
    */
   private async readLocal(
     modelName: string,
@@ -374,30 +377,44 @@ export class OnDemandLoader {
     expand: readonly string[] | undefined,
     onSuppressed?: () => void,
   ): Promise<Model[]> {
-    let local = scanPool(this.opts.objectPool, ModelClass, clauses)
+    const poolMatches = scanPool(this.opts.objectPool, ModelClass, clauses)
       .filter((model) => !this.opts.isDeletePending?.(model.id));
-    if (local.length === 0) {
-      const deleted = new Set<string>();
-      this.activeReadDeletes.add(deleted);
-      try {
-        const fromIdb = await scanIdb(this.opts.database, typename, clauses);
-        if (fromIdb.some((raw) => {
-          const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined;
-          return typeof id === 'string' && (this.opts.isDeletePending?.(id) || deleted.has(id));
-        })) {
-          onSuppressed?.();
-        }
-        const idbModels = fromIdb
-          .map((raw) => this.hydrateOne(raw, LOCAL, typename, { deleted }))
-          .filter((m): m is Model => m !== null);
-        if (idbModels.length > 0) {
-          this.opts.objectPool.addBatch(idbModels, ModelScope.live);
-          local = idbModels;
-        }
-      } finally {
-        this.activeReadDeletes.delete(deleted);
+    const byId = new Map<string, Model>();
+    for (const model of poolMatches) byId.set(model.id, model);
+
+    const deleted = new Set<string>();
+    this.activeReadDeletes.add(deleted);
+    try {
+      const fromIdb = await scanIdb(this.opts.database, this.opts.registry, typename, clauses);
+      if (fromIdb.some((raw) => {
+        const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined;
+        return typeof id === 'string' && (this.opts.isDeletePending?.(id) || deleted.has(id));
+      })) {
+        onSuppressed?.();
       }
+      runInAction(() => {
+        const idbOnly: Model[] = [];
+        for (const raw of fromIdb) {
+          const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined;
+          if (typeof id === 'string' && byId.has(id)) continue;
+          // Skip rows already in the pool whose current in-memory fields no longer
+          // match `clauses` (the pool is always at least as fresh as IDB).
+          if (typeof id === 'string' && this.opts.objectPool.get(id) !== undefined) continue;
+          const hydrated = this.hydrateOne(raw, LOCAL, typename, { deleted });
+          if (hydrated) {
+            idbOnly.push(hydrated);
+            byId.set(hydrated.id, hydrated);
+          }
+        }
+        if (idbOnly.length > 0) {
+          this.opts.objectPool.addBatch(idbOnly, ModelScope.live);
+        }
+      });
+    } finally {
+      this.activeReadDeletes.delete(deleted);
     }
+
+    const local = Array.from(byId.values());
     if (hasExpand && expand && local.length > 0) {
       await this.hydrateExpandedFromLocal(modelName, local.map((m) => m.id), expand);
     }
@@ -438,20 +455,26 @@ export class OnDemandLoader {
       const networkRows = network.rows;
       const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
       const acceptedRows: unknown[] = [];
-      const networkModels = networkRows
-        // Strict: a row the server returned whose type name this client never
-        // registered is a genuine schema collision (the pushed schema differs
-        // from the local one). Throw here, naming the cause, rather than silently
-        // dropping the row and failing downstream as `entity_not_found`.
-        .map((raw) =>
-          this.hydrateOne(
-            raw,
-            { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
-            typename,
-            { strict: true, acceptedRows, deleted },
-          ),
-        )
-        .filter((m): m is Model => m !== null);
+      const networkModels = runInAction(() => {
+        const models = networkRows
+          // Strict: a row the server returned whose type name this client never
+          // registered is a genuine schema collision (the pushed schema differs
+          // from the local one). Throw here, naming the cause, rather than silently
+          // dropping the row and failing downstream as `entity_not_found`.
+          .map((raw) =>
+            this.hydrateOne(
+              raw,
+              { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
+              typename,
+              { strict: true, acceptedRows, deleted },
+            ),
+          )
+          .filter((m): m is Model => m !== null);
+        if (models.length > 0) {
+          this.opts.objectPool.addBatch(models, ModelScope.live);
+        }
+        return models;
+      });
 
       const acceptedById = new Map(acceptedRows.map((row) => [(row as { id: string }).id, row]));
       for (const model of networkModels) {
@@ -477,7 +500,6 @@ export class OnDemandLoader {
       }
 
       if (networkModels.length > 0) {
-        this.opts.objectPool.addBatch(networkModels, ModelScope.live);
         // Persist only accepted snapshots: a stale response must not roll disk back.
         await this.persistToIdb(modelName, acceptedRows);
       }
@@ -556,12 +578,14 @@ export class OnDemandLoader {
       this.activeReadDeletes.add(deleted);
       try {
         const rows = await this.readChildrenLocal(targetTypename, foreignKey, missing);
-        const models = rows
-          .map((raw) => this.hydrateOne(this.stampTypename(raw, targetTypename), LOCAL, targetTypename, { deleted }))
-          .filter((m): m is Model => m !== null);
-        if (models.length > 0) {
-          this.opts.objectPool.addBatch(models, ModelScope.live);
-        }
+        runInAction(() => {
+          const models = rows
+            .map((raw) => this.hydrateOne(this.stampTypename(raw, targetTypename), LOCAL, targetTypename, { deleted }))
+            .filter((m): m is Model => m !== null);
+          if (models.length > 0) {
+            this.opts.objectPool.addBatch(models, ModelScope.live);
+          }
+        });
       } finally {
         this.activeReadDeletes.delete(deleted);
       }
@@ -587,15 +611,19 @@ export class OnDemandLoader {
 
     const isIndexed = this.opts.registry.getIndexedProperties(childTypename).includes(foreignKey);
     if (isIndexed) {
-      const collected: unknown[] = [];
-      for (const pid of parentIds) {
-        const rows = await store.getAllFromIndex(foreignKey, pid);
-        if (Array.isArray(rows)) collected.push(...rows);
+      try {
+        const collected: unknown[] = [];
+        for (const pid of parentIds) {
+          const rows = await store.getAllFromIndex(foreignKey, pid);
+          if (Array.isArray(rows)) collected.push(...rows);
+        }
+        // A non-empty result means the index is live (browser IDB). Empty can
+        // mean "no children" OR "no physical index" (in-memory) — fall through
+        // to the scan so the in-memory/SSR path stays correct.
+        if (collected.length > 0) return collected;
+      } catch {
+        // Index missing on an existing store — fall through to full scan.
       }
-      // A non-empty result means the index is live (browser IDB). Empty can
-      // mean "no children" OR "no physical index" (in-memory) — fall through
-      // to the scan so the in-memory/SSR path stays correct.
-      if (collected.length > 0) return collected;
     }
 
     try {
@@ -740,6 +768,10 @@ export class OnDemandLoader {
       },
       { queries: [query] },
     );
+    const slotError = result.errors?.find((e) => e.index === 0) ?? result.errors?.[0];
+    if (slotError) {
+      throw translateHttpError(500, slotError);
+    }
     const rows: unknown[] = Array.isArray(result.results[0]) ? result.results[0] : [];
     const evidence = result.evidence?.[0] ?? [];
     // Normalize: wire rows lack `__typename` when the server elides it.
@@ -795,16 +827,18 @@ export class OnDemandLoader {
         const targetKey = relDef?.target;
         const targetTypename = targetKey ? this.resolveTypename(targetKey) : undefined;
         const items = Array.isArray(nested) ? nested : [nested];
-        const models: Model[] = [];
         const stampedItems: unknown[] = [];
-        for (const item of items) {
-          const stamped = this.stampTypename(item, targetTypename);
-          const m = this.hydrateOne(stamped, origin, targetTypename, { acceptedRows: stampedItems, deleted });
-          if (m) models.push(m);
-        }
-        if (models.length > 0) {
-          this.opts.objectPool.addBatch(models, ModelScope.live);
-        }
+        runInAction(() => {
+          const models: Model[] = [];
+          for (const item of items) {
+            const stamped = this.stampTypename(item, targetTypename);
+            const m = this.hydrateOne(stamped, origin, targetTypename, { acceptedRows: stampedItems, deleted });
+            if (m) models.push(m);
+          }
+          if (models.length > 0) {
+            this.opts.objectPool.addBatch(models, ModelScope.live);
+          }
+        });
         // Persist expanded children to their OWN typed store so they survive
         // reload and can be re-served by `hydrateExpandedFromLocal` — without
         // this, expand-fetched relations live only inside the parent's row
@@ -882,8 +916,38 @@ function stableKey(
   return JSON.stringify({ modelName, where: sorted, orderBy, limit, expand: expandKey });
 }
 
-function applyLimit<T>(arr: T[], limit: number | undefined): T[] {
-  return typeof limit === 'number' ? arr.slice(0, limit) : arr;
+function compareOrderValues(a: unknown, b: unknown): number {
+  if (a === b) return 0;
+  if (a === null || a === undefined) return -1;
+  if (b === null || b === undefined) return 1;
+  if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime();
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  if (typeof a === 'boolean' && typeof b === 'boolean') return Number(a) - Number(b);
+  const sa = String(a);
+  const sb = String(b);
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+
+function applyOrderAndLimit(
+  arr: Model[],
+  orderBy: Record<string, 'asc' | 'desc'> | undefined,
+  limit: number | undefined,
+): Model[] {
+  const entries = orderBy ? Object.entries(orderBy) : [];
+  let result = arr;
+  if (entries.length > 0 && arr.length > 1) {
+    result = [...arr].sort((left, right) => {
+      for (const [field, dir] of entries) {
+        const cmp = compareOrderValues(
+          Reflect.get(left, field) as unknown,
+          Reflect.get(right, field) as unknown,
+        );
+        if (cmp !== 0) return dir === 'desc' ? -cmp : cmp;
+      }
+      return 0;
+    });
+  }
+  return typeof limit === 'number' ? result.slice(0, limit) : result;
 }
 
 function scanPool(
@@ -898,6 +962,7 @@ function scanPool(
 
 async function scanIdb(
   database: Pick<Database, 'getStore'>,
+  registry: Pick<ModelRegistry, 'getIndexedProperties'>,
   modelName: string,
   clauses: readonly WhereClause[],
 ): Promise<unknown[]> {
@@ -915,15 +980,16 @@ async function scanIdb(
     }
   }
 
-  // Index-aware path: when every clause is equality and exactly one
-  // non-id string column is constrained, hit that column's index for
-  // an O(matches) read. Anything involving LIKE/ILIKE/ranges falls
-  // through to full-scan + filter.
+  // Index-aware path: when every clause is equality and an indexed non-id
+  // string column is constrained, hit that column's index for an O(matches)
+  // read. Anything unindexed or involving LIKE/ILIKE/ranges falls through to
+  // full-scan + filter.
   if (clausesAreAllEquality(clauses)) {
+    const declaredIndexes = new Set(registry.getIndexedProperties(modelName));
     const indexedKeys = Object.keys(eqClauses).filter(
-      (k) => k !== 'id' && typeof eqClauses[k] === 'string',
+      (k) => k !== 'id' && typeof eqClauses[k] === 'string' && declaredIndexes.has(k),
     );
-    const idxKey = indexedKeys.length === 1 ? indexedKeys[0] : undefined;
+    const idxKey = indexedKeys[0];
     if (idxKey !== undefined) {
       try {
         const rows = await store.getAllFromIndex(idxKey, eqClauses[idxKey] as string);
@@ -931,7 +997,7 @@ async function scanIdb(
           return rows.filter((r) => matchesClauses(r, clauses));
         }
       } catch {
-        // index doesn't exist — fall through to full-scan path.
+        // index doesn't exist yet on an older store — fall through to full-scan path.
       }
     }
   }

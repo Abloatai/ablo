@@ -105,6 +105,11 @@ export class InstanceCache {
   private foreignKeyIndexes = new Map<string, Map<string, Set<string>>>();
   // Registry of which fields to index: Map<modelName, fieldName[]>
   private foreignKeyConfig = new Map<string, string[]>();
+  // Pre-resolved per-model FK index targets so add/remove avoid `${modelName}:${fieldName}` concat & Map lookups.
+  private foreignKeyEntries = new Map<
+    string,
+    { fieldName: string; index: Map<string, Set<string>> }[]
+  >();
 
   private metrics = {
     hits: 0,
@@ -136,6 +141,20 @@ export class InstanceCache {
   get generation(): number { return this.resetGeneration; }
 
   private subscriptions = new Map<string, Set<(model: Model) => void>>();
+  /** Tracks whether any resident entry has ever been placed in a non-live scope. */
+  private hasNonLiveScope = false;
+
+  /**
+   * True when an already-resident model updated in place still needs an
+   * `upsertBatch` pass (to promote a non-live scope or notify subscribers/views).
+   */
+  needsResidentUpdatePass(): boolean {
+    return (
+      this.hasNonLiveScope ||
+      this.subscriptions.size > 0 ||
+      this.viewRegistry.hasAnyViews()
+    );
+  }
 
   subscribe<T extends Model>(
     modelClass: ModelConstructor<T>, 
@@ -180,6 +199,11 @@ export class InstanceCache {
    * they must observe every addition even when the cache is bounded, so
    * those batches opt out of admission limiting.
    */
+  /** O(1) capacity check so callers can skip retention-limit scans when a batch fits. */
+  hasCapacityFor(additionalCount: number): boolean {
+    return this.entries.size + additionalCount <= this.config.maxSize;
+  }
+
   wireAddRetentionLimit(modelNames: ReadonlySet<string>): number | undefined {
     for (const modelName of modelNames) {
       if (
@@ -438,6 +462,7 @@ export class InstanceCache {
       this.evictOldest();
     }
 
+    if (scope !== ModelScope.live) this.hasNonLiveScope = true;
     const entry: ModelEntry = {
       model,
       scope,
@@ -495,27 +520,51 @@ export class InstanceCache {
    */
   addBatch(models: Model[], scope: ModelScope = ModelScope.live): number {
     if (models.length === 0) return 0;
+    if (scope !== ModelScope.live) this.hasNonLiveScope = true;
 
     let addedCount = 0;
     const now = Date.now();
-    const newIds = new Set<string>();
-    for (const model of models) {
-      const existing = this.entries.get(model.id);
-      if (!existing?.model || existing.model.disposed) newIds.add(model.id);
+    // Skip counting unique new IDs when the whole batch fits within maxSize.
+    if (this.entries.size + models.length > this.config.maxSize) {
+      const newIds = new Set<string>();
+      for (const model of models) {
+        const existing = this.entries.get(model.id);
+        if (!existing?.model || existing.model.disposed) newIds.add(model.id);
+      }
+      const capacityNeeded = Math.max(
+        0,
+        this.entries.size + newIds.size - this.config.maxSize,
+      );
+      if (capacityNeeded > 0) this.evictOldestBatch(capacityNeeded);
     }
-    const capacityNeeded = Math.max(
-      0,
-      this.entries.size + newIds.size - this.config.maxSize,
-    );
-    if (capacityNeeded > 0) this.evictOldestBatch(capacityNeeded);
+
+    const useWeakRefs = this.config.useWeakRefs;
+    const hasAnySubscriptions = this.subscriptions.size > 0;
+    const hasAnyViews = this.viewRegistry.hasAnyViews();
+
+    // Per-type caches eliminate repeated Map lookups across contiguous rows of the same model.
+    let cachedType = '';
+    let cachedTypeSet: Set<string> | undefined;
+    let cachedFkEntries: { fieldName: string; index: Map<string, Set<string>> }[] | undefined;
+    let cachedSubs: Set<(model: Model) => void> | undefined;
+    let cachedHasViews = false;
 
     // Process all models in a single action to avoid per-item reaction cycles
     for (const model of models) {
       const id = model.id;
       const modelType = model.getModelName();
 
-      if (!this.typeIndex.has(modelType)) {
-        this.typeIndex.set(modelType, observable.set<string>());
+      if (modelType !== cachedType) {
+        cachedType = modelType;
+        let typeSet = this.typeIndex.get(modelType);
+        if (!typeSet) {
+          typeSet = observable.set<string>();
+          this.typeIndex.set(modelType, typeSet);
+        }
+        cachedTypeSet = typeSet;
+        cachedFkEntries = this.foreignKeyEntries.get(modelType);
+        cachedSubs = hasAnySubscriptions ? this.subscriptions.get(modelType) : undefined;
+        cachedHasViews = hasAnyViews && this.viewRegistry.hasViews(modelType);
       }
 
       const existingEntry = this.entries.get(id);
@@ -532,22 +581,32 @@ export class InstanceCache {
         model,
         scope,
       };
-      this.touchAccess(id, now);
+      if (existingEntry) {
+        this.touchAccess(id, now);
+      } else {
+        this.accessTimes.set(id, now);
+      }
 
-      if (this.config.useWeakRefs && this.isLargeModel(model)) {
+      if (useWeakRefs && this.isLargeModel(model, modelType)) {
         entry.weakRef = new WeakRef(model);
       }
 
       this.entries.set(id, entry);
-      this.addToTypeIndex(id, modelType);
-      this.addToForeignKeyIndex(id, model, modelType);
+      cachedTypeSet?.add(id);
+      if (cachedFkEntries) {
+        this.indexModelForeignKeys(id, model, cachedFkEntries);
+      }
       this.metrics.additions++;
       addedCount++;
 
-      this.notifySubscribers(model);
-      this.viewRegistry.notifyAdded(modelType, model);
+      if (cachedSubs && cachedSubs.size > 0) {
+        model.ensureObservable();
+        for (const callback of cachedSubs) callback(model);
+      }
+      if (cachedHasViews) {
+        this.viewRegistry.notifyAdded(modelType, model);
+      }
     }
-
 
     return addedCount;
   }
@@ -558,43 +617,100 @@ export class InstanceCache {
    */
   upsertBatch(models: Model[], scope: ModelScope = ModelScope.live): void {
     if (models.length === 0) return;
+    if (scope !== ModelScope.live) this.hasNonLiveScope = true;
+
+    const now = Date.now();
+    // Pre-evict once for the whole batch instead of evicting one-by-one per row.
+    if (this.entries.size + models.length > this.config.maxSize) {
+      const newIds = new Set<string>();
+      for (const model of models) {
+        const existing = this.entries.get(model.id);
+        if (!existing?.model || existing.model.disposed) newIds.add(model.id);
+      }
+      const capacityNeeded = Math.max(
+        0,
+        this.entries.size + newIds.size - this.config.maxSize,
+      );
+      if (capacityNeeded > 0) this.evictOldestBatch(capacityNeeded);
+    }
+
+    const useWeakRefs = this.config.useWeakRefs;
+    const hasAnySubscriptions = this.subscriptions.size > 0;
+    const hasAnyViews = this.viewRegistry.hasAnyViews();
+
+    let cachedType = '';
+    let cachedTypeSet: Set<string> | undefined;
+    let cachedFkEntries: { fieldName: string; index: Map<string, Set<string>> }[] | undefined;
+    let cachedSubs: Set<(model: Model) => void> | undefined;
+    let cachedHasViews = false;
 
     for (const model of models) {
       const id = model.id;
       const existingEntry = this.entries.get(id);
 
       if (existingEntry?.model && !existingEntry.model.disposed) {
-        if (model !== existingEntry.model) {
-          existingEntry.model.updateFromData(model.toJSON());
+        const existingModel = existingEntry.model;
+        if (model !== existingModel) {
+          existingModel.updateFromData(model.toJSON());
         }
         if (existingEntry.scope !== scope) {
           this.entries.set(id, { ...existingEntry, scope });
-          this.touchAccess(id, Date.now());
+          this.touchAccess(id, now);
         }
-        this.notifySubscribers(existingEntry.model);
-        this.viewRegistry.notifyUpdated(existingEntry.model.getModelName(), existingEntry.model);
+        if (hasAnySubscriptions || hasAnyViews) {
+          const modelType = existingModel.getModelName();
+          if (hasAnySubscriptions) {
+            const subs = this.subscriptions.get(modelType);
+            if (subs && subs.size > 0) {
+              existingModel.ensureObservable();
+              for (const callback of subs) callback(existingModel);
+            }
+          }
+          if (hasAnyViews) {
+            this.viewRegistry.notifyUpdated(modelType, existingModel);
+          }
+        }
       } else {
-        // Delegate to inline add logic (same as addBatch internals)
         const modelType = model.getModelName();
-        if (!this.typeIndex.has(modelType)) {
-          this.typeIndex.set(modelType, observable.set<string>());
+        if (modelType !== cachedType) {
+          cachedType = modelType;
+          let typeSet = this.typeIndex.get(modelType);
+          if (!typeSet) {
+            typeSet = observable.set<string>();
+            this.typeIndex.set(modelType, typeSet);
+          }
+          cachedTypeSet = typeSet;
+          cachedFkEntries = this.foreignKeyEntries.get(modelType);
+          cachedSubs = hasAnySubscriptions ? this.subscriptions.get(modelType) : undefined;
+          cachedHasViews = hasAnyViews && this.viewRegistry.hasViews(modelType);
         }
         if (this.entries.size >= this.config.maxSize) {
           this.evictOldest();
         }
         const entry: ModelEntry = { model, scope };
-        this.touchAccess(id, Date.now());
-        if (this.config.useWeakRefs && this.isLargeModel(model)) {
+        if (existingEntry) {
+          this.touchAccess(id, now);
+        } else {
+          this.accessTimes.set(id, now);
+        }
+        if (useWeakRefs && this.isLargeModel(model, modelType)) {
           entry.weakRef = new WeakRef(model);
         }
         this.entries.set(id, entry);
-        this.addToTypeIndex(id, modelType);
+        cachedTypeSet?.add(id);
+        if (cachedFkEntries) {
+          this.indexModelForeignKeys(id, model, cachedFkEntries);
+        }
         this.metrics.additions++;
-        this.notifySubscribers(model);
-        this.viewRegistry.notifyAdded(modelType, model);
+        if (cachedSubs && cachedSubs.size > 0) {
+          model.ensureObservable();
+          for (const callback of cachedSubs) callback(model);
+        }
+        if (cachedHasViews) {
+          this.viewRegistry.notifyAdded(modelType, model);
+        }
       }
     }
-
   }
 
   /**
@@ -817,6 +933,7 @@ export class InstanceCache {
   }
 
   updateScope(id: string, scope: ModelScope): void {
+    if (scope !== ModelScope.live) this.hasNonLiveScope = true;
     const entry = this.entries.get(id);
     if (entry && entry.scope !== scope) {
       // Re-set the entry so ObservableMap notifies observers of the change.
@@ -869,10 +986,21 @@ export class InstanceCache {
        * per-field MobX setup for rows no consumer has observed.
        */
       deferObservability?: boolean;
+      /**
+       * Explicit model name when already known by the caller (e.g. bootstrap or
+       * hydration iterating by model type), avoiding a per-row `{ __typename, ...data }`
+       * clone solely to carry the discriminator.
+       */
+      modelName?: string;
+      /**
+       * Skip the pool-existence lookup when the caller already verified the id
+       * is absent from the pool.
+       */
+      skipExistingCheck?: boolean;
     },
   ): Model | null {
     // Support multiple model identifier fields for backwards compatibility
-    const modelName = data.__typename ?? data.__class ?? data.modelName ?? 'Unknown';
+    const modelName = opts?.modelName ?? data.__typename ?? data.__class ?? data.modelName ?? 'Unknown';
 
     const Constructor = ModelClass ?? this.registry.getModelByName(modelName);
 
@@ -921,7 +1049,7 @@ export class InstanceCache {
     // If the model already exists, update it in place instead of creating a
     // duplicate. Keeping the existing instance alive preserves React's
     // references and MobX's observation tracking.
-    if (data.id && this.entries.has(data.id)) {
+    if (!opts?.skipExistingCheck && data.id && this.entries.has(data.id)) {
       const existing = this.get(data.id);
       if (existing?.getModelName() === modelName) {
         // Same ID and same type - update existing model with new data and return it
@@ -1316,9 +1444,9 @@ export class InstanceCache {
    */
   private sizeProbeKeys = new Map<string, readonly string[]>();
 
-  private isLargeModel(model: Model): boolean {
+  private isLargeModel(model: Model, modelNameOverride?: string): boolean {
     try {
-      const modelName = model.getModelName();
+      const modelName = modelNameOverride ?? model.getModelName();
       let keys = this.sizeProbeKeys.get(modelName);
       if (!keys) {
         const props = this.registry.getProperties(modelName);
@@ -1327,17 +1455,35 @@ export class InstanceCache {
           .map(([key]) => key);
         this.sizeProbeKeys.set(modelName, keys);
       }
-      // A model with no registered stored fields (e.g. a custom entity) keeps
-      // the whole-instance walk, since its payload lives outside the schema.
-      const values: Iterable<unknown> = keys.length > 0
-        ? keys.map((key): unknown => Reflect.get(model, key))
-        : Object.values(model);
 
       // Most synchronized rows contain only short scalars. Accumulate cheap
-      // scalar sizes and serialize only nested payloads that can plausibly
-      // cross the WeakRef threshold.
+      // scalar sizes directly without intermediate array allocation, and
+      // serialize only nested payloads that can plausibly cross the threshold.
       let size = 0;
-      for (const value of values) {
+      if (keys.length > 0) {
+        for (const key of keys) {
+          const value = model.getField(key);
+          if (typeof value === 'string') {
+            size += value.length;
+          } else if (
+            typeof value === 'number' ||
+            typeof value === 'bigint' ||
+            typeof value === 'boolean'
+          ) {
+            size += 8;
+          } else if (value instanceof Date) {
+            size += 24;
+          } else if (value && typeof value === 'object') {
+            size += JSON.stringify(value).length;
+          }
+          if (size > 10240) return true;
+        }
+        return false;
+      }
+
+      // A model with no registered stored fields (e.g. a custom entity) keeps
+      // the whole-instance walk, since its payload lives outside the schema.
+      for (const value of Object.values(model)) {
         if (typeof value === 'string') {
           size += value.length;
         } else if (
@@ -1369,13 +1515,24 @@ export class InstanceCache {
    */
   registerForeignKey(modelName: string, fieldName: string): void {
     const fields = this.foreignKeyConfig.get(modelName) ?? [];
-    if (!fields.includes(fieldName)) {
+    const isNewField = !fields.includes(fieldName);
+    if (isNewField) {
       fields.push(fieldName);
       this.foreignKeyConfig.set(modelName, fields);
     }
     const indexKey = `${modelName}:${fieldName}`;
-    if (!this.foreignKeyIndexes.has(indexKey)) {
-      this.foreignKeyIndexes.set(indexKey, observable.map<string, Set<string>>());
+    let index = this.foreignKeyIndexes.get(indexKey);
+    if (!index) {
+      index = observable.map<string, Set<string>>();
+      this.foreignKeyIndexes.set(indexKey, index);
+    }
+    if (isNewField) {
+      let entries = this.foreignKeyEntries.get(modelName);
+      if (!entries) {
+        entries = [];
+        this.foreignKeyEntries.set(modelName, entries);
+      }
+      entries.push({ fieldName, index });
     }
   }
 
@@ -1447,50 +1604,49 @@ export class InstanceCache {
     return result;
   }
 
-  private addToForeignKeyIndex(id: string, model: Model, modelName: string): void {
-    const fields = this.foreignKeyConfig.get(modelName);
-    if (!fields) return;
-
-    for (const fieldName of fields) {
-      const fieldValue = model.getField(fieldName);
+  private indexModelForeignKeys(
+    id: string,
+    model: Model,
+    entries: readonly { fieldName: string; index: Map<string, Set<string>> }[],
+  ): void {
+    for (const entry of entries) {
+      const fieldValue = model.getField(entry.fieldName);
       if (typeof fieldValue !== 'string') continue;
 
-      const indexKey = `${modelName}:${fieldName}`;
-      const index = this.foreignKeyIndexes.get(indexKey);
-      if (!index) continue;
-
-      let ids = index.get(fieldValue);
+      let ids = entry.index.get(fieldValue);
       if (!ids) {
         ids = observable.set<string>();
-        index.set(fieldValue, ids);
+        entry.index.set(fieldValue, ids);
       }
       ids.add(id);
     }
   }
 
+  private addToForeignKeyIndex(id: string, model: Model, modelName: string): void {
+    const entries = this.foreignKeyEntries.get(modelName);
+    if (!entries) return;
+    this.indexModelForeignKeys(id, model, entries);
+  }
+
   private removeFromForeignKeyIndex(id: string, modelName?: string): void {
     if (!modelName) return;
-    const fields = this.foreignKeyConfig.get(modelName);
-    if (!fields) return;
+    const entries = this.foreignKeyEntries.get(modelName);
+    if (!entries) return;
 
     // We need the model to read the foreign key value
     const entry = this.entries.get(id);
     const model = entry?.model ?? entry?.weakRef?.deref();
     if (!model) return;
 
-    for (const fieldName of fields) {
-      const fieldValue = model.getField(fieldName);
+    for (const fkEntry of entries) {
+      const fieldValue = model.getField(fkEntry.fieldName);
       if (typeof fieldValue !== 'string') continue;
 
-      const indexKey = `${modelName}:${fieldName}`;
-      const index = this.foreignKeyIndexes.get(indexKey);
-      if (!index) continue;
-
-      const ids = index.get(fieldValue);
+      const ids = fkEntry.index.get(fieldValue);
       if (ids) {
         ids.delete(id);
         if (ids.size === 0) {
-          index.delete(fieldValue);
+          fkEntry.index.delete(fieldValue);
         }
       }
     }

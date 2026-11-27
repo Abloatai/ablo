@@ -191,7 +191,17 @@ export async function postQuery(
           models,
           message: err.message,
         });
-        return { results: batch.queries.map(() => []) };
+        return {
+          results: batch.queries.map(() => []),
+          errors: batch.queries.map((q, index) => ({
+            index,
+            model: q.model,
+            type: err.type,
+            code: String(err.code ?? response.status),
+            message: err.message,
+            event_id: '',
+          })),
+        };
       }
 
       const raw: unknown = await response.json();
@@ -202,7 +212,17 @@ export async function postQuery(
         runtime.logger.debug('[postQuery.error] malformed response', {
           issues: parsed.error.issues,
         });
-        return { results: batch.queries.map(() => []) };
+        return {
+          results: batch.queries.map(() => []),
+          errors: batch.queries.map((q, index) => ({
+            index,
+            model: q.model,
+            type: 'AbloServerError',
+            code: 'malformed_query_response',
+            message: 'Malformed query response from server.',
+            event_id: '',
+          })),
+        };
       }
       for (const failure of parsed.data.errors ?? []) {
         runtime.logger.warn(

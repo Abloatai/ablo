@@ -1,0 +1,12 @@
+---
+title: "v0.67.5"
+type: changelog
+date: 2026-11-23T06:36:08.000Z
+changelog:
+  version: "0.67.5"
+  category: "Fixes"
+---
+
+### Newer local edits survive delayed catch-up
+
+A delayed server update could briefly restore an older value after a local write had been accepted. Confirmed fields now retain their newer local values while earlier catch-up arrives; unrelated changes from other users still apply. New edits also take precedence over older queued patches, keeping rapid keyboard movements steady through reconciliation.

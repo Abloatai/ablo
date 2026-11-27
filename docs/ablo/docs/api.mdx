@@ -74,7 +74,7 @@ Each schema model becomes a typed model on the client:
 - `ablo.weatherReports.claim({ id, description })` acquires a durable write lease; the HTTP form is awaited.
 - `ablo.weatherReports.presence(id)` reads the live session projection for one row on a reactive client.
 - `ablo.weatherReports.events.send(id, name, payload)` sends a transient row-scoped event on a reactive client.
-- `ablo.weatherReports.events.subscribe(id, name, handler)` subscribes to that transient event and returns a disposer.
+- `ablo.weatherReports.events.subscribe(id, name, handler)` subscribes to that transient event from other clients and returns a disposer. A client's own `events.send` is not delivered back to it.
 
 `local.` narrows a query to what has already synced. `get({ id })`, `read({ id })`, and
 `list({ where })` answer from the local graph and fall back to IndexedDB and
@@ -144,7 +144,9 @@ Event names are strings and payloads are objects. Payloads are not inferred
 from the schema today.
 
 Delivery is lossy: sending while disconnected is dropped, and events are not
-replayed after reconnect. Cursor and live selection fit this contract. Persist
+replayed after reconnect. Payloads are limited to 16 KiB of serialized JSON; oversized
+events and events sent to a full receiver queue are dropped without disconnecting
+the receiver. Cursor and live selection fit this contract. Persist
 anything that must be recovered as ordinary model data.
 
 ## Switching clients

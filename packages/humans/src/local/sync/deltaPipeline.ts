@@ -432,7 +432,14 @@ export function sliceApplyChanges<T extends { readonly transactionId?: string }>
       slices.push(current);
       current = [];
     }
-    current.push(...changes.slice(index, end));
+    if (groupSize === 1) {
+      current.push(change);
+    } else {
+      for (let k = index; k < end; k++) {
+        const item = changes[k];
+        if (item !== undefined) current.push(item);
+      }
+    }
     index = end;
   }
   if (current.length > 0) slices.push(current);
@@ -477,9 +484,27 @@ async function flushDeltaBatchInner(
   observeDrainBatch(queuedDeltas.length, deduplicatedDeltas.length);
   runStage(stagePlugins, 'dedupe', { deltas: deduplicatedDeltas });
 
+  // Single-pass partition into custom vs regular deltas. When there are no
+  // custom entities (the common case), reuse `deduplicatedDeltas` directly with
+  // zero intermediate array allocations.
+  let customDeltas: SyncDelta[] | null = null;
+  let regularDeltas: SyncDelta[] = deduplicatedDeltas;
+  for (let i = 0; i < deduplicatedDeltas.length; i++) {
+    const delta = deduplicatedDeltas[i];
+    if (!delta) continue;
+    if (ctx.isCustomEntity(delta.modelName)) {
+      if (!customDeltas) {
+        customDeltas = [];
+        regularDeltas = deduplicatedDeltas.slice(0, i);
+      }
+      customDeltas.push(delta);
+    } else if (customDeltas) {
+      regularDeltas.push(delta);
+    }
+  }
+
   // Custom entities → apply straight to the pool, skipping the local store.
-  const customDeltas = deduplicatedDeltas.filter((d) => ctx.isCustomEntity(d.modelName));
-  if (customDeltas.length > 0) {
+  if (customDeltas && customDeltas.length > 0) {
     runInAction(() => {
       for (const delta of customDeltas) {
         if (delta.data === null) continue;
@@ -509,7 +534,6 @@ async function flushDeltaBatchInner(
   // 'G' and 'S' deltas are handled earlier (handleSyncGroupChange /
   // handleGroupRemoved) and never reach here, though the persistence
   // signature accepts them defensively.
-  const regularDeltas = deduplicatedDeltas.filter((d) => !ctx.isCustomEntity(d.modelName));
   pipelineDebug.phase = 'persist';
   pipelineDebug.persistsStarted += 1;
   const batch = await timeDrainStageAsync('persist', () =>

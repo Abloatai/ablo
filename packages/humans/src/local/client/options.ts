@@ -120,6 +120,21 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
   persistence?: AbloPersistence;
 
   /**
+   * When `true` alongside `persistence: 'indexeddb'`, opens the last matching
+   * local replica in IndexedDB and hydrates instant models in parallel with
+   * credential minting and `/auth/identity` so warm reloads paint immediately
+   * without waiting for auth round-trips.
+   *
+   * Safety: only engages when a single user owns a schema-matching v5 replica
+   * for this scope. Once auth settles, the verified identity is checked against
+   * the optimistic replica; any identity/permission mismatch or auth failure
+   * clears the in-memory pool and re-opens the verified replica.
+   *
+   * @default false
+   */
+  hydrateBeforeAuth?: boolean;
+
+  /**
    * Makes `create`, `update`, and `delete` survive process restarts and
    * ambiguous network responses. Server-side agents and workers inject a
    * workflow-, SQLite-, or filesystem-backed store; authenticated identity is
@@ -362,6 +377,9 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    * reload-surviving local cache in a browser.
    */
   persistence?: AbloPersistence;
+
+  /** Internal mirror of {@link AbloOptions.hydrateBeforeAuth}. */
+  hydrateBeforeAuth?: boolean;
 
   /** Internal mirror of {@link AbloOptions.durableWrites}. */
   /** Wire message types to surface as collaboration events. Empty unless declared. */

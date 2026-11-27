@@ -40,6 +40,7 @@ export type BootstrapSnapshot = Pick<BootstrapData, 'models' | 'failedModels'> &
 /** A completed queued mutation or explicit commit. */
 export type CompletedTransaction =
   | (Pick<QueuedMutation, 'id' | 'modelId' | 'syncIdNeededForCompletion'> & {
+      data?: QueuedMutation['data'];
       lastSyncId?: undefined;
       operations?: undefined;
     })

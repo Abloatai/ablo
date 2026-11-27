@@ -607,6 +607,7 @@ export class CapabilityError extends AbloPermissionError {
     requiredCapability?: RequiredCapability,
     options?: {
       requestId?: string;
+      param?: string;
       details?: Readonly<Record<string, unknown>>;
     },
   ) {
@@ -614,6 +615,7 @@ export class CapabilityError extends AbloPermissionError {
       code,
       httpStatus: 403,
       ...(options?.requestId !== undefined ? { requestId: options.requestId } : {}),
+      ...(options?.param !== undefined ? { param: options.param } : {}),
       ...(options?.details !== undefined ? { details: options.details } : {}),
     });
     this.name = 'CapabilityError';
@@ -752,6 +754,7 @@ export const requiredCapabilityWireSchema = z
 const NestedErrorShapeSchema = z
   .object({
     code: OptionalWireStringSchema,
+    param: OptionalWireStringSchema,
     message: OptionalWireStringSchema,
     field: OptionalWireStringSchema,
     requiredCapability: requiredCapabilityWireSchema.optional().catch(undefined),
@@ -782,6 +785,7 @@ const ErrorBodyShapeSchema = z
      *  or a nested error object, as commit endpoints return on rejection. */
     error: ErrorFieldSchema,
     code: OptionalWireStringSchema,
+    param: OptionalWireStringSchema,
     reason: OptionalWireStringSchema,
     message: OptionalWireStringSchema,
     requiredCapability: requiredCapabilityWireSchema.optional().catch(undefined),
@@ -846,6 +850,7 @@ export function errorFromWire(
      *  registry spec for `code` so frame transports map correctly too. */
     httpStatus?: number;
     requestId?: string;
+    param?: string;
     requiredCapability?: RequiredCapability;
     claims?: readonly ClaimErrorClaim[];
     conflict?: ClaimConflictContext;
@@ -870,6 +875,7 @@ export function errorFromWire(
     code: publicCode,
     httpStatus,
     requestId,
+    ...(opts.param !== undefined ? { param: opts.param } : {}),
     ...(details && Object.keys(details).length > 0 ? { details } : {}),
     ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
@@ -879,6 +885,7 @@ export function errorFromWire(
   // can read `.requiredCapability` to attenuate-and-retry.
   if (code === 'capability_scope_denied' || code === 'capability_invalid') {
     return new CapabilityError(code, message, requiredCapability, {
+      ...(opts.param !== undefined ? { param: opts.param } : {}),
       ...(requestId !== undefined ? { requestId } : {}),
       ...(details !== undefined ? { details } : {}),
     });
@@ -1062,6 +1069,7 @@ export function translateHttpError(
 
   return errorFromWire(message, {
     code,
+    param: parsed.param ?? nested?.param,
     httpStatus: status,
     requestId: requestId ?? (typeof bodyRequestId === 'string' ? bodyRequestId : undefined),
     requiredCapability,
