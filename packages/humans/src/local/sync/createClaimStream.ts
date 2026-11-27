@@ -19,6 +19,7 @@
  *       metadata.
  */
 
+import { createAtom } from 'mobx';
 import type {
   WsTransport,
 } from '@abloatai/transaction/transport/websocket';
@@ -163,6 +164,7 @@ export function createClaimStream(
   const listeners = new Set<() => void>();
   const rejectionListeners = new Set<(r: ClaimRejection) => void>();
   const lostListeners = new Set<(l: ClaimLost) => void>();
+  const claimsAtom = createAtom('ablo.claims');
 
   // ── State: in-flight heartbeats awaiting their ack, keyed by claimId ──
   const pendingHeartbeats = new Map<
@@ -190,6 +192,7 @@ export function createClaimStream(
 
   const notifyListeners = () => {
     claimsSnapshot = Object.freeze(Array.from(activeByClaimId.values()));
+    claimsAtom.reportChanged();
     for (const l of listeners) {
       try {
         l();
@@ -656,9 +659,11 @@ export function createClaimStream(
       }, claimId);
     },
     get others() {
+      claimsAtom.reportObserved();
       return claimsSnapshot;
     },
     queueFor(target: PresenceTarget): readonly Claim[] {
+      claimsAtom.reportObserved();
       const ref = resolveTarget(target);
       const key = entityKey(ref.type, ref.id);
       const cached = queueByEntity.get(key);

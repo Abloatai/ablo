@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.67.6
+
+### Faster startup and local reads
+
+The reactive client applies saved rows in batches, caches immutable model snapshots, and keeps claim updates separate from model subscriptions. IndexedDB uses secondary indexes for matching local queries. The client also parses sync messages and loads large snapshots faster.
+
+Cold starts open the metadata database alongside authentication and connect the WebSocket after the initial HTTP snapshot. Applications can opt into `hydrateBeforeAuth` to display a saved replica while authentication runs. Enable it only where displaying the previous session’s cached data before verification is acceptable.
+
+### Sync recovers when the replay limit is reached
+
+When the server cannot replay the full backlog, the client keeps the last applied position and requests a fresh snapshot. It resumes incremental sync after applying that snapshot. Requests to recover missing rows return no result for a `403` or `404` and skip repeated requests for the same row.
+
+### HTTP errors identify the rejected parameter
+
+The SDK exposes the rejected parameter as `error.param` when the server supplies it, for example when a pagination cursor is invalid.
+
+## 0.67.5
+
+### Newer local edits survive delayed catch-up
+
+A delayed server update could briefly restore an older value after a local write had been accepted. Confirmed fields now retain their newer local values while earlier catch-up arrives; unrelated changes from other users still apply. New edits also take precedence over older queued patches, keeping rapid keyboard movements steady through reconciliation.
+
 ## 0.67.4
 
 ### Brief disconnects retain presence

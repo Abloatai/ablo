@@ -13,7 +13,7 @@ async function database(response: Response) {
   await host.open({participantId:'user',participantKind:'user',organizationId:'org',projectId:'project',branchId:'branch',branchRoot:false});
   const store=host.getStore('Item');
   if(!store) throw new Error('Missing test store');
-  const write=jest.spyOn(store,'put');
+  const write=jest.spyOn(store,'putMany');
   const mark=jest.spyOn(host,'setModelPersisted');
   const checkpoint=jest.spyOn(host,'updateWorkspaceMetadata');
   return {host,write,mark,checkpoint,run:()=>host.bootstrapFromServer({type:'full',lastSyncId:0,modelsToLoad:[],syncGroups:[]},[])};
@@ -22,7 +22,7 @@ async function database(response: Response) {
 it('does not mark a model or snapshot persisted after a quota failure', async () => {
   const {write,mark,checkpoint,run}=await database({type:'full',lastSyncId:100,models:{Item:[{id:'one'},{id:'two'}]}});
   const error=new DOMException('Quota exceeded','QuotaExceededError');
-  write.mockResolvedValueOnce().mockRejectedValueOnce(error);
+  write.mockRejectedValueOnce(error);
   await expect(run()).rejects.toBe(error);
   expect(mark).not.toHaveBeenCalled();
   expect(checkpoint).not.toHaveBeenCalledWith(expect.objectContaining({lastSyncId:100}));

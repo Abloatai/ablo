@@ -92,4 +92,22 @@ describe('BootstrapFetcher — shared auth source', () => {
     }
   });
 
+  it('treats 403/404 on fetchEntity as null and memoizes inaccessible entities', async () => {
+    const helper = new BootstrapFetcher({
+      baseUrl: 'https://api.example.com/api',
+      authToken: 'token-a',
+    });
+    jest.mocked(globalThis.fetch).mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      headers: { get: () => null },
+      text: () => Promise.resolve('{"error":"forbidden"}'),
+    } as unknown as Response);
+
+    expect(await helper.fetchEntity('platformSessions', 'id-403')).toBeNull();
+    expect(await helper.fetchEntity('platformSessions', 'id-403')).toBeNull();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
 });

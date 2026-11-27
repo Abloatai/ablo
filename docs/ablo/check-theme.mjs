@@ -44,8 +44,13 @@ try {
       assert.equal(chrome.headerHeight, '64px');
       assert.equal(chrome.header, chrome.sidebar, 'Header and sidebar share the application surface');
       assert.notEqual(chrome.header, chrome.body);
-      assert.equal(chrome.radius, '4px', 'Controls retain the tighter corners');
+      assert.equal(chrome.radius, '0px', 'Navigation controls use square corners');
       assert.equal(chrome.visibleIcons, 0, 'Navigation has no decorative icons');
+      assert.equal(
+        await page.locator('.ablo-docs-footer').evaluate(footer => getComputedStyle(footer).color),
+        mode === 'light' ? 'rgb(154, 36, 28)' : 'rgb(244, 225, 140)',
+        'Footer uses Ablo vermilion in light mode and butter in dark mode',
+      );
 
       if (width === 390) {
         await page.getByRole('button', { name: 'Toggle navigation', exact: true }).click();

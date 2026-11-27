@@ -1,10 +1,7 @@
-/* Match Lobby docs' application surfaces and controls. */
-/* Adopt the Lobby application's own neutral palette (apps/web/app/styles.css'
-   shadcn-style tokens), not the marketing landing's Butter/Deep Red brand.
-   Pure grayscale (oklch chroma 0) in both reader modes. */
+/* Ablo documentation uses a neutral reading surface and vermilion accents. */
 :root {
   --blume-foreground: oklch(0.145 0 0);
-  --blume-accent-foreground: oklch(0.145 0 0);
+  --blume-accent-foreground: #fff;
   --blume-muted: oklch(0.97 0 0);
   /* The app's own 0.556 muted-foreground falls below 4.5:1 for small docs
      text (it's tuned for the app's larger/bolder UI chrome); darkened here,
@@ -19,7 +16,7 @@
 
 :root[data-theme="dark"] {
   --blume-foreground: oklch(0.985 0 0);
-  --blume-accent-foreground: oklch(0.985 0 0);
+  --blume-accent-foreground: #161616;
   --blume-muted: oklch(0.269 0 0);
   --blume-muted-foreground: oklch(0.708 0 0);
   --blume-border: oklch(1 0 0 / 10%);
@@ -94,20 +91,40 @@ a, button, input, dialog, kbd, [class*="rounded-"] {
 /* Generated docs point their edit action at the wrong source file. */
 [data-blume-page-actions] a[href*="/edit/"] { display: none; }
 
-.ablo-docs-footer { margin-top: 64px; padding: 72px clamp(22px, 5vw, 84px) 38px; background: var(--blume-background); color: var(--blume-foreground); font-family: var(--blume-font-body); line-height: 1.5; }
-.ablo-docs-footer-inner { max-width: 1440px; margin-inline: auto; }
-.ablo-docs-footer nav { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
-.ablo-docs-footer nav h2 { margin: 0 0 16px; font-size: 14px; font-weight: 500; }
-.ablo-docs-footer nav section > div { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; }
-.ablo-docs-footer nav a { display: block; margin-bottom: 12px; font-size: 14px; }
+#blume-content h1 { font-size: clamp(26px, 3vw, 34px); font-weight: 500; line-height: 1.15; }
+
+article[data-blume-update] {
+  margin-block: clamp(32px, 5vw, 64px);
+  padding: 0;
+  border: 0;
+  column-gap: 24px;
+}
+article[data-blume-update] > header { border: 0; padding: 0; }
+article[data-blume-update] > header a { color: var(--blume-accent); font-size: 15px; }
+article[data-blume-update] > header span { padding-inline: 0; background: transparent; }
+article[data-blume-update][hidden] { display: none; }
+[data-ablo-changelog-pagination] { border: 0; }
+[data-ablo-changelog-pagination] a { color: var(--blume-accent); text-underline-offset: 4px; }
+[data-ablo-changelog-pagination] a:hover { text-decoration: underline; }
+
+.ablo-docs-footer {
+  margin-top: 64px;
+  padding: clamp(40px, 7vw, 80px) clamp(22px, 5vw, 84px) 32px;
+  background: var(--blume-background);
+  color: var(--blume-accent);
+  font-family: var(--blume-font-body);
+  line-height: 1.5;
+}
+.ablo-docs-footer-inner { max-width: 1240px; margin-inline: auto; }
+.ablo-docs-signature > a { display: block; width: 100%; }
+.ablo-docs-wordmark { display: block; aspect-ratio: 2820 / 800; background: currentColor; mask: url('/logo/wordmark.svg') center / contain no-repeat; }
+.ablo-docs-footer nav { margin-top: clamp(30px, 6vw, 56px); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.ablo-docs-footer nav h2 { margin: 0 0 16px; font-size: 16px; font-weight: 500; }
+.ablo-docs-footer nav section > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; }
+.ablo-docs-footer nav a { display: block; width: fit-content; margin-bottom: 12px; font-size: 14px; }
 .ablo-docs-footer a:hover, [data-blume-header] a:hover { text-decoration: underline; }
 .ablo-docs-footer a:focus-visible { outline: 2px solid currentColor; outline-offset: 5px; }
-.ablo-docs-signature { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 24px; }
-.ablo-docs-signature > a { display: block; width: min(100%, clamp(220px, 32vw, 420px)); }
-.ablo-docs-wordmark { display: block; aspect-ratio: 2820 / 800; background: currentColor; mask: url('/logo/wordmark.svg') center / contain no-repeat; }
-.ablo-docs-worktable { aspect-ratio: 2; background: currentColor; mask: url('/shared-worktable-outline.png') center / contain no-repeat; }
 .ablo-docs-copyright { margin-top: 24px; font-size: 12px; }
 .ablo-docs-logo { display: inline-flex; flex-shrink: 0; color: inherit; }
 .ablo-docs-emblem { display: block; width: 32px; height: 32px; background: currentColor; mask: url('/logo/light.svg') center / contain no-repeat; }
-@media (width <= 700px) { .ablo-docs-signature { grid-template-columns: 1fr; } }
 @media (width < 640px) { .ablo-docs-footer nav section > div { grid-template-columns: 1fr; } }

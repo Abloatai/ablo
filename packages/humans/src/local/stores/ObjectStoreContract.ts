@@ -21,6 +21,9 @@ export interface ObjectStoreContract {
   /** Insert or update a record. The record must carry an `id` field. */
   put(data: Record<string, unknown>): Promise<void>;
 
+  /** Insert or update multiple records in a single transaction. */
+  putMany?(records: readonly Record<string, unknown>[]): Promise<void>;
+
   /** Look up a record by id. */
   get(id: string): Promise<Record<string, unknown> | undefined>;
 

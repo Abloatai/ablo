@@ -33,6 +33,14 @@ import {
 /** Generic record type for model data */
 type ModelData = Record<string, unknown>;
 
+/** Zero-allocation own-key existence check for compactAssign. */
+function hasOwnKeys(obj: object): boolean {
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return true;
+  }
+  return false;
+}
+
 /**
  * Carry each input delta's log position onto the change that answers it.
  * `processDeltaBatch` builds its results index-aligned with its input, so the
@@ -105,6 +113,8 @@ export class Database {
 
   private currentDbInfo: DatabaseInfo | null = null;
   private workspaceDb: IDBDatabase | null = null;
+  /** True while the workspace DB was opened speculatively before auth settled. */
+  private optimisticOpen = false;
 
   /**
    * Flag to track if database is closing/closed.
@@ -217,6 +227,60 @@ export class Database {
     }
   }
 
+  /**
+   * Warm the `ablo_databases` meta registry in parallel with network auth so
+   * `open()` does not pay the IDB open latency after `/auth/identity` settles.
+   */
+  async warmMetaDatabase(): Promise<void> {
+    if (this.inMemory) return;
+    await this.databaseManager.initializeMetaDatabase();
+  }
+
+  /**
+   * Speculatively open the unique schema-matching v5 local replica before auth
+   * settles so instant models can hydrate while credential minting and
+   * `/auth/identity` are in flight. Returns `null` when headless, already open,
+   * or when no unambiguous single-owner local replica exists.
+   */
+  async openOptimistic(filter: {
+    projectId?: string | null;
+    branchId?: string | null;
+    participantKind?: string;
+  }): Promise<DatabaseInfo | null> {
+    if (this.inMemory || this.workspaceDb) return null;
+
+    await this.databaseManager.initializeMetaDatabase();
+    const candidate = await this.databaseManager.findSingleOptimisticDatabase(filter);
+    if (!candidate) return null;
+
+    this.isClosing = false;
+    const openedDb = await this.databaseManager.openWorkspaceDatabase(candidate);
+    const connectionClosed = () => {
+      if (this.workspaceDb !== openedDb) return;
+      this.workspaceDb = null;
+      this.optimisticOpen = false;
+      this.isClosing = true;
+      this.storeManager.markAllStoresAsClosing();
+    };
+    openedDb.addEventListener('versionchange', connectionClosed);
+    openedDb.addEventListener('close', connectionClosed);
+
+    this.workspaceDb = openedDb;
+    this.currentDbInfo = candidate;
+    this.optimisticOpen = true;
+    await this.storeManager.initializeStores(this.workspaceDb);
+    return candidate;
+  }
+
+  isOptimisticOpen(): boolean {
+    return this.optimisticOpen && this.workspaceDb !== null;
+  }
+
+  matchesOptimisticIdentity(identity: PersistenceIdentity): boolean {
+    if (!this.optimisticOpen || !this.currentDbInfo) return false;
+    return persistenceIdentityMatches(this.currentDbInfo, identity);
+  }
+
   async open(identity: PersistenceIdentity, version = 1): Promise<void> {
     if (this.isClosing && this.currentDbInfo && !this.workspaceDb) {
       throw new AbloConnectionError('IndexedDB connection closed; recreate the client', {
@@ -226,10 +290,39 @@ export class Database {
     this.isClosing = false;
 
     if (this.workspaceDb && this.currentDbInfo) {
-      if (!persistenceIdentityMatches(this.currentDbInfo, identity)) {
-        throw new AbloConnectionError('Dispose the client before changing persistence authority.', { code: 'db_identity_mismatch' });
+      if (this.optimisticOpen) {
+        if (persistenceIdentityMatches(this.currentDbInfo, identity)) {
+          // Promote the already-open optimistic database after enforcing the
+          // exact same persisted sync-group authority check as a cold open.
+          const metadata = await this.getWorkspaceMetadata();
+          const allowed = new Set(identity.syncGroups ?? []);
+          if (metadata?.subscribedSyncGroups.some(group => !allowed.has(group))) {
+            this.optimisticOpen = false;
+            await this.close();
+            throw new AbloConnectionError('Persisted sync groups exceed the current authority.', {
+              code: 'db_identity_mismatch',
+            });
+          }
+          this.optimisticOpen = false;
+          this.bootstrapHelper.setCacheScope(this.currentDbInfo.name);
+          await this.databaseManager.registerDatabase({
+            ...this.currentDbInfo,
+            updatedAt: new Date(),
+          });
+          await this.updateWorkspaceMetadata({ subscribedSyncGroups: [...allowed] });
+          return;
+        }
+        // Identity changed (different user or narrowed permissions): close the
+        // speculative database and fall through to open the verified plane.
+        this.optimisticOpen = false;
+        await this.close();
+        this.isClosing = false;
+      } else {
+        if (!persistenceIdentityMatches(this.currentDbInfo, identity)) {
+          throw new AbloConnectionError('Dispose the client before changing persistence authority.', { code: 'db_identity_mismatch' });
+        }
+        return;
       }
-      return;
     }
 
     // ── In-memory mode: skip IndexedDB entirely ──────────────────
@@ -272,8 +365,8 @@ export class Database {
 
     this.workspaceDb = await this.databaseManager.openWorkspaceDatabase(
       this.currentDbInfo,
-      async (db) => {
-        await this.storeManager.createStores(db);
+      async (db, tx) => {
+        await this.storeManager.createStores(db, tx);
       }
     );
     const openedDb = this.workspaceDb;
@@ -303,10 +396,7 @@ export class Database {
     }
     await this.updateWorkspaceMetadata({ subscribedSyncGroups: [...allowed] });
 
-    const readiness = await this.storeManager.checkReadinessOfStores();
-    this.runtime.logger.info(
-      `Database opened: ${this.currentDbInfo.name} (${readiness.readyStores.length}/${readiness.totalStores} stores ready)`
-    );
+    this.runtime.logger.info(`Database opened: ${this.currentDbInfo.name}`);
   }
 
   /**
@@ -368,7 +458,7 @@ export class Database {
         return;
       }
 
-      if (Object.keys(value).length === 0) return;
+      if (!hasOwnKeys(value)) return;
       out[key] = value;
       return;
     }
@@ -458,7 +548,6 @@ export class Database {
       };
     }
 
-    const readiness = await this.storeManager.checkReadinessOfStores();
     const metadata = await this.databaseManager.getWorkspaceMetadata(this.workspaceDb);
 
     const instantModels = this.modelRegistry.getModelsByLoadStrategy(LoadStrategy.instant);
@@ -491,7 +580,6 @@ export class Database {
 
     // Log the resolved database state for diagnostics.
     this.runtime.logger.debug('[Database.requiredBootstrap] State check', {
-      readinessReady: readiness.ready,
       hasMetadata: !!metadata,
       metadataLastSyncId,
       effectiveLastSyncId: lastSyncId,
@@ -504,7 +592,7 @@ export class Database {
     let type: BootstrapType;
 
     // hasLocalData: stores actually have records AND we have a valid cursor
-    const hasLocalData = readiness.ready && dataExists && lastSyncId > 0;
+    const hasLocalData = dataExists && lastSyncId > 0;
 
     if (offline && hasLocalData) {
       // Offline with data - use local bootstrap (only option when offline)
@@ -576,17 +664,13 @@ export class Database {
       });
 
       // A delayed response must not rewind rows or the durable resume cursor.
-      if (bootstrapData.lastSyncId < await this.getLastSyncId()) {
+      // Read workspace metadata once so full bootstrap can reuse it when
+      // committing the new checkpoint in its single multi-store transaction.
+      const existingMetadata = await this.getWorkspaceMetadata();
+      if (bootstrapData.lastSyncId < (existingMetadata?.lastSyncId ?? 0)) {
         throw new AbloConnectionError('Bootstrap snapshot is older than the persisted replica; retry the refresh.', {
           code: 'bootstrap_response_invalid',
         });
-      }
-
-      // Clear only after a successful fetch, for transactional safety.
-      // Clear when the server says the response is a full snapshot,
-      // regardless of what type was requested.
-      if (bootstrapData.type === 'full') {
-        await this.clear();
       }
 
       if (bootstrapData.type === 'partial') {
@@ -598,19 +682,10 @@ export class Database {
           toSyncId: bootstrapData.lastSyncId,
         });
 
-        // Apply deltas to IndexedDB using processDeltaBatch for better performance.
-        // Capture the return value so the pool can be updated by the caller —
-        // without this, partial-bootstrap DELETEs persist to IDB but don't
-        // evict entities from the in-memory InstanceCache, leaving ghost rows
-        // visible on the canvas until a full reload rebuilds the pool.
         let deltasApplied = 0;
         let deltaResults: BootstrapResult['deltaResults'];
 
         if (deltas.length > 0) {
-          // Narrow the wire delta to what processDelta reads. The field names
-          // are the wire's own — the only change is `id` becoming `syncId`.
-          // A group-change frame carries its payload as a JSON string, decoded
-          // here exactly as the live delta path does in BaseSyncedStore.
           const formattedDeltas = deltas.map((delta) => ({
             syncId: delta.id,
             actionType: delta.actionType,
@@ -622,9 +697,12 @@ export class Database {
                 : delta.data,
           }));
 
-          // Use batch processing for better performance
           const batch = await this.processDeltaBatch(formattedDeltas);
-          if (batch.persistedSyncId < Math.max(...formattedDeltas.map(delta => delta.syncId))) {
+          let maxDeltaSyncId = Number.NEGATIVE_INFINITY;
+          for (const delta of formattedDeltas) {
+            if (delta.syncId > maxDeltaSyncId) maxDeltaSyncId = delta.syncId;
+          }
+          if (batch.persistedSyncId < maxDeltaSyncId) {
             throw new Error('Could not persist all bootstrap changes; local storage must recover before retrying.');
           }
           deltaResults = batch.results;
@@ -632,7 +710,6 @@ export class Database {
           onProgress?.(deltasApplied);
         }
 
-        // Update workspace metadata with new lastSyncId (critical even when 0 deltas)
         await this.updateWorkspaceMetadata({
           lastSyncId: bootstrapData.lastSyncId,
           schemaHash: this.modelRegistry.getSchemaHash(),
@@ -657,19 +734,19 @@ export class Database {
         });
       }
 
+      // Clear only after a successful fetch, for transactional safety.
+      await this.clear();
+
       let modelsLoaded = 0;
       let modelsStored = 0;
 
-      for (const [modelName, modelData] of Object.entries(bootstrapData.models)) {
-        if (!modelData) {
-          this.runtime.observability.breadcrumb(
-            `No data received for ${modelName}`,
-            'sync.bootstrap',
-            'warning'
-          );
-          continue;
-        }
+      const pendingWrites: {
+        modelName: string;
+        store: NonNullable<ReturnType<Database['getStore']>>;
+        rows: ModelData[];
+      }[] = [];
 
+      for (const [modelName, modelData] of Object.entries(bootstrapData.models)) {
         if (!Array.isArray(modelData)) {
           this.runtime.observability.breadcrumb(
             `Skipping non-array data for ${modelName}`,
@@ -691,24 +768,90 @@ export class Database {
           );
           continue;
         }
-        // Fail before marking the model or snapshot persisted. A dropped row
-        // must be retried, not hidden behind an advanced bootstrap cursor.
-        for (const item of modelData) {
-          const compacted = this.compactRecord(modelName, item as ModelData);
-          await store.put(compacted);
-          modelsStored++;
-          modelsLoaded++;
-          if (modelsLoaded % 10 === 0) onProgress?.(modelsLoaded);
+
+        const compactedRows = new Array<ModelData>(modelData.length);
+        for (let i = 0; i < modelData.length; i++) {
+          compactedRows[i] = this.compactRecord(modelName, modelData[i] as ModelData);
         }
-        await this.setModelPersisted(modelName, true);
+        pendingWrites.push({ modelName, store, rows: compactedRows });
       }
 
-      await this.updateWorkspaceMetadata({
-        lastSyncId: bootstrapData.lastSyncId,
-        schemaHash: this.modelRegistry.getSchemaHash(),
-        syncGroups: [...syncGroups],
-        updatedAt: new Date(),
-      });
+      // Write all model stores in parallel (via `putMany` when available) so
+      // multi-model cold bootstraps overlap IDB transactions instead of
+      // serializing store-by-store. Any failure aborts before marking models
+      // persisted or advancing the durable cursor.
+      await Promise.all(
+        pendingWrites.map(async ({ store, rows }) => {
+          if (store.putMany) {
+            await store.putMany(rows);
+            modelsStored += rows.length;
+            modelsLoaded += rows.length;
+            onProgress?.(modelsLoaded);
+          } else {
+            for (const compacted of rows) {
+              await store.put(compacted);
+              modelsStored++;
+              modelsLoaded++;
+              if (modelsLoaded % 10 === 0) onProgress?.(modelsLoaded);
+            }
+          }
+        }),
+      );
+
+      // Commit all model persistence flags and the updated workspace checkpoint
+      // in one relaxed-durability `__meta` transaction in IDB mode (instead of
+      // N + 2 serial transactions).
+      if (!this.inMemory && this.workspaceDb?.objectStoreNames.contains('__meta')) {
+        const db = this.workspaceDb;
+        const nowMs = Date.now();
+        const nowIso = new Date(nowMs).toISOString();
+        const updatedMeta: WorkspaceMetadata = {
+          ...(existingMetadata ?? {
+            lastSyncId: 0,
+            firstSyncId: 0,
+            backendDatabaseVersion: 1,
+            subscribedSyncGroups: [],
+            updatedAt: new Date(nowMs),
+          }),
+          lastSyncId: bootstrapData.lastSyncId,
+          schemaHash: this.modelRegistry.getSchemaHash(),
+          syncGroups: [...syncGroups],
+          updatedAt: new Date(nowMs),
+        };
+
+        await new Promise<void>((resolve, reject) => {
+          try {
+            const tx = db.transaction(['__meta'], 'readwrite', { durability: 'relaxed' });
+            const metaStore = tx.objectStore('__meta');
+            for (const { modelName } of pendingWrites) {
+              metaStore.put(
+                { persisted: true, modelName, timestamp: nowMs, updatedAt: nowIso },
+                modelName,
+              );
+            }
+            metaStore.put(updatedMeta, 'metadata');
+            tx.oncomplete = () => { resolve(); };
+            tx.onabort = () => {
+              reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError'));
+            };
+            tx.onerror = () => {
+              reject(tx.error ?? new Error('IndexedDB transaction error'));
+            };
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      } else {
+        for (const { modelName } of pendingWrites) {
+          await this.setModelPersisted(modelName, true);
+        }
+        await this.updateWorkspaceMetadata({
+          lastSyncId: bootstrapData.lastSyncId,
+          schemaHash: this.modelRegistry.getSchemaHash(),
+          syncGroups: [...syncGroups],
+          updatedAt: new Date(),
+        });
+      }
 
       const elapsed =
         (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime;
@@ -1032,21 +1175,30 @@ export class Database {
       let inMemPersistedSyncId = 0;
       const lastApplied = this.inMemoryMetadata?.lastSyncId ?? 0;
 
+      let cachedStoreName = '';
+      let cachedStore: InMemoryObjectStore | undefined;
+
       // InMemoryObjectStore mutates synchronously. Calling the async
       // single-delta facade once per row creates several promises and
       // continuations per delta, which becomes the dominant cost under a
       // catch-up frame. Apply the already-ordered batch directly, matching the
       // synchronous request scheduling used by the IndexedDB transaction path.
-      for (const [index, delta] of deltas.entries()) {
+      for (let index = 0; index < deltas.length; index++) {
+        const delta = deltas[index];
+        if (!delta) continue;
         const { actionType, modelName, modelId, data, syncId, transactionId } = delta;
-        const store = this.getStore(modelName, 'processDeltaBatch');
+        if (modelName !== cachedStoreName) {
+          cachedStoreName = modelName;
+          cachedStore = this.getStore(modelName, 'processDeltaBatch') as
+            | InMemoryObjectStore
+            | undefined;
+        }
+        const memoryStore = cachedStore;
         let single: AppliedChange;
 
-        if (!store || (typeof syncId === 'number' && syncId <= lastApplied)) {
+        if (!memoryStore || (typeof syncId === 'number' && syncId <= lastApplied)) {
           single = { action: 'verify', modelName, modelId, transactionId };
         } else {
-          const memoryStore = store as InMemoryObjectStore;
-
           switch (actionType) {
             case 'C':
             case 'I': {
@@ -1183,9 +1335,10 @@ export class Database {
       // Conflict check: skip an insert or update when a delete for the same
       // entity has an equal or higher sync id.
       if (
-        delta.actionType === 'U' ||
-        delta.actionType === 'I' ||
-        delta.actionType === 'C'
+        deleteSyncIds.size > 0 &&
+        (delta.actionType === 'U' ||
+          delta.actionType === 'I' ||
+          delta.actionType === 'C')
       ) {
         const key = `${delta.modelName}:${delta.modelId}`;
         const deleteSyncId = deleteSyncIds.get(key);
@@ -1333,8 +1486,11 @@ export class Database {
           continue;
         }
 
-        const tx = this.workspaceDb.transaction([modelName], 'readwrite');
+        const tx = this.workspaceDb.transaction([modelName], 'readwrite', {
+          durability: 'relaxed',
+        });
         const objectStore = tx.objectStore(modelName);
+        const hasEssentialFields = (this.essentialFields[modelName]?.length ?? 0) > 0;
 
         // Stage results for this store; only commit to global results when tx completes successfully
         const stagedResults: (AppliedChange & { idx: number })[] = [];
@@ -1342,24 +1498,18 @@ export class Database {
         // Step 4: Process all deltas synchronously within transaction (no await!)
         for (const { idx, delta } of storeDeltas) {
           const { actionType, modelId, data } = delta;
-          // Server deltas carry `id` in the envelope (modelId) but often
-          // strip it from the `data` payload as redundant. IDB object
-          // stores use keyPath='id' on the record itself, so the record
-          // MUST have `id` set. Inject it before `compactRecord` so the
-          // record is self-describing.
-          const dataWithId =
-            data && typeof data === 'object'
-              ? { id: modelId, ...(data as Record<string, unknown>) }
-              : data;
-          const compacted =
-            dataWithId && typeof dataWithId === 'object'
-              ? this.compactRecord(modelName, dataWithId)
-              : dataWithId;
 
           switch (actionType) {
             case 'C':
-            case 'I':
+            case 'I': {
+              const compacted =
+                data && typeof data === 'object'
+                  ? this.compactDeltaRecord(modelId, data)
+                  : data;
               objectStore.put(compacted);
+              if (compacted && typeof compacted === 'object') {
+                existingRecords.set(modelId, compacted);
+              }
               stagedResults.push({
                 action: 'add',
                 modelName,
@@ -1368,6 +1518,7 @@ export class Database {
                 idx,
               });
               break;
+            }
 
             case 'U': {
               const existing = existingRecords.get(modelId);
@@ -1401,14 +1552,18 @@ export class Database {
                 break;
               }
 
-              // Safe to merge - existing record is guaranteed
-              const merged = { ...existing, ...compacted };
-
-              if (existing && compacted) {
-                this.logPreservedFields(modelName, modelId, existing, compacted);
+              // Safe to merge - existing record is guaranteed. Compact directly
+              // onto the shallow clone in one pass (1 allocation instead of 3).
+              const merged: ModelData = { ...existing };
+              if (data && typeof data === 'object') {
+                this.compactDeltaRecord(modelId, data, merged);
+                if (hasEssentialFields) {
+                  this.logPreservedFields(modelName, modelId, existing, data);
+                }
               }
 
               objectStore.put(merged);
+              existingRecords.set(modelId, merged);
               stagedResults.push({
                 action: 'update',
                 modelName,
@@ -1421,15 +1576,18 @@ export class Database {
 
             case 'D':
               objectStore.delete(modelId);
+              existingRecords.delete(modelId);
               stagedResults.push({ action: 'remove', modelName, modelId, idx });
               break;
 
-            case 'A':
+            case 'A': {
               const archivedData = this.compactRecord(modelName, {
                 ...data,
+                id: modelId,
                 archivedAt: new Date(),
               });
               objectStore.put(archivedData);
+              existingRecords.set(modelId, archivedData);
               stagedResults.push({
                 action: 'archive',
                 modelName,
@@ -1438,6 +1596,7 @@ export class Database {
                 idx,
               });
               break;
+            }
 
             case 'V':
               stagedResults.push({ action: 'verify', modelName, modelId, data, idx });
@@ -1547,6 +1706,52 @@ export class Database {
       return [];
     }
     return store.getAll();
+  }
+
+  /**
+   * Read multiple model stores in a single readonly IndexedDB transaction with
+   * parallel `getAll()` requests (1 transaction vs N serial transactions on
+   * startup hydration).
+   */
+  async hydrateModelBatch(modelNames: readonly string[]): Promise<Map<string, ModelData[]>> {
+    const result = new Map<string, ModelData[]>();
+    if (modelNames.length === 0) return result;
+
+    if (this.inMemory || !this.workspaceDb) {
+      await Promise.all(
+        modelNames.map(async (modelName) => {
+          result.set(modelName, await this.hydrateModels(modelName));
+        }),
+      );
+      return result;
+    }
+
+    const db = this.workspaceDb;
+    const present = modelNames.filter((name) => db.objectStoreNames.contains(name));
+    for (const name of modelNames) {
+      if (!present.includes(name)) result.set(name, []);
+    }
+    if (present.length === 0) return result;
+
+    return new Promise<Map<string, ModelData[]>>((resolve, reject) => {
+      try {
+        const tx = db.transaction(present, 'readonly');
+        for (const name of present) {
+          const request = tx.objectStore(name).getAll();
+          request.onsuccess = () => {
+            result.set(name, (request.result as ModelData[]) ?? []);
+          };
+          request.onerror = () => {
+            result.set(name, []);
+          };
+        }
+        tx.oncomplete = () => { resolve(result); };
+        tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB batch hydrate error')); };
+        tx.onabort = () => { reject(tx.error ?? new DOMException('IndexedDB batch hydrate aborted', 'AbortError')); };
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   /** Put a single record to IndexedDB (for self-healing corrupted records) */
@@ -1921,6 +2126,7 @@ export class Database {
 
   async close(): Promise<void> {
     this.isClosing = true;
+    this.optimisticOpen = false;
     this.storeManager.markAllStoresAsClosing();
 
     if (this.workspaceDb) {

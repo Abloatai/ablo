@@ -22,6 +22,17 @@ const EXPIRED_401 = {
   status: 401,
   body: { error: { code: 'apikey_expired', message: 'key has expired' } },
 };
+const EXPIRED_QUERY_RESULT = {
+  results: [[]],
+  errors: [{
+    index: 0,
+    model: 'documents',
+    type: 'AbloAuthenticationError',
+    code: 'apikey_expired',
+    message: 'key has expired',
+    event_id: '',
+  }],
+};
 const OK_ROWS = { status: 200, body: { results: [[{ id: 'doc_1' }]] } };
 
 describe('postQuery — credential recovery replay', () => {
@@ -88,7 +99,7 @@ describe('postQuery — credential recovery replay', () => {
     expect(result).toEqual({ results: [[{ id: 'doc_1' }]] });
   });
 
-  it('recovery says stop → NO replay, empty slots (the pre-backbone behavior)', async () => {
+  it('recovery says stop → returns the authentication error without replay', async () => {
     const fetchMock = mockFetchSequence(EXPIRED_401);
     const recoverCredential = jest.fn(() => Promise.resolve('stop' as const));
 
@@ -98,10 +109,10 @@ describe('postQuery — credential recovery replay', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ results: [[]] });
+    expect(result).toEqual(EXPIRED_QUERY_RESULT);
   });
 
-  it('replay rejected again → bounded: recovery runs ONCE, then empty slots (no retry loop)', async () => {
+  it('replay rejected again → returns the authentication error after one recovery attempt', async () => {
     const fetchMock = mockFetchSequence(EXPIRED_401, EXPIRED_401);
     const recoverCredential = jest.fn(() => Promise.resolve('retry' as const));
 
@@ -112,10 +123,10 @@ describe('postQuery — credential recovery replay', () => {
 
     expect(recoverCredential).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ results: [[]] });
+    expect(result).toEqual(EXPIRED_QUERY_RESULT);
   });
 
-  it('403 (permission) → recovery NOT consulted', async () => {
+  it('403 → returns the permission error without attempting recovery', async () => {
     const fetchMock = mockFetchSequence({
       status: 403,
       body: { error: { code: 'permission_denied', message: 'nope' } },
@@ -129,7 +140,17 @@ describe('postQuery — credential recovery replay', () => {
 
     expect(recoverCredential).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ results: [[]] });
+    expect(result).toEqual({
+      results: [[]],
+      errors: [{
+        index: 0,
+        model: 'documents',
+        type: 'AbloPermissionError',
+        code: 'permission_denied',
+        message: 'nope',
+        event_id: '',
+      }],
+    });
   });
 
   it('session_expired code → recovery consulted with session_expiry (sign-out is the backbone/FSM call)', async () => {
@@ -145,12 +166,12 @@ describe('postQuery — credential recovery replay', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('no recovery hook wired → single attempt, empty slots (unchanged legacy behavior)', async () => {
+  it('no recovery hook wired → returns the authentication error after a single attempt', async () => {
     const fetchMock = mockFetchSequence(EXPIRED_401);
 
     const result = await postQuery(options({ getAuthToken: () => 'ek_x' }), batch);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ results: [[]] });
+    expect(result).toEqual(EXPIRED_QUERY_RESULT);
   });
 });

@@ -45,8 +45,8 @@ export default defineConfig({
   },
 
   theme: {
-    accent: { light: "oklch(0.708 0 0)", dark: "oklch(0.556 0 0)" },
-    radius: "sm",
+    accent: { light: "#9a241c", dark: "#f4e18c" },
+    radius: "none",
     mode: "light",
     background: { light: "oklch(1 0 0)", dark: "oklch(0.145 0 0)" },
   },

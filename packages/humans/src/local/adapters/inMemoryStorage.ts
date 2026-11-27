@@ -45,18 +45,29 @@ export class InMemoryObjectStore implements ObjectStoreContract {
     return Promise.resolve();
   }
 
+  putMany(records: readonly Record<string, unknown>[]): Promise<void> {
+    for (const record of records) {
+      this.putSync(record);
+    }
+    return Promise.resolve();
+  }
+
   /** Synchronous fast path used by Database.processDeltaBatch in memory mode. */
   putSync(record: Record<string, unknown>): void {
     const id = record.id as string;
     if (!id) return;
 
-    const existing = this.data.get(id);
-    if (existing) {
-      this.removeFromIndexes(id, existing);
+    if (this.indexes.size > 0) {
+      const existing = this.data.get(id);
+      if (existing) {
+        this.removeFromIndexes(id, existing);
+      }
+      this.data.set(id, { ...record });
+      this.addToIndexes(id, record);
+      return;
     }
 
     this.data.set(id, { ...record });
-    this.addToIndexes(id, record);
   }
 
   get(id: string): Promise<Record<string, unknown> | undefined> {
@@ -79,11 +90,15 @@ export class InMemoryObjectStore implements ObjectStoreContract {
 
   /** Synchronous fast path used by Database.processDeltaBatch in memory mode. */
   deleteSync(id: string): void {
-    const existing = this.data.get(id);
-    if (existing) {
-      this.removeFromIndexes(id, existing);
-      this.data.delete(id);
+    if (this.indexes.size > 0) {
+      const existing = this.data.get(id);
+      if (existing) {
+        this.removeFromIndexes(id, existing);
+        this.data.delete(id);
+      }
+      return;
     }
+    this.data.delete(id);
   }
 
   getAllFromIndex(
@@ -91,7 +106,11 @@ export class InMemoryObjectStore implements ObjectStoreContract {
     value: IDBValidKey,
   ): Promise<Record<string, unknown>[]> {
     const index = this.indexes.get(indexName);
-    if (!index) return Promise.resolve([]);
+    if (!index) {
+      return Promise.reject(
+        new DOMException(`Index "${indexName}" does not exist on store "${this.storeName}"`, 'NotFoundError'),
+      );
+    }
     // The in-memory index stores values as strings (it doesn't support
     // the full IDB key range — Date / BufferSource / arrays). For the
     // overwhelmingly-common case of string FK ids, coercing through

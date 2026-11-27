@@ -101,9 +101,17 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
       }).catch(() => undefined);
     });
 
+    let disposed = false;
     const onBootstrapRequired = deps.syncWebSocket.subscribe(
       'bootstrap_required',
-      (hint: BootstrapHint) => { deps.handleBootstrapRequired(hint); }
+      (hint: BootstrapHint) => {
+        // Wait for any already-received catch-up chunks to finish persisting
+        // and acknowledging before starting replacement bootstrap so an
+        // in-flight chunk cannot race with or overwrite post-bootstrap state.
+        void catchUpLane.catch(() => undefined).then(() => {
+          if (!disposed) deps.handleBootstrapRequired(hint);
+        });
+      }
     );
 
     const onBootstrapData = deps.syncWebSocket.subscribe('bootstrap_data', (...args) => {
@@ -199,6 +207,7 @@ export function wireSocketEvents<TCollaboration extends EventMap<TCollaboration>
     });
 
     deps.disposers.push(
+      () => { disposed = true; },
       onConnected, onDisconnected, onReconnecting,
       onDelta, onDeltaBatch, onCatchUpChunk, onCatchUpEnd, onBootstrapRequired,
       onBootstrapData,

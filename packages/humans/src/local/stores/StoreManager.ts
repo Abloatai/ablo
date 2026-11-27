@@ -98,13 +98,38 @@ export class StoreManager {
     this.stores.set(modelName, store);
   }
 
-  async createStores(db: IDBDatabase): Promise<void> {
+  async createStores(db: IDBDatabase, upgradeTx?: IDBTransaction): Promise<void> {
     this.runtime.logger.info('Creating tables for all registered models');
 
     for (const modelName of this.modelRegistry.getRegisteredModelNames()) {
       const storeName = modelName;
+      const indexedProperties = this.modelRegistry.getIndexedProperties(modelName);
 
       if (db.objectStoreNames.contains(storeName)) {
+        if (upgradeTx) {
+          const store = upgradeTx.objectStore(storeName);
+          const wanted = new Set(indexedProperties);
+          for (const propName of indexedProperties) {
+            if (!store.indexNames.contains(propName)) {
+              try {
+                store.createIndex(propName, propName, { unique: false });
+                this.runtime.logger.debug('Added index on upgrade', { store: storeName, prop: propName });
+              } catch (error) {
+                this.runtime.logger.debug('Failed to add index on upgrade', { store: storeName, prop: propName, error });
+              }
+            }
+          }
+          for (const existing of Array.from(store.indexNames)) {
+            if (!wanted.has(existing)) {
+              try {
+                store.deleteIndex(existing);
+                this.runtime.logger.debug('Removed obsolete index on upgrade', { store: storeName, prop: existing });
+              } catch (error) {
+                this.runtime.logger.debug('Failed to remove obsolete index on upgrade', { store: storeName, prop: existing, error });
+              }
+            }
+          }
+        }
         continue;
       }
 
@@ -112,7 +137,6 @@ export class StoreManager {
 
       const store = db.createObjectStore(storeName, { keyPath: 'id' });
 
-      const indexedProperties = this.modelRegistry.getIndexedProperties(modelName);
       for (const propName of indexedProperties) {
         try {
           store.createIndex(propName, propName, { unique: false });
@@ -204,29 +228,47 @@ export class StoreManager {
   }
 
   /**
-   * Reports whether any data store holds at least one record. This is a
-   * cache-validity check: if the stores are empty, the sync cursor
-   * (`lastSyncId`) is meaningless no matter what the metadata says, because the
-   * cursor and the data must travel together — no data means no cursor, which
-   * forces a full bootstrap. To stay cheap it samples up to three stores rather
-   * than scanning them all, and returns true as soon as one has records.
+   * Reports whether any data store holds at least one record. Runs in a single
+   * readonly IndexedDB transaction across all registered stores (instead of
+   * sampling only the first 3 stores serially), returning true as soon as any
+   * store has a key.
    */
   async hasAnyData(): Promise<boolean> {
-    const storeEntries = Array.from(this.stores);
-    // Sample a few stores — don't check all 30+ if the first one has data
-    const samplesToCheck = Math.min(storeEntries.length, 3);
-    for (let i = 0; i < samplesToCheck; i++) {
-      const entry = storeEntries[i];
-      if (!entry) break;
-      const [, store] = entry;
+    if (!this.db) return false;
+    const storeNames = Array.from(this.stores.keys()).filter((name) =>
+      this.db!.objectStoreNames.contains(name),
+    );
+    if (storeNames.length === 0) return false;
+
+    return new Promise<boolean>((resolve) => {
       try {
-        const count = await store.count();
-        if (count > 0) return true;
+        const tx = this.db!.transaction(storeNames, 'readonly');
+        let remaining = storeNames.length;
+        let found = false;
+
+        for (const name of storeNames) {
+          const req = tx.objectStore(name).openKeyCursor();
+          req.onsuccess = () => {
+            if (!found && req.result !== null) {
+              found = true;
+              resolve(true);
+              return;
+            }
+            remaining--;
+            if (!found && remaining === 0) resolve(false);
+          };
+          req.onerror = () => {
+            remaining--;
+            if (!found && remaining === 0) resolve(false);
+          };
+        }
+
+        tx.onerror = () => { if (!found) resolve(false); };
+        tx.onabort = () => { if (!found) resolve(false); };
       } catch {
-        // Store not accessible — treat as empty
+        resolve(false);
       }
-    }
-    return false;
+    });
   }
 
   getStoresByStrategy(strategy: LoadStrategy): ObjectStore[] {

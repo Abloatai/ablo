@@ -69,6 +69,10 @@ import * as groupChange from './sync/groupChange.js';
 import type { GroupChangeContext } from './sync/groupChange.js';
 import * as bootstrapApply from './sync/bootstrapApply.js';
 import type { PoolContext, RehydrationStats } from './sync/bootstrapApply.js';
+import {
+  performBackgroundBootstrap as runBackgroundBootstrap,
+  triggerBootstrapRecovery as runBootstrapRecovery,
+} from './sync/bootstrapRecovery.js';
 import * as deltaPipeline from './sync/deltaPipeline.js';
 import type { DeltaPipelineContext } from './sync/deltaPipeline.js';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
@@ -502,6 +506,7 @@ export class BaseSyncedStore<
 
   protected bootstrapDeltaQueue: SyncDelta[] | null = null;
   protected activeBootstrapCount = 0;
+  private bootstrapRecoveryInFlight: Promise<void> | null = null;
   /** The live deadline for the bootstrap attempt in flight, if any. */
   private bootstrapDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1013,6 +1018,36 @@ export class BaseSyncedStore<
     }
   }
 
+  /**
+   * Expose optimistically hydrated local rows before auth settles so the UI
+   * can paint immediately from IndexedDB. Reverted by `clearOptimisticData()`
+   * if auth fails or resolves to a different identity.
+   */
+  markOptimisticDataReady(): void {
+    runInAction(() => {
+      this.dataReady = true;
+      if (this.syncStatus.state === 'idle' && this.syncStatus.progress === 0) {
+        this.syncStatus.state = 'syncing';
+        this.syncStatus.progress = 25;
+      }
+    });
+  }
+
+  /**
+   * Drop optimistically hydrated rows and close any speculative database
+   * connection when auth fails or resolves to a different authority.
+   */
+  async clearOptimisticData(): Promise<void> {
+    this.objectPool.clear();
+    this.queryProcessor.clearCache();
+    runInAction(() => {
+      this.dataReady = false;
+    });
+    if (this.database.isOptimisticOpen()) {
+      await this.database.close();
+    }
+  }
+
   protected resetBootstrapState(): void {
     try {
       this.objectPool.clear({ preserveObserved: true });
@@ -1263,33 +1298,23 @@ export class BaseSyncedStore<
   protected async performBackgroundBootstrap(
     requirements: Awaited<ReturnType<typeof this.database.requiredBootstrap>>,
     context: UserContext,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<void> {
-    await this.withDeltaQueuing(async () => {
-      try {
-        const preBootstrapIds = new Set(this.objectPool.getAllIds());
-        const bootstrapResult = await this.database.bootstrapFromServer(
-          requirements,
-          this.resolveSyncGroups(context),
-        );
-        const deltaProtectedIds = this.collectDeltaProtectedIds(preBootstrapIds);
-        this.applyBootstrapToPool(bootstrapResult, deltaProtectedIds);
-        this.updateSyncStatus({ state: 'idle', progress: 100 });
-      } catch (error) {
-        this.runtime.logger.debug('[sync-engine] Background bootstrap failed', {
-          error: error instanceof Error ? error.message : String(error),
-          cause: error,
-        });
-        this.runtime.observability.captureBootstrapFailure(error, { type: 'background' });
-        if (AbloSessionError.isSessionError(error)) {
-          this.syncWebSocket.setSessionErrorDetected();
-          this.syncWebSocket.disconnect();
-          this.updateSyncStatus({ state: 'error', error: error });
-        } else if (!this.syncWebSocket.isConnected()) {
-          this.updateSyncStatus({ state: 'offline', offlineSince: new Date() });
-        }
-      }
-    });
+    await runBackgroundBootstrap({
+      database: this.database,
+      syncClient: this.syncClient,
+      objectPool: this.objectPool,
+      syncWebSocket: this.syncWebSocket,
+      runtime: this.runtime,
+      isDataReady: () => this.dataReady,
+      getBootstrapDeltaQueue: () => this.bootstrapDeltaQueue,
+      setBootstrapDeltaQueue: (queue) => { this.bootstrapDeltaQueue = queue; },
+      withDeltaQueuing: (fn) => this.withDeltaQueuing(fn),
+      resolveSyncGroups: (nextContext) => this.resolveSyncGroups(nextContext),
+      collectDeltaProtectedIds: (preBootstrapIds) => this.collectDeltaProtectedIds(preBootstrapIds),
+      applyBootstrapToPool: (result, protectedIds) => this.applyBootstrapToPool(result, protectedIds),
+      updateSyncStatus: (updates) => { this.updateSyncStatus(updates); },
+    }, requirements, context);
   }
 
   /** Run bootstrap with delta queuing to prevent race conditions */
@@ -1332,6 +1357,7 @@ export class BaseSyncedStore<
    */
   async disconnect(): Promise<void> {
     this.stopCredentialLifecycle();
+    this.bootstrapRecoveryInFlight = null;
     if (this.batchTimer) { clearTimeout(this.batchTimer); this.batchTimer = null; }
     this.pendingDeltas = [];
 
@@ -1874,8 +1900,19 @@ export class BaseSyncedStore<
     this.syncClient.position.advancePersisted(delta.id);
   }
 
-  protected handleBootstrapRequired(_hint: BootstrapHint): void {
-    // Subclass implements — triggers background bootstrap
+  protected handleBootstrapRequired(hint: BootstrapHint): void {
+    runBootstrapRecovery({
+      modelRegistry: this.modelRegistry,
+      syncWebSocket: this.syncWebSocket,
+      runtime: this.runtime,
+      getUserContext: () => this.userContext,
+      getRecoveryInFlight: () => this.bootstrapRecoveryInFlight,
+      setRecoveryInFlight: (value) => { this.bootstrapRecoveryInFlight = value; },
+      resolveSyncGroups: (context) => this.resolveSyncGroups(context),
+      updateSyncStatus: (updates) => { this.updateSyncStatus(updates); },
+      performBackgroundBootstrap: (requirements, context, signal) =>
+        this.performBackgroundBootstrap(requirements, context, signal),
+    }, hint);
   }
 
   protected handleBootstrapData(_data: BootstrapDataEvent): void {

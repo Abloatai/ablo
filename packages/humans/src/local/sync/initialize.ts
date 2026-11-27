@@ -47,10 +47,7 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
     try {
       host.updateSyncStatus({ state: 'syncing', progress: 0 });
 
-      // The commit outbox and offline mutation journal live in IndexedDB.
-      // Open it before SyncClient restores either one; reading first used to
-      // make persistence silently look empty on every cold start.
-      yield host.database.open({
+      const persistenceIdentity = {
         participantId: context.userId,
         organizationId: context.organizationId,
         participantKind: context.kind ?? 'user',
@@ -59,7 +56,23 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
         branchRoot: context.branchRoot ?? false,
         syncGroups: host.resolveSyncGroups(context),
         operations: context.operations,
-      });
+      };
+
+      const isOptimisticOpen = host.database.isOptimisticOpen?.() === true;
+      const optimisticMatched =
+        isOptimisticOpen &&
+        host.database.matchesOptimisticIdentity?.(persistenceIdentity) === true &&
+        host.objectPool.size > 0;
+
+      if (isOptimisticOpen && !optimisticMatched) {
+        host.objectPool.clear();
+        host.dataReady = false;
+      }
+
+      // The commit outbox and offline mutation journal live in IndexedDB.
+      // Open it before SyncClient restores either one; reading first used to
+      // make persistence silently look empty on every cold start.
+      yield host.database.open(persistenceIdentity);
 
       persistenceReady = true;
 
@@ -70,14 +83,17 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
         context.organizationId,
       );
 
-      // Hydrate from IndexedDB (fast, cached data)
-      let hasLocalData = false;
-      try {
-        yield host.syncClient.hydrateFromDatabase();
-        hasLocalData = host.objectPool.size > 0;
-      } catch (hydrateError) {
-        host.runtime.logger.debug('[sync-engine] IDB hydration failed', { error: hydrateError });
-        host.runtime.observability.captureBootstrapFailure(hydrateError, { type: 'hydration-from-idb' });
+      // Hydrate from IndexedDB (fast, cached data) — skip if the matching
+      // optimistic replica already hydrated the pool before auth settled.
+      let hasLocalData = optimisticMatched && host.objectPool.size > 0;
+      if (!hasLocalData) {
+        try {
+          yield host.syncClient.hydrateFromDatabase();
+          hasLocalData = host.objectPool.size > 0;
+        } catch (hydrateError) {
+          host.runtime.logger.debug('[sync-engine] IDB hydration failed', { error: hydrateError });
+          host.runtime.observability.captureBootstrapFailure(hydrateError, { type: 'hydration-from-idb' });
+        }
       }
 
       const lastSyncId = (yield host.database.getLastSyncId()) as number;
@@ -89,19 +105,29 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
         host.updateSyncStatus({ state: 'syncing', progress: 50 });
       }
 
-      host.setupWebSocketSync(context, lastSyncId);
-
       // Bootstrap from server if needed.
       //
       // `bootstrapMode: 'none'` participants (headless workers and
       // item runners) skip baseline replication — they read via
       // `model.get()` round-trips and rely on covering deltas
-      // from filtered subscriptions to populate the pool lazily. The
-      // WS is already open by `setupWebSocketSync` above, so live
-      // delta flow works regardless of this branch.
+      // from filtered subscriptions to populate the pool lazily.
       const requirements = (yield host.database.requiredBootstrap()) as Awaited<
         ReturnType<typeof host.database.requiredBootstrap>
       >;
+
+      // On a cold start (empty local DB + server bootstrap required), run HTTP
+      // bootstrap BEFORE opening the WebSocket so the socket connects with the
+      // post-bootstrap `lastSyncId` instead of sending `sync_request { lastSyncId: 0 }`
+      // concurrently with bootstrap (which causes the server to replay the entire
+      // sync log as `catchup_chunk` frames on top of the snapshot we are already fetching).
+      const coldBootstrapFirst =
+        context.bootstrapMode !== 'none' &&
+        requirements.type !== 'local' &&
+        !hasLocalData;
+
+      if (!coldBootstrapFirst) {
+        host.setupWebSocketSync(context, lastSyncId);
+      }
 
       if (context.bootstrapMode === 'none') {
         host.runtime.logger.info(
@@ -116,11 +142,6 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
         // after the WS is set up, so `ready()` would otherwise resolve
         // while the WS is still in 'connecting' state. The very next
         // `commits.create` then throws "SyncWebSocket not connected".
-        //
-        // For bootstrapMode='full' consumers we don't need this await:
-        // `executeBootstrapWithTimeout` below sends the bootstrap RPC
-        // which inherently requires the WS to be open, so it surfaces
-        // a connection error if the upgrade hasn't completed.
         //
         // 5s bound is generous (typical connect is <100ms); past that
         // we return anyway and let the next commit attempt fail loudly
@@ -152,6 +173,10 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
             signal
           );
           yield host.syncClient.hydrateFromDatabase();
+          const postBootstrapSyncId = (yield host.database.getLastSyncId()) as number;
+          const resumedSyncId = Math.max(lastSyncId || 0, postBootstrapSyncId || 0);
+          host.syncClient.position.advancePersisted(resumedSyncId);
+          host.setupWebSocketSync(context, resumedSyncId);
           host.dataReady = true;
           host.initialized = true;
         }

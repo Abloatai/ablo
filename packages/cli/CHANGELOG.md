@@ -1,5 +1,13 @@
 # @abloatai/cli
 
+## 0.67.6
+
+The CLI now uses the 0.67.6 SDK family.
+
+## 0.67.5
+
+The CLI now uses the 0.67.5 SDK family, including the reactive reconciliation fix.
+
 ## 0.67.4
 
 ### Missing runtime credentials point to the right command

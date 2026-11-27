@@ -67,11 +67,15 @@ function indexedDbError(error: DOMException | null, operation: string): Error {
  */
 export class DatabaseManager {
   private metaDb: IDBDatabase | null = null;
+  private metaDbInitPromise: Promise<void> | null = null;
   private readonly metaDbName = 'ablo_databases';
 
   constructor(private readonly runtime: RuntimeContext = globalRuntime) {}
 
   async initializeMetaDatabase(): Promise<void> {
+    if (this.metaDb) return;
+    if (this.metaDbInitPromise) return this.metaDbInitPromise;
+
     const open = (): Promise<IDBDatabase> =>
       openIDBWithTimeout(this.metaDbName, 1, {
         onUpgrade: (request) => {
@@ -86,37 +90,44 @@ export class DatabaseManager {
         },
       });
 
-    try {
-      this.metaDb = await open();
-    } catch (error) {
-      // Self-heal a wedged meta DB. When `ablo_databases`'s backing store gets
-      // stuck (a corrupted store, or a leaked connection from a prior
-      // timed-out open), every open of that name hangs with no event and the
-      // app is permanently bricked until the user manually clears site data —
-      // the "open did not resolve within 10000ms" dead end. The registry this
-      // DB holds is rebuildable from the server on the next bootstrap, so it is
-      // safe to delete and re-create. Try exactly once: delete, then re-open.
-      if (!(error instanceof IDBOpenTimeoutError)) throw error;
+    const initPromise = (async () => {
+      try {
+        this.metaDb = await open();
+      } catch (error) {
+        // Self-heal a wedged meta DB. When `ablo_databases`'s backing store gets
+        // stuck (a corrupted store, or a leaked connection from a prior
+        // timed-out open), every open of that name hangs with no event and the
+        // app is permanently bricked until the user manually clears site data —
+        // the "open did not resolve within 10000ms" dead end. The registry this
+        // DB holds is rebuildable from the server on the next bootstrap, so it is
+        // safe to delete and re-create. Try exactly once: delete, then re-open.
+        if (!(error instanceof IDBOpenTimeoutError)) throw error;
 
-      this.runtime.logger.debug(
-        '[sync-engine] meta DB open timed out — attempting self-heal (delete + retry)',
-        { db: this.metaDbName, reason: error.reason },
-      );
-      this.runtime.observability.captureBootstrapFailure(error, {
-        type: 'meta-db-open-timeout',
-      });
+        this.runtime.logger.debug(
+          '[sync-engine] meta DB open timed out — attempting self-heal (delete + retry)',
+          { db: this.metaDbName, reason: error.reason },
+        );
+        this.runtime.observability.captureBootstrapFailure(error, {
+          type: 'meta-db-open-timeout',
+        });
 
-      const deleted = await deleteIDBWithTimeout(this.metaDbName);
-      if (!deleted) {
-        // The delete itself was blocked/stuck — a live connection in another
-        // window or a deadlocked backing store. We cannot recover in-page;
-        // rethrow so the provider surfaces the real (now actionable) error.
-        throw error;
+        const deleted = await deleteIDBWithTimeout(this.metaDbName);
+        if (!deleted) {
+          // The delete itself was blocked/stuck — a live connection in another
+          // window or a deadlocked backing store. We cannot recover in-page;
+          // rethrow so the provider surfaces the real (now actionable) error.
+          throw error;
+        }
+        // Fresh store — this open creates `ablo_databases` from scratch.
+        this.metaDb = await open();
+        this.runtime.logger.info('[sync-engine] meta DB self-heal succeeded');
+      } finally {
+        this.metaDbInitPromise = null;
       }
-      // Fresh store — this open creates `ablo_databases` from scratch.
-      this.metaDb = await open();
-      this.runtime.logger.info('[sync-engine] meta DB self-heal succeeded');
-    }
+    })();
+
+    this.metaDbInitPromise = initPromise;
+    return initPromise;
   }
 
   async calculateDatabaseInfo(
@@ -145,18 +156,9 @@ export class DatabaseManager {
       schemaVersion = existingInfo.schemaVersion || 1;
     }
 
-    // Record the existing databases for this user so duplicates can be detected.
-    const allUserDatabases = await this.getDatabasesForUser(identity.participantId);
-    const allIndexedDBs = (await indexedDB.databases?.()) || [];
-    const abloDatabases = allIndexedDBs.filter((db: IDBDatabaseInfo) =>
-      db.name?.startsWith('ablo_')
-    );
-
     this.runtime.observability.breadcrumb('Database info calculated', 'sync.database', 'info', {
       dbName,
       schemaVersion,
-      existingDbCount: allUserDatabases.length,
-      abloDbCount: abloDatabases.length,
     });
 
     return {
@@ -471,9 +473,61 @@ export class DatabaseManager {
   }
 
   /**
+   * Return the unique matching v5 local replica when only one user/workspace
+   * owns persisted data for the given scope and schema hash. Returns `null`
+   * whenever multiple distinct users share this browser profile for the scope
+   * or when the schema changed, so speculative pre-auth reads never cross users
+   * or trigger an IDB schema upgrade before auth settles.
+   */
+  async findSingleOptimisticDatabase(filter: {
+    projectId?: string | null;
+    branchId?: string | null;
+    participantKind?: string;
+    schemaHash?: string;
+  }): Promise<DatabaseInfo | null> {
+    const metaDb = this.metaDb;
+    if (!metaDb) return null;
+
+    const expectedSchemaHash =
+      filter.schemaHash ??
+      (hasActiveRegistry() ? getActiveRegistry().getSchemaHash() : 'no-registry-hash');
+
+    const all = await new Promise<DatabaseInfo[]>((resolve, reject) => {
+      const tx = metaDb.transaction(['databases'], 'readonly');
+      const store = tx.objectStore('databases');
+      const request = store.getAll();
+      request.onsuccess = () => { resolve((request.result as DatabaseInfo[]) || []); };
+      request.onerror = () => { reject(indexedDbError(request.error, 'optimistic registry scan')); };
+    });
+
+    const matches = all.filter((info) => {
+      if (info.namespaceVersion !== PERSISTENCE_NAMESPACE_VERSION) return false;
+      if (info.schemaHash !== expectedSchemaHash) return false;
+      if (filter.projectId && info.projectId !== filter.projectId) return false;
+      if (filter.branchId && info.branchId !== filter.branchId) return false;
+      if (filter.participantKind && info.participantKind !== filter.participantKind) return false;
+      return true;
+    });
+
+    if (matches.length === 0) return null;
+
+    const owners = new Set(matches.map((info) => `${info.userId}\0${info.workspaceId}`));
+    if (owners.size > 1) return null;
+
+    matches.sort((a, b) => {
+      const aTime = a.updatedAt instanceof Date ? a.updatedAt.getTime() : new Date(a.updatedAt).getTime();
+      const bTime = b.updatedAt instanceof Date ? b.updatedAt.getTime() : new Date(b.updatedAt).getTime();
+      return bTime - aTime;
+    });
+
+    return matches[0] ?? null;
+  }
+
+  /**
    * Close all database connections
    */
   async close(): Promise<void> {
+    this.metaDbInitPromise = null;
     if (this.metaDb) {
       this.metaDb.close();
       this.metaDb = null;

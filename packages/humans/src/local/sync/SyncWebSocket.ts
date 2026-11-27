@@ -11,7 +11,11 @@
  */
 
 import { getContext } from '../context.js';
-import { clientSyncDeltaSchema, type ClientSyncDelta } from '@abloatai/transaction/observation';
+import { type ClientSyncDelta } from '@abloatai/transaction/observation';
+import {
+  parseWireDelta as parseWireDeltaWithIssue,
+  parseWireDeltaOrNull,
+} from './parseWireDelta.js';
 import { drainProfilingEnabled, observeDrainStage } from './drainProfile.js';
 import {
   WsTransport,
@@ -217,39 +221,25 @@ export class SyncWebSocket<
   }
 
   private parseWireDelta(raw: unknown): SyncDelta | null {
-    let candidate: unknown = raw;
-    if (isRecord(raw)) {
-      const normalized: Record<string, unknown> = { ...raw };
-      if (typeof normalized.id !== 'number') {
-        const coerced = Number(normalized.id);
-        normalized.id = Number.isFinite(coerced) ? coerced : 0;
-      }
-      if (normalized.transactionId === null) delete normalized.transactionId;
-      if (normalized.createdBy !== undefined && typeof normalized.createdBy !== 'string') {
-        delete normalized.createdBy;
-      }
-      candidate = normalized;
-    }
-    const parsed = clientSyncDeltaSchema.safeParse(candidate);
-    if (!parsed.success) {
-      const issue = parsed.error.issues[0];
-      const detail = {
-        issue: issue ? `${issue.path.join('.')}: ${issue.message}` : 'not an object',
-        modelName:
-          isRecord(raw) && typeof raw.modelName === 'string' ? raw.modelName : undefined,
-        actionType:
-          isRecord(raw) && typeof raw.actionType === 'string' ? raw.actionType : undefined,
-      };
-      getContext().logger.debug('[SyncWebSocket] dropped malformed wire delta', detail);
-      getContext().observability.breadcrumb(
-        'Dropped malformed wire delta',
-        'sync.websocket',
-        'warning',
-        detail,
-      );
-      return null;
-    }
-    return parsed.data;
+    const fast = parseWireDeltaOrNull(raw);
+    if (fast !== null) return fast;
+
+    const diagnosed = parseWireDeltaWithIssue(raw);
+    const detail = {
+      issue: diagnosed.ok ? 'invalid wire delta' : diagnosed.issue,
+      modelName:
+        isRecord(raw) && typeof raw.modelName === 'string' ? raw.modelName : undefined,
+      actionType:
+        isRecord(raw) && typeof raw.actionType === 'string' ? raw.actionType : undefined,
+    };
+    getContext().logger.debug('[SyncWebSocket] dropped malformed wire delta', detail);
+    getContext().observability.breadcrumb(
+      'Dropped malformed wire delta',
+      'sync.websocket',
+      'warning',
+      detail,
+    );
+    return null;
   }
 
   /**
@@ -419,6 +409,21 @@ export class SyncWebSocket<
    */
   protected override handleSyncResponse(rawPayload: unknown): void {
     const payload: Record<string, unknown> = isRecord(rawPayload) ? rawPayload : {};
+
+    // Check `requiresBootstrap` BEFORE empty-response cursor reconciliation.
+    // When catch-up hits the server's row/byte cap, the server streams partial
+    // chunks, omits `catchup_end`, and sends `sync_response` with
+    // `requiresBootstrap: true` and `currentSyncId: head` (with no `deltas`).
+    // Running empty-response reconciliation first would advance
+    // `this.cursor.lastSyncId` to `serverHead` and permanently skip the
+    // withheld tail. Preserve the last durably acknowledged cursor and abandon
+    // the incomplete catch-up exchange instead.
+    if (payload.requiresBootstrap) {
+      this.catchUp = null;
+      this.emit('bootstrap_required', isRecord(payload.bootstrapHint) ? payload.bootstrapHint : {});
+      return;
+    }
+
     const rawDeltas: unknown[] | null = Array.isArray(payload.deltas)
       ? payload.deltas
       : null;
@@ -491,11 +496,6 @@ export class SyncWebSocket<
         // lock to read the settled head. The cost lands on the write path.
         this.cursor.lastSyncId = serverHead;
       }
-    }
-
-    if (payload.requiresBootstrap) {
-      this.emit('bootstrap_required', payload.bootstrapHint);
-      return;
     }
 
     if (rawDeltas) {

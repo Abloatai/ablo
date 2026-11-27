@@ -286,7 +286,15 @@ export class LazyReferenceCollection<T extends Model> {
       }
 
       const store = this.database.getStore(this.modelName);
-      const rawData = store ? await store.getAllFromIndex(this.foreignKey, this.parent.id) : [];
+      let rawData: Record<string, unknown>[] = [];
+      if (store) {
+        try {
+          rawData = await store.getAllFromIndex(this.foreignKey, this.parent.id);
+        } catch {
+          const all = await store.getAll();
+          rawData = all.filter((row) => row[this.foreignKey] === this.parent.id);
+        }
+      }
 
       const ModelClass = getActiveRegistry().getModelByName(this.modelName);
       if (!ModelClass) {

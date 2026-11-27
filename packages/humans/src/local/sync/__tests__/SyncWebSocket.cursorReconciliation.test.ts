@@ -178,4 +178,35 @@ describe('SyncWebSocket cursor reconciliation on an empty sync_response', () => 
     // local storage yet, so the resume position must not move.
     expect(requestedCursor(fake)).toBe(10);
   });
+
+  it('preserves cursor, abandons active catch-up, and emits bootstrap_required when requiresBootstrap is true', async () => {
+    const { ws, fake } = connectFake(19_968);
+    const hints: unknown[] = [];
+    const strayChunks: unknown[] = [];
+    const strayEnds: unknown[] = [];
+    ws.subscribe('bootstrap_required', (hint) => { hints.push(hint); });
+    ws.subscribe('catchup_chunk', (chunk) => { strayChunks.push(chunk); });
+    ws.subscribe('catchup_end', (end) => { strayEnds.push(end); });
+
+    // Start a catch-up exchange, then overflow before catchup_end.
+    deliver(fake, 'catchup_begin', { exchangeId: 'ex-overflow', fromSyncId: 100, currentSyncId: 20_001 });
+    deliver(fake, 'sync_response', {
+      requiresBootstrap: true,
+      bootstrapHint: { reason: 'too_far_behind' },
+      currentSyncId: 20_001,
+    });
+
+    expect(ws.getLastSyncId()).toBe(19_968);
+    expect(hints).toEqual([{ reason: 'too_far_behind' }]);
+
+    // Stray frames from the abandoned catch-up exchange must be ignored.
+    deliver(fake, 'catchup_chunk', { exchangeId: 'ex-overflow', sequence: 0, position: 20_001, deltas: [] });
+    deliver(fake, 'catchup_end', { exchangeId: 'ex-overflow', currentSyncId: 20_001, chunks: 0 });
+    expect(strayChunks).toEqual([]);
+    expect(strayEnds).toEqual([]);
+
+    await ws.requestIncrementalSync();
+    expect(requestedCursor(fake)).toBe(19_968);
+    ws.disconnect();
+  });
 });
